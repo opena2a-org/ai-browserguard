@@ -3,26 +3,8 @@ name: CI
 on:
   pull_request:
     branches: [main]
-    paths:
-      - 'src/**'
-      - 'package.json'
-      - 'package-lock.json'
-      - 'tsconfig.json'
-      - 'vite.config.ts'
-      - 'vitest.config.ts'
-      - 'manifest.json'
-      - 'scripts/**'
   push:
     branches: [main]
-    paths:
-      - 'src/**'
-      - 'package.json'
-      - 'package-lock.json'
-      - 'tsconfig.json'
-      - 'vite.config.ts'
-      - 'vitest.config.ts'
-      - 'manifest.json'
-      - 'scripts/**'
 
 concurrency:
   group: ci-${{ github.event.pull_request.number }}
