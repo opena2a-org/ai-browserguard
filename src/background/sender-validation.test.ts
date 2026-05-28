@@ -35,6 +35,7 @@ describe('isValidSender', () => {
       'BOUNDARY_CHECK_REQUEST',
       'NETWORK_EVENT',
       'CDP_DEBUGGER_CHECK',
+      'OPEN_POPUP',
     ];
 
     for (const type of contentOnly) {

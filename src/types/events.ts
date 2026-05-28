@@ -172,7 +172,8 @@ export type MessageType =
   | 'CONTRIBUTE_DISABLE'
   | 'CONTRIBUTE_FLUSH'
   | 'CONTRIBUTE_TIP_DISMISS'
-  | 'DOMAIN_WHITELIST';
+  | 'DOMAIN_WHITELIST'
+  | 'OPEN_POPUP';
 
 /**
  * Typed message payload for inter-component communication.

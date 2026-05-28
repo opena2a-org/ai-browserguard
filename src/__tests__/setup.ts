@@ -80,6 +80,7 @@ const chromeMock = {
   tabs: {
     query: vi.fn(() => Promise.resolve([])),
     sendMessage: vi.fn(() => Promise.resolve(undefined)),
+    create: vi.fn(() => Promise.resolve({ id: 1 })),
     onRemoved: createEventMock(),
   },
   notifications: {

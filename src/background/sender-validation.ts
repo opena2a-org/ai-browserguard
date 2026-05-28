@@ -19,6 +19,7 @@ const CONTENT_ONLY_TYPES: ReadonlySet<MessageType> = new Set([
   'BOUNDARY_CHECK_REQUEST',
   'NETWORK_EVENT',
   'CDP_DEBUGGER_CHECK',
+  'OPEN_POPUP',
 ]);
 
 const POPUP_ONLY_TYPES: ReadonlySet<MessageType> = new Set([

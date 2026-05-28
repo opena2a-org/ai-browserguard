@@ -369,6 +369,32 @@ function handleMessage(
       return true;
     }
 
+    case 'OPEN_POPUP': {
+      // Sent from the content-side toast's "Settings" button. Tries the
+      // native action.openPopup() first (Chrome 127+); falls back to
+      // opening the popup HTML as a tab if the API is unavailable or
+      // rejects (e.g., no active window).
+      (async () => {
+        const openPopup = (chrome.action as { openPopup?: () => Promise<void> }).openPopup;
+        if (typeof openPopup === 'function') {
+          try {
+            await openPopup.call(chrome.action);
+            sendResponse({ success: true, surface: 'popup' });
+            return;
+          } catch {
+            // fall through to tab fallback
+          }
+        }
+        try {
+          await chrome.tabs.create({ url: chrome.runtime.getURL('dist/popup/index.html') });
+          sendResponse({ success: true, surface: 'tab' });
+        } catch {
+          sendResponse({ success: false });
+        }
+      })();
+      return true;
+    }
+
     default:
       return false;
   }
