@@ -260,6 +260,7 @@ function renderWizardUI(): void {
 
 function renderAll(): void {
   renderContributeTip();
+  renderRecentBlockCallout();
   renderDetectionPanel();
   renderKillSwitchPanel();
   renderDelegationPanel();
@@ -270,6 +271,89 @@ function renderAll(): void {
   renderMetricsPanel();
   renderSettingsPanel();
   renderStatusBadge();
+}
+
+/**
+ * Recently-blocked call-out at the top of the popup. Surfaces the last 3
+ * violations within the last 5 minutes with a one-click whitelist action so
+ * the user has direct recovery from the alert that brought them here.
+ *
+ * If the user missed the inline toast AND missed the action-icon badge,
+ * this is the third and final attribution layer: opening the popup
+ * immediately tells them what was blocked and how to unblock it.
+ */
+const RECENT_BLOCK_WINDOW_MS = 5 * 60 * 1000;
+const RECENT_BLOCK_MAX_ITEMS = 3;
+
+function renderRecentBlockCallout(): void {
+  const callout = document.getElementById('recent-block-callout');
+  const list = document.getElementById('recent-block-list');
+  if (!callout || !list) return;
+
+  const now = Date.now();
+  const fresh = popupState.recentViolations.filter((alert) => {
+    const ts = Date.parse(alert.violation.timestamp);
+    return Number.isFinite(ts) && now - ts < RECENT_BLOCK_WINDOW_MS;
+  });
+
+  if (fresh.length === 0) {
+    callout.classList.add('hidden');
+    return;
+  }
+  callout.classList.remove('hidden');
+
+  // Clear with textContent so we don't accumulate listeners between renders.
+  list.textContent = '';
+
+  const recent = fresh.slice(-RECENT_BLOCK_MAX_ITEMS).reverse();
+  for (const alert of recent) {
+    const row = document.createElement('div');
+    row.className = 'recent-block-row';
+
+    const meta = document.createElement('div');
+    meta.className = 'recent-block-meta';
+
+    const action = document.createElement('div');
+    action.className = 'recent-block-action';
+    action.textContent = `Blocked ${alert.violation.attemptedAction}`;
+
+    const urlEl = document.createElement('div');
+    urlEl.className = 'recent-block-url';
+    urlEl.textContent = truncateUrl(alert.violation.url);
+
+    const ts = document.createElement('div');
+    ts.className = 'recent-block-ts';
+    ts.textContent = formatTimestamp(alert.violation.timestamp);
+
+    meta.appendChild(action);
+    meta.appendChild(urlEl);
+    meta.appendChild(ts);
+
+    const actions = document.createElement('div');
+    actions.className = 'recent-block-actions';
+
+    let domain: string | null = null;
+    try {
+      domain = new URL(alert.violation.url).hostname;
+    } catch { /* skip if malformed */ }
+
+    if (domain) {
+      const whitelistBtn = document.createElement('button');
+      whitelistBtn.className = 'btn btn-secondary recent-block-btn';
+      whitelistBtn.textContent = `Whitelist ${domain}`;
+      whitelistBtn.addEventListener('click', () => {
+        const d = domain as string;
+        sendToBackground('DOMAIN_WHITELIST', { domain: d }).then(() => {
+          queryBackgroundStatus();
+        }).catch(() => { /* ignore */ });
+      });
+      actions.appendChild(whitelistBtn);
+    }
+
+    row.appendChild(meta);
+    row.appendChild(actions);
+    list.appendChild(row);
+  }
 }
 
 function renderContributeTip(): void {
