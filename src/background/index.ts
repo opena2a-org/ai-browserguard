@@ -19,6 +19,7 @@ import { setupNotificationHandlers, clearAllNotifications } from '../alerts/noti
 import type { BoundaryAlert } from '../alerts/boundary';
 import { processBoundaryViolation, handleAllowOnce } from './handlers';
 import { isValidSender } from './sender-validation';
+import { computeBadge, BLOCK_BADGE_TTL_MS } from './badge';
 import { monitorDebuggerAttachment } from '../detection/cdp-debugger';
 import type { DebuggerDetectionResult } from '../detection/cdp-debugger';
 import { lookupAgentIdentity } from '../aim/client';
@@ -37,6 +38,12 @@ interface BackgroundState {
   killSwitch: KillSwitchState;
   recentAlerts: BoundaryAlert[];
   lifetimeStats: LifetimeStats;
+  /**
+   * Epoch ms of the most recent block. Drives the transient "!" icon badge
+   * that surfaces a block to the user even if they missed the toast. Cleared
+   * when the popup is opened or after BLOCK_BADGE_TTL_MS.
+   */
+  lastBlockAt: number | null;
 }
 
 const state: BackgroundState = {
@@ -46,6 +53,7 @@ const state: BackgroundState = {
   killSwitch: createInitialKillSwitchState(),
   recentAlerts: [],
   lifetimeStats: { ...DEFAULT_LIFETIME_STATS },
+  lastBlockAt: null,
 };
 
 function initialize(): void {
@@ -214,6 +222,13 @@ function handleMessage(
         delegationRules: state.delegationRules,
         lifetimeStats: state.lifetimeStats,
       });
+      // The popup is now open; the user has seen the block alert.
+      // Clear the transient block badge so the icon returns to its
+      // base state (agent count / delegation / idle).
+      if (state.lastBlockAt !== null) {
+        state.lastBlockAt = null;
+        updateBadge();
+      }
       return false;
     }
 
@@ -507,6 +522,22 @@ function handleBoundaryViolation(tabId: number | undefined, violation: BoundaryV
     state.recentAlerts.shift();
   }
 
+  // Surface the block via the action-icon badge so the user knows
+  // BrowserGuard intervened even if they missed the inline toast. The
+  // badge auto-clears after BLOCK_BADGE_TTL_MS or on popup open.
+  state.lastBlockAt = Date.now();
+  updateBadge();
+  setTimeout(() => {
+    // Only redraw if the alert hasn't been re-armed in the meantime.
+    if (
+      state.lastBlockAt !== null
+      && Date.now() - state.lastBlockAt >= BLOCK_BADGE_TTL_MS
+    ) {
+      state.lastBlockAt = null;
+      updateBadge();
+    }
+  }, BLOCK_BADGE_TTL_MS + 50);
+
   // Update lifetime stats
   state.lifetimeStats = {
     ...state.lifetimeStats,
@@ -626,27 +657,18 @@ async function executeKillSwitch(
 
 function updateBadge(): void {
   try {
-    if (state.killSwitch.isActive) {
-      chrome.action.setBadgeText({ text: 'X' });
-      chrome.action.setBadgeBackgroundColor({ color: '#ef4444' });
-      return;
-    }
-
-    const agentCount = state.activeAgents.size;
-    if (agentCount > 0) {
-      chrome.action.setBadgeText({ text: String(agentCount) });
-      chrome.action.setBadgeBackgroundColor({ color: '#f59e0b' });
-      return;
-    }
-
-    const hasActiveDelegation = state.delegationRules.some((r) => r.isActive);
-    if (hasActiveDelegation) {
-      chrome.action.setBadgeText({ text: '' });
-      chrome.action.setBadgeBackgroundColor({ color: '#22c55e' });
-      return;
-    }
-
-    chrome.action.setBadgeText({ text: '' });
+    const badge = computeBadge(
+      {
+        lastBlockAt: state.lastBlockAt,
+        killSwitchActive: state.killSwitch.isActive,
+        agentCount: state.activeAgents.size,
+        hasActiveDelegation: state.delegationRules.some((r) => r.isActive),
+      },
+      Date.now(),
+    );
+    chrome.action.setBadgeText({ text: badge.text });
+    chrome.action.setBadgeBackgroundColor({ color: badge.color });
+    return;
   } catch {
     // Badge API may not be available in all contexts
   }
