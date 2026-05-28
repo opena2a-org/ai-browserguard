@@ -12,6 +12,10 @@
   "host_permissions": [
     "<all_urls>"
   ],
+  "externally_connectable": {
+    "matches": [],
+    "ids": []
+  },
   "background": {
     "service_worker": "dist/background/index.js",
     "type": "module"

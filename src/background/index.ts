@@ -18,6 +18,7 @@ import { isTimeBoundExpired } from '../delegation/rules';
 import { setupNotificationHandlers, clearAllNotifications } from '../alerts/notification';
 import type { BoundaryAlert } from '../alerts/boundary';
 import { processBoundaryViolation, handleAllowOnce } from './handlers';
+import { isValidSender } from './sender-validation';
 import { monitorDebuggerAttachment } from '../detection/cdp-debugger';
 import type { DebuggerDetectionResult } from '../detection/cdp-debugger';
 import { lookupAgentIdentity } from '../aim/client';
@@ -126,6 +127,12 @@ function handleMessage(
   sendResponse: (response: unknown) => void
 ): boolean {
   if (!message || !message.type) return false;
+
+  if (!isValidSender(message.type, sender)) {
+    // Silently drop. Don't surface which message types are popup-only vs
+    // content-only — that would leak the validation map to a probe.
+    return false;
+  }
 
   const tabId = sender.tab?.id;
 

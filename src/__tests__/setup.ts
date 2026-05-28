@@ -68,6 +68,7 @@ const chromeMock = {
     },
   },
   runtime: {
+    id: 'test-id',
     onMessage: createEventMock(),
     sendMessage: vi.fn((_message: unknown, callback?: (response: unknown) => void) => {
       if (callback) callback(undefined);
