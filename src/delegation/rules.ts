@@ -169,9 +169,12 @@ function matchGlob(url: string, pattern: string): boolean {
       return new RegExp(`^${regexStr}$`).test(hostname);
     }
 
-    // Full URL pattern matching
+    // Full URL pattern matching. The escape class includes `?` so that a
+    // literal `?` in a URL pattern (which is a regex zero-or-one metacharacter)
+    // does not silently widen the match. `*` is intentionally not escaped here
+    // — the next replace converts `\*` back into `.*` for glob semantics.
     const regexStr = pattern
-      .replace(/[.+^${}()|[\]\\]/g, '\\$&')
+      .replace(/[.+^${}()|[\]\\?]/g, '\\$&')
       .replace(/\\\*/g, '.*');
     return new RegExp(`^${regexStr}$`).test(url);
   } catch {

@@ -184,4 +184,56 @@ describe('lookupAgentIdentity', () => {
     expect(result1!.registered).toBe(false);
     expect(mockFetch).toHaveBeenCalledOnce();
   });
+
+  // ---------------------------------------------------------------------
+  // Regression: P0-3a — AIM client must reject non-HTTPS base URLs in
+  // production. A plaintext or attacker-controlled endpoint returning
+  // trustScore: 1.0 would bypass detection escalation.
+  // ---------------------------------------------------------------------
+  describe('base URL validation', () => {
+    it('rejects http://hostile.example.com without making a fetch', async () => {
+      const result = await lookupAgentIdentity('playwright', 'https://example.com', {
+        baseUrl: 'http://hostile.example.com',
+      });
+      expect(result).toBeNull();
+      expect(mockFetch).not.toHaveBeenCalled();
+    });
+
+    it('rejects ftp:// and javascript: schemes', async () => {
+      const ftp = await lookupAgentIdentity('playwright', 'https://example.com', {
+        baseUrl: 'ftp://aim.opena2a.org',
+      });
+      expect(ftp).toBeNull();
+      const jsScheme = await lookupAgentIdentity('playwright', 'https://example.com', {
+        baseUrl: 'javascript:alert(1)',
+      });
+      expect(jsScheme).toBeNull();
+      expect(mockFetch).not.toHaveBeenCalled();
+    });
+
+    it('permits http://localhost in the test environment (NODE_ENV=test)', async () => {
+      mockFetch.mockResolvedValueOnce({
+        ok: true,
+        status: 200,
+        json: () => Promise.resolve({ trustScore: 0.5, displayName: 'Local', name: 'p' }),
+      });
+      const result = await lookupAgentIdentity('p', 'https://example.com', {
+        baseUrl: 'http://localhost:8080',
+      });
+      expect(result).not.toBeNull();
+      expect(mockFetch).toHaveBeenCalledOnce();
+    });
+
+    it('uses https://aim.opena2a.org when no baseUrl option is provided', async () => {
+      mockFetch.mockResolvedValueOnce({
+        ok: true,
+        status: 200,
+        json: () => Promise.resolve({ trustScore: 0.5, displayName: 'A', name: 'a' }),
+      });
+      await lookupAgentIdentity('a', 'https://example.com');
+      expect(mockFetch).toHaveBeenCalledOnce();
+      const calledUrl = String(mockFetch.mock.calls[0][0]);
+      expect(calledUrl.startsWith('https://aim.opena2a.org/')).toBe(true);
+    });
+  });
 });

@@ -116,7 +116,7 @@ export interface UserSettings {
   /** Whether to check agents against the OpenA2A registry. Default: false. */
   registryLookupEnabled: boolean;
 
-  /** Base URL for the OpenA2A registry API. Default: https://registry.opena2a.org */
+  /** Base URL for the OpenA2A registry API. Default: https://api.oa2a.org */
   registryBaseUrl: string;
 
   /** Whether to auto-block agents with trust score below 0.3. Default: false. */
@@ -162,6 +162,6 @@ export const DEFAULT_SETTINGS: UserSettings = {
   aimLookupEnabled: false,
   aimBaseUrl: 'https://aim.opena2a.org',
   registryLookupEnabled: false,
-  registryBaseUrl: 'https://registry.opena2a.org',
+  registryBaseUrl: 'https://api.oa2a.org',
   autoBlockUntrustedAgents: false,
 };

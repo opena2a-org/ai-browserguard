@@ -24,8 +24,22 @@ interface CacheEntry {
   expiresAt: number;
 }
 
-const DEFAULT_AIM_BASE_URL = 'http://localhost:8080';
+const DEFAULT_AIM_BASE_URL = 'https://aim.opena2a.org';
 const DEFAULT_CACHE_TTL_MS = 5 * 60 * 1000; // 5 minutes
+
+// Non-HTTPS AIM endpoints are rejected outside of tests. A trustScore of 1.0
+// returned from an attacker-controlled localhost endpoint would otherwise
+// bypass detection escalation.
+function isAllowedBaseUrl(url: string): boolean {
+  if (url.startsWith('https://')) return true;
+  // Permit http only for localhost in test/development. We detect the test
+  // environment via process.env.NODE_ENV when available; otherwise we accept
+  // localhost http exclusively (covers self-hosted AIM during development).
+  if (url.startsWith('http://localhost') || url.startsWith('http://127.0.0.1')) {
+    return typeof process !== 'undefined' && process.env?.NODE_ENV === 'test';
+  }
+  return false;
+}
 
 const cache = new Map<string, CacheEntry>();
 
@@ -54,6 +68,10 @@ export async function lookupAgentIdentity(
 ): Promise<AIMResult | null> {
   const baseUrl = options?.baseUrl ?? DEFAULT_AIM_BASE_URL;
   const ttl = options?.cacheTtlMs ?? DEFAULT_CACHE_TTL_MS;
+
+  if (!isAllowedBaseUrl(baseUrl)) {
+    return null;
+  }
 
   const key = cacheKey(agentType, origin);
 
