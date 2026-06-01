@@ -72,6 +72,9 @@ export interface SessionSummary {
  * This is the top-level shape of all persisted data.
  */
 export interface StorageSchema {
+  /** Schema version. Bump when incompatible shape changes ship; runtime migration runs on read. */
+  storageSchemaVersion: number;
+
   /** Last 5 agent sessions, newest first. */
   sessions: AgentSession[];
 
@@ -84,6 +87,9 @@ export interface StorageSchema {
   /** Recent detection events for debugging (last 100). */
   detectionLog: import('../types/events').DetectionEvent[];
 }
+
+/** Current storage schema version. Bump when a shape change requires migration. */
+export const CURRENT_STORAGE_SCHEMA_VERSION = 1;
 
 /**
  * User-configurable settings.

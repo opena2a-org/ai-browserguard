@@ -6,31 +6,143 @@
  */
 
 import type { AgentSession, StorageSchema, UserSettings, LifetimeStats } from './types';
-import { DEFAULT_SETTINGS, DEFAULT_LIFETIME_STATS } from './types';
+import { DEFAULT_SETTINGS, DEFAULT_LIFETIME_STATS, CURRENT_STORAGE_SCHEMA_VERSION } from './types';
 import type { DelegationRule } from '../types/delegation';
 import type { DetectionEvent } from '../types/events';
 
 const DEFAULT_STORAGE: StorageSchema = {
+  storageSchemaVersion: CURRENT_STORAGE_SCHEMA_VERSION,
   sessions: [],
   delegationRules: [],
   settings: DEFAULT_SETTINGS,
   detectionLog: [],
 };
 
+const CORRUPTION_LOG_KEY = '__corrupted_state';
+const MAX_CORRUPTION_LOG_ENTRIES = 50;
+
+interface CorruptionLogEntry {
+  timestamp: string;
+  key: string;
+  reason: string;
+}
+
+async function logCorruption(entries: CorruptionLogEntry[]): Promise<void> {
+  if (entries.length === 0) return;
+  try {
+    const existing = await chrome.storage.local.get(CORRUPTION_LOG_KEY);
+    const prior = Array.isArray(existing[CORRUPTION_LOG_KEY])
+      ? (existing[CORRUPTION_LOG_KEY] as CorruptionLogEntry[])
+      : [];
+    const merged = [...prior, ...entries];
+    if (merged.length > MAX_CORRUPTION_LOG_ENTRIES) {
+      merged.splice(0, merged.length - MAX_CORRUPTION_LOG_ENTRIES);
+    }
+    await chrome.storage.local.set({ [CORRUPTION_LOG_KEY]: merged });
+  } catch (err) {
+    console.error('[AI Browser Guard] Failed to log storage corruption:', err);
+  }
+}
+
+/**
+ * Run a migration from the stored version to CURRENT_STORAGE_SCHEMA_VERSION.
+ * Currently a no-op scaffold: future version bumps add cases that mutate `data` in place.
+ */
+function migrateStorageShape(
+  data: Record<string, unknown>,
+  fromVersion: number
+): { data: Record<string, unknown>; migrated: boolean } {
+  let migrated = false;
+  let version = fromVersion;
+  while (version < CURRENT_STORAGE_SCHEMA_VERSION) {
+    // Future: case `1`: migrate v1 → v2 by reshaping data.sessions, etc.
+    version++;
+    migrated = true;
+  }
+  return { data, migrated };
+}
+
 /**
  * Retrieve the full storage schema from chrome.storage.local.
- * Returns default values for any missing keys.
+ *
+ * Validates each top-level key against an expected type. Invalid values are
+ * reset to defaults and the corruption is logged under `__corrupted_state` so
+ * users (and future debug tools) can see what was discarded. An unrecognized
+ * `storageSchemaVersion` triggers the migration scaffold before validation.
  */
 export async function getStorageState(): Promise<StorageSchema> {
   try {
-    const result = await chrome.storage.local.get(
-      Object.keys(DEFAULT_STORAGE)
-    );
+    const result = await chrome.storage.local.get([
+      'storageSchemaVersion',
+      'sessions',
+      'delegationRules',
+      'settings',
+      'detectionLog',
+    ]);
+    const corruption: CorruptionLogEntry[] = [];
+    const now = new Date().toISOString();
+
+    let workingData: Record<string, unknown> = { ...result };
+    const storedVersion = typeof workingData.storageSchemaVersion === 'number'
+      ? workingData.storageSchemaVersion
+      : null;
+    if (storedVersion === null && Object.keys(result).some((k) => result[k] !== undefined)) {
+      // Existing data missing version — run migration scaffold from v0.
+      corruption.push({ timestamp: now, key: 'storageSchemaVersion', reason: 'missing — ran migration scaffold from v0' });
+      const { data } = migrateStorageShape(workingData, 0);
+      workingData = data;
+    } else if (storedVersion !== null && storedVersion < CURRENT_STORAGE_SCHEMA_VERSION) {
+      corruption.push({ timestamp: now, key: 'storageSchemaVersion', reason: `migrated from v${storedVersion} to v${CURRENT_STORAGE_SCHEMA_VERSION}` });
+      const { data } = migrateStorageShape(workingData, storedVersion);
+      workingData = data;
+    } else if (storedVersion !== null && storedVersion > CURRENT_STORAGE_SCHEMA_VERSION) {
+      // Downgrade scenario — keep data as-is but record it.
+      corruption.push({ timestamp: now, key: 'storageSchemaVersion', reason: `stored version v${storedVersion} is newer than runtime v${CURRENT_STORAGE_SCHEMA_VERSION}` });
+    }
+
+    const sessions = Array.isArray(workingData.sessions)
+      ? (workingData.sessions as AgentSession[])
+      : (workingData.sessions !== undefined
+          ? (corruption.push({ timestamp: now, key: 'sessions', reason: `expected array, got ${typeof workingData.sessions}` }), DEFAULT_STORAGE.sessions)
+          : DEFAULT_STORAGE.sessions);
+
+    const delegationRules = Array.isArray(workingData.delegationRules)
+      ? (workingData.delegationRules as DelegationRule[])
+      : (workingData.delegationRules !== undefined
+          ? (corruption.push({ timestamp: now, key: 'delegationRules', reason: `expected array, got ${typeof workingData.delegationRules}` }), DEFAULT_STORAGE.delegationRules)
+          : DEFAULT_STORAGE.delegationRules);
+
+    const detectionLog = Array.isArray(workingData.detectionLog)
+      ? (workingData.detectionLog as DetectionEvent[])
+      : (workingData.detectionLog !== undefined
+          ? (corruption.push({ timestamp: now, key: 'detectionLog', reason: `expected array, got ${typeof workingData.detectionLog}` }), DEFAULT_STORAGE.detectionLog)
+          : DEFAULT_STORAGE.detectionLog);
+
+    const rawSettings = workingData.settings;
+    const settingsObject = (rawSettings !== null && typeof rawSettings === 'object' && !Array.isArray(rawSettings))
+      ? (rawSettings as Partial<UserSettings>)
+      : (rawSettings !== undefined
+          ? (corruption.push({ timestamp: now, key: 'settings', reason: `expected object, got ${Array.isArray(rawSettings) ? 'array' : typeof rawSettings}` }), {})
+          : {});
+
+    if (corruption.length > 0) {
+      void logCorruption(corruption);
+      // Persist the cleaned shape so the next read is consistent.
+      await chrome.storage.local.set({
+        storageSchemaVersion: CURRENT_STORAGE_SCHEMA_VERSION,
+        sessions,
+        delegationRules,
+        settings: { ...DEFAULT_SETTINGS, ...settingsObject },
+        detectionLog,
+      });
+    }
+
     return {
-      sessions: result.sessions ?? DEFAULT_STORAGE.sessions,
-      delegationRules: result.delegationRules ?? DEFAULT_STORAGE.delegationRules,
-      settings: { ...DEFAULT_SETTINGS, ...(result.settings ?? {}) },
-      detectionLog: result.detectionLog ?? DEFAULT_STORAGE.detectionLog,
+      storageSchemaVersion: CURRENT_STORAGE_SCHEMA_VERSION,
+      sessions,
+      delegationRules,
+      settings: { ...DEFAULT_SETTINGS, ...settingsObject },
+      detectionLog,
     };
   } catch (err) {
     console.error('[AI Browser Guard] Storage read error:', err);
