@@ -59,7 +59,9 @@ function installBrowserStubs(): void {
     (globalThis as unknown as Record<string, unknown>)['addEventListener'] = vi.fn();
   }
 
-  // window.postMessage (used by reportAction)
+  // window.postMessage — stubbed for the one-shot bootstrap envelope only;
+  // reportAction / reportCdpDetection / network events all flow through the
+  // private MessagePort post-bootstrap, not window.postMessage.
   if (typeof (globalThis as unknown as Record<string, unknown>)['postMessage'] !== 'function') {
     (globalThis as unknown as Record<string, unknown>)['postMessage'] = vi.fn();
   }

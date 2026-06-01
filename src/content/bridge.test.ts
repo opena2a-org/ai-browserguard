@@ -220,42 +220,49 @@ describe('MAIN-world interceptor — hostile page cannot forge post-bootstrap tr
 });
 
 describe('Bridge — lock-in: no stray window.postMessage outside the bootstrap site', () => {
-  it('src/content/index.ts uses window.postMessage exactly once (the bootstrap call)', () => {
-    const file = readFileSync(resolve(__dirname, 'index.ts'), 'utf8');
-    // Count non-comment `window.postMessage(` occurrences.
-    const matches = file
+  // The lock-in grep tests are NOT trivially passing. They assert the
+  // structural property that the entire P0-1 defense rests on: that no
+  // listener and no sender on `window` 'message' exists outside the
+  // documented bootstrap site. Adversarial review (2026-06-01) flagged the
+  // earlier narrow scope (only index.ts + interceptor.ts) as letting a
+  // future contributor reintroduce a stray `window.postMessage` in
+  // network-interceptor.ts / detector.ts / monitor.ts / toast.ts. Scope is
+  // now every TS module under src/content/.
+
+  const CONTENT_FILES = [
+    'index.ts',
+    'interceptor.ts',
+    'network-interceptor.ts',
+    'detector.ts',
+    'monitor.ts',
+    'toast.ts',
+  ] as const;
+
+  function nonCommentLines(file: string, re: RegExp): string[] {
+    return file
       .split('\n')
       .filter((line) => {
         const trimmed = line.trim();
         if (trimmed.startsWith('//') || trimmed.startsWith('*')) return false;
-        return /\bwindow\.postMessage\s*\(/.test(line);
+        return re.test(line);
       });
+  }
+
+  it('src/content/index.ts uses window.postMessage exactly once (the bootstrap call)', () => {
+    const file = readFileSync(resolve(__dirname, 'index.ts'), 'utf8');
+    const matches = nonCommentLines(file, /\bwindow\.postMessage\s*\(/);
     expect(matches.length).toBe(1);
-    // The one allowed callsite ships the bootstrap envelope.
-    expect(matches[0]).toContain('window.postMessage');
   });
 
   it('src/content/interceptor.ts has no window.postMessage callsite at all', () => {
     const file = readFileSync(resolve(__dirname, 'interceptor.ts'), 'utf8');
-    const matches = file
-      .split('\n')
-      .filter((line) => {
-        const trimmed = line.trim();
-        if (trimmed.startsWith('//') || trimmed.startsWith('*')) return false;
-        return /\bwindow\.postMessage\s*\(/.test(line);
-      });
+    const matches = nonCommentLines(file, /\bwindow\.postMessage\s*\(/);
     expect(matches.length).toBe(0);
   });
 
   it('src/content/interceptor.ts has exactly one window.addEventListener(\'message\') and it is the bootstrap listener', () => {
     const file = readFileSync(resolve(__dirname, 'interceptor.ts'), 'utf8');
-    const matches = file
-      .split('\n')
-      .filter((line) => {
-        const trimmed = line.trim();
-        if (trimmed.startsWith('//') || trimmed.startsWith('*')) return false;
-        return /\bwindow\.addEventListener\s*\(\s*['"]message['"]/.test(line);
-      });
+    const matches = nonCommentLines(file, /\bwindow\.addEventListener\s*\(\s*['"]message['"]/);
     expect(matches.length).toBe(1);
     expect(matches[0]).toContain('bootstrapListener');
     expect(matches[0]).toContain('capture: true');
@@ -263,13 +270,29 @@ describe('Bridge — lock-in: no stray window.postMessage outside the bootstrap 
 
   it('src/content/index.ts has no window.addEventListener(\'message\') — all ISOLATED↔MAIN traffic goes through the port', () => {
     const file = readFileSync(resolve(__dirname, 'index.ts'), 'utf8');
-    const matches = file
-      .split('\n')
-      .filter((line) => {
-        const trimmed = line.trim();
-        if (trimmed.startsWith('//') || trimmed.startsWith('*')) return false;
-        return /\bwindow\.addEventListener\s*\(\s*['"]message['"]/.test(line);
-      });
+    const matches = nonCommentLines(file, /\bwindow\.addEventListener\s*\(\s*['"]message['"]/);
     expect(matches.length).toBe(0);
+  });
+
+  it('no other src/content/*.ts module uses window.postMessage', () => {
+    const offenders: string[] = [];
+    for (const filename of CONTENT_FILES) {
+      if (filename === 'index.ts') continue; // sanctioned bootstrap site
+      const file = readFileSync(resolve(__dirname, filename), 'utf8');
+      const matches = nonCommentLines(file, /\bwindow\.postMessage\s*\(/);
+      for (const m of matches) offenders.push(`${filename}: ${m.trim()}`);
+    }
+    expect(offenders).toEqual([]);
+  });
+
+  it('no other src/content/*.ts module installs a window \'message\' listener', () => {
+    const offenders: string[] = [];
+    for (const filename of CONTENT_FILES) {
+      if (filename === 'interceptor.ts') continue; // sanctioned bootstrap listener
+      const file = readFileSync(resolve(__dirname, filename), 'utf8');
+      const matches = nonCommentLines(file, /\bwindow\.addEventListener\s*\(\s*['"]message['"]/);
+      for (const m of matches) offenders.push(`${filename}: ${m.trim()}`);
+    }
+    expect(offenders).toEqual([]);
   });
 });

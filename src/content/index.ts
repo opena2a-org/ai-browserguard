@@ -102,21 +102,28 @@ function syncRuleToMainWorld(rule: DelegationRule | null): void {
   postToMainWorld({ type: MSG_RULE_UPDATE, rule: ruleData });
 }
 
-/** Handle messages received from the MAIN-world interceptor via the bridge port. */
+/**
+ * Handle messages received from the MAIN-world interceptor via the bridge port.
+ *
+ * Validates each field shape before forwarding to background. The port itself
+ * is a trust boundary, but if an attacker ever wins the bootstrap race (the
+ * known residual risk of the document_start ordering defense), field-level
+ * validation prevents forged messages from reaching downstream consumers with
+ * arbitrary payloads.
+ */
 function handleMainWorldMessage(e: MessageEvent): void {
   const data = e.data as BridgeMessage | undefined;
   if (!data || typeof data.type !== 'string') return;
 
   // Handle CDP automation detection from the MAIN world stack trace trap
   if (data.type === MSG_CDP_DETECTED) {
-    // The MAIN world interceptor detected automation via stack trace analysis.
-    // Create a detection event and forward it to the background.
-    const { framework, detail, signals, timestamp } = data as unknown as {
-      framework: string;
-      detail: string;
-      signals: Record<string, unknown>;
-      timestamp: string;
-    };
+    const framework = typeof data.framework === 'string' ? data.framework : '';
+    const detail = typeof data.detail === 'string' ? data.detail : '';
+    const signals = (data.signals && typeof data.signals === 'object')
+      ? (data.signals as Record<string, unknown>)
+      : {};
+    const timestamp = typeof data.timestamp === 'string' ? data.timestamp : new Date().toISOString();
+    if (!framework) return;
 
     const agentTypeMap: Record<string, import('../types/agent').AgentType> = {
       playwright: 'playwright',
@@ -132,7 +139,7 @@ function handleMainWorldMessage(e: MessageEvent): void {
       type: agentType,
       detectionMethods: ['framework-fingerprint'],
       confidence: 'confirmed',
-      detectedAt: timestamp ?? new Date().toISOString(),
+      detectedAt: timestamp,
       originUrl: window.location.href,
       observedCapabilities: [],
       isActive: true,
@@ -142,7 +149,7 @@ function handleMainWorldMessage(e: MessageEvent): void {
 
     const event: import('../types/events').DetectionEvent = {
       id: crypto.randomUUID(),
-      timestamp: timestamp ?? new Date().toISOString(),
+      timestamp,
       methods: ['framework-fingerprint'],
       confidence: 'confirmed',
       agent,
@@ -156,24 +163,24 @@ function handleMainWorldMessage(e: MessageEvent): void {
 
   // Relay network events from the MAIN world interceptor to background
   if (data.type === MSG_NETWORK_EVENT) {
+    if (!data.event || typeof data.event !== 'object') return;
     sendToBackground('NETWORK_EVENT', data.event).catch(() => { /* ignore */ });
     return;
   }
 
   if (data.type !== MSG_ACTION) return;
 
-  const { capability, url, blocked, reason, timestamp } = data as unknown as {
-    capability: string;
-    url: string;
-    blocked: boolean;
-    reason: string;
-    timestamp: string;
-  };
+  const capability = typeof data.capability === 'string' ? data.capability : null;
+  const url = typeof data.url === 'string' ? data.url : null;
+  const blocked = typeof data.blocked === 'boolean' ? data.blocked : null;
+  const reason = typeof data.reason === 'string' ? data.reason : '';
+  const timestamp = typeof data.timestamp === 'string' ? data.timestamp : new Date().toISOString();
+  if (!capability || !url || blocked === null) return;
 
   if (blocked) {
     const violation: BoundaryViolation = {
       id: crypto.randomUUID(),
-      timestamp: timestamp ?? new Date().toISOString(),
+      timestamp,
       agentId: currentAgentId ?? '',
       attemptedAction: capability as BoundaryViolation['attemptedAction'],
       url,
