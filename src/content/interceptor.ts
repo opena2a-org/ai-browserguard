@@ -7,20 +7,32 @@
  * HTMLFormElement.prototype.submit, and the Navigation API.
  *
  * IMPORTANT: This script CANNOT use any chrome.* APIs.
- * Communication with the isolated content script uses window.postMessage.
  *
- * Security: a shared nonce received from the isolated world ensures only
- * our extension can update the stored delegation rules.
+ * Communication with the isolated content script uses a one-shot
+ * `MessageChannel` handshake. The ISOLATED world creates the channel and
+ * transfers `port2` to this script via a single `window.postMessage` with
+ * `port2` in the transfer list. After this script captures the port, all
+ * subsequent traffic flows through the entangled `MessagePort` pair —
+ * invisible to any other listener on `window`.
+ *
+ * SECURITY: the bootstrap listener uses `{ capture: true, once: true }` and
+ * is registered synchronously at script load. Because both content scripts
+ * declare `run_at: "document_start"` in `manifest.json` (and ISOLATED is
+ * declared first, MAIN second), the bootstrap envelope is dispatched after
+ * MAIN's listener attaches and before any page inline script can register
+ * a competing `'message'` listener.
  */
 
 import { installNetworkInterceptor } from './network-interceptor';
-
-const MSG_INIT = 'AI_GUARD:INIT';
-const MSG_RULE_UPDATE = 'AI_GUARD:RULE_UPDATE';
-const MSG_ACTION = 'AI_GUARD:ACTION';
-const MSG_ALLOW_ONCE = 'AI_GUARD:ALLOW_ONCE';
-const MSG_CDP_DETECTED = 'AI_GUARD:CDP_DETECTED';
-const MSG_NETWORK_EVENT = 'AI_GUARD:NETWORK_EVENT';
+import {
+  MSG_BRIDGE_BOOTSTRAP,
+  MSG_RULE_UPDATE,
+  MSG_ACTION,
+  MSG_ALLOW_ONCE,
+  MSG_CDP_DETECTED,
+  MSG_NETWORK_EVENT,
+} from './bridge-protocol';
+import type { BridgeMessage } from './bridge-protocol';
 
 interface InterceptorRule {
   isActive: boolean;
@@ -30,7 +42,30 @@ interface InterceptorRule {
 }
 
 let activeRule: InterceptorRule | null = null;
-let guardNonce: string | null = null;
+
+/**
+ * Private port to the ISOLATED-world content script. Set exactly once when
+ * the bootstrap envelope is received; after that, all traffic flows through
+ * this port and the `window` 'message' listener is detached.
+ */
+let isolatedWorldPort: MessagePort | null = null;
+
+/**
+ * Network events that fired before the bootstrap completed. The interceptor
+ * installs `fetch`/`XHR` wrappers synchronously at script load, which means
+ * the wrappers may observe page-initiated requests in the same tick the
+ * bootstrap is still being delivered. Buffer such events and flush them when
+ * the port is ready.
+ */
+const pendingPortMessages: BridgeMessage[] = [];
+
+function sendToIsolated(message: BridgeMessage): void {
+  if (isolatedWorldPort) {
+    isolatedWorldPort.postMessage(message);
+  } else {
+    pendingPortMessages.push(message);
+  }
+}
 
 /**
  * One-time overrides granted via the "Allow once" notification button.
@@ -114,22 +149,21 @@ export function isActionAllowed(
   };
 }
 
-/** Report an intercepted action back to the isolated world. */
+/** Report an intercepted action back to the isolated world via the bridge port. */
 function reportAction(
   capability: string,
   url: string,
   blocked: boolean,
   reason: string
 ): void {
-  window.postMessage({
+  sendToIsolated({
     type: MSG_ACTION,
-    nonce: guardNonce,
     capability,
     url,
     blocked,
     reason,
     timestamp: new Date().toISOString(),
-  }, '*');
+  });
 }
 
 // ── Secure-context guard ─────────────────────────────────────────────────────
@@ -163,14 +197,13 @@ let cdpDetectionReported = false;
 function reportCdpDetection(framework: string, detail: string, signals: Record<string, unknown>): void {
   if (cdpDetectionReported) return;
   cdpDetectionReported = true;
-  window.postMessage({
+  sendToIsolated({
     type: MSG_CDP_DETECTED,
-    nonce: guardNonce,
     framework,
     detail,
     signals,
     timestamp: new Date().toISOString(),
-  }, '*');
+  });
 }
 
 /**
@@ -240,30 +273,58 @@ const _originalPrepareStackTrace = (Error as unknown as Record<string, unknown>)
   return `${err}\n${callSites.map((s) => `    at ${s}`).join('\n')}`;
 };
 
-// Listen for messages from the isolated world
-window.addEventListener('message', (e: MessageEvent) => {
-  if (e.source !== window || !e.data) return;
+/** Handle messages received from the ISOLATED-world content script via the port. */
+function handleIsolatedMessage(e: MessageEvent): void {
+  const data = e.data as BridgeMessage | undefined;
+  if (!data || typeof data.type !== 'string') return;
 
-  if (e.data.type === MSG_INIT && !guardNonce) {
-    guardNonce = e.data.nonce as string;
+  if (data.type === MSG_RULE_UPDATE) {
+    activeRule = (data.rule as InterceptorRule | null) ?? null;
     return;
   }
 
-  if (e.data.type === MSG_RULE_UPDATE) {
-    if (!guardNonce || e.data.nonce !== guardNonce) return; // reject unsigned messages
-    activeRule = (e.data.rule as InterceptorRule | null) ?? null;
-    return;
-  }
-
-  if (e.data.type === MSG_ALLOW_ONCE) {
-    if (!guardNonce || e.data.nonce !== guardNonce) return; // reject unsigned messages
-    const capability = e.data.capability as string;
-    const url = e.data.url as string;
+  if (data.type === MSG_ALLOW_ONCE) {
+    const capability = data.capability as string;
+    const url = data.url as string;
     if (capability && url) {
       allowedOnce.add(`${capability}:${url}`);
     }
+    return;
   }
-});
+}
+
+/**
+ * Bootstrap listener — captures `port2` transferred by ISOLATED, then detaches.
+ *
+ * Defense: the listener runs synchronously at MAIN script load (before any
+ * page inline script can register a competing `'message'` listener), and uses
+ * `{ capture: true }`. The listener detaches itself only after successfully
+ * capturing the port — a port-less or malformed envelope is ignored without
+ * burning the listener (which would otherwise be a trivial DoS against the
+ * bridge by any page that posts a bootstrap-shaped message first).
+ */
+function bootstrapListener(e: MessageEvent): void {
+  if (e.source !== window) return;
+  const data = e.data as { type?: unknown } | null | undefined;
+  if (!data || data.type !== MSG_BRIDGE_BOOTSTRAP) return;
+  if (e.ports.length !== 1) return;
+  if (isolatedWorldPort) return; // already bootstrapped
+
+  isolatedWorldPort = e.ports[0]!;
+  isolatedWorldPort.onmessage = handleIsolatedMessage;
+  isolatedWorldPort.start();
+  // Detach manually — only after a SUCCESSFUL port capture — so a malformed
+  // bootstrap envelope cannot deny-of-service the real one.
+  window.removeEventListener('message', bootstrapListener, { capture: true });
+
+  // Flush any buffered messages that fired before bootstrap completed.
+  while (pendingPortMessages.length > 0) {
+    const msg = pendingPortMessages.shift();
+    if (msg) isolatedWorldPort.postMessage(msg);
+  }
+}
+
+window.addEventListener('message', bootstrapListener, { capture: true });
 
 // ── window.open (open-tab capability) ───────────────────────────────────────
 const _originalOpen = window.open.bind(window);
@@ -359,16 +420,12 @@ if (nav) {
 
 // ── Network activity interception ──────────────────────────────────────────
 // Install fetch/XHR wrappers to observe network requests. Events are relayed
-// to the isolated world content script via postMessage, which forwards them
-// to the background service worker for the Network Activity panel.
+// to the isolated world content script via the bridge port, which forwards
+// them to the background service worker for the Network Activity panel.
 // Guard: only install when fetch and XMLHttpRequest are available (browser context).
 if (typeof window.fetch === 'function' && typeof XMLHttpRequest !== 'undefined') {
   installNetworkInterceptor((event) => {
-    window.postMessage({
-      type: MSG_NETWORK_EVENT,
-      nonce: guardNonce,
-      event,
-    }, '*');
+    sendToIsolated({ type: MSG_NETWORK_EVENT, event });
   });
 }
 
