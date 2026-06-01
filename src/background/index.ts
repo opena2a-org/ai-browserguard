@@ -488,10 +488,15 @@ async function enrichAgentTrust(tabId: number, agent: AgentIdentity): Promise<vo
     const aimResult = await lookupAgentIdentity(agent.type, agent.originUrl, {
       baseUrl: settings.aimBaseUrl,
     });
-    if (aimResult) {
+    if (aimResult.status === 'ok') {
       aimScore = aimResult.trustScore;
       agent.label = aimResult.label;
+    } else if (aimResult.status === 'unregistered') {
+      // Informational only — surface the label but do not feed an
+      // unregistered=0 score into trust averaging.
+      agent.label = aimResult.label;
     }
+    // unreachable: no signal, leave aimScore null so it's excluded from averaging.
   }
 
   // Registry lookup

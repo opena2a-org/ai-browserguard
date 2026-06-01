@@ -11,7 +11,7 @@ beforeEach(() => {
 });
 
 describe('lookupAgentIdentity', () => {
-  it('returns AIM result on successful lookup', async () => {
+  it('returns status=ok with trust score on successful lookup', async () => {
     mockFetch.mockResolvedValueOnce({
       ok: true,
       status: 200,
@@ -26,44 +26,52 @@ describe('lookupAgentIdentity', () => {
       baseUrl: 'https://aim.test',
     });
 
-    expect(result).not.toBeNull();
-    expect(result!.trustScore).toBe(0.85);
-    expect(result!.label).toBe('Verified Playwright');
-    expect(result!.registered).toBe(true);
+    expect(result.status).toBe('ok');
+    if (result.status === 'ok') {
+      expect(result.trustScore).toBe(0.85);
+      expect(result.label).toBe('Verified Playwright');
+      expect(result.registered).toBe(true);
+    }
     expect(mockFetch).toHaveBeenCalledOnce();
     expect(mockFetch.mock.calls[0][0]).toContain('aim.test');
-    // Verify correct API path
     expect(mockFetch.mock.calls[0][0]).toContain('/api/v1/sdk-api/agents/playwright');
   });
 
-  it('returns unregistered result on 404', async () => {
+  it('returns status=unregistered on 404', async () => {
     mockFetch.mockResolvedValueOnce({
       ok: false,
       status: 404,
     });
 
     const result = await lookupAgentIdentity('unknown-agent', 'https://example.com');
-    expect(result).not.toBeNull();
-    expect(result!.trustScore).toBe(0);
-    expect(result!.label).toBe('unknown-agent');
-    expect(result!.registered).toBe(false);
+    expect(result.status).toBe('unregistered');
+    if (result.status === 'unregistered') {
+      expect(result.label).toBe('unknown-agent');
+      expect(result.registered).toBe(false);
+    }
   });
 
-  it('returns null on non-200/non-404 response', async () => {
+  it('returns status=unreachable on non-200/non-404 response', async () => {
     mockFetch.mockResolvedValueOnce({
       ok: false,
       status: 500,
     });
 
     const result = await lookupAgentIdentity('playwright', 'https://example.com');
-    expect(result).toBeNull();
+    expect(result.status).toBe('unreachable');
   });
 
-  it('returns null on network error', async () => {
+  it('returns status=unreachable on network error', async () => {
     mockFetch.mockRejectedValueOnce(new Error('Network error'));
 
     const result = await lookupAgentIdentity('playwright', 'https://example.com');
-    expect(result).toBeNull();
+    expect(result.status).toBe('unreachable');
+  });
+
+  it('returns status=unreachable on AbortSignal timeout', async () => {
+    mockFetch.mockRejectedValueOnce(Object.assign(new Error('aborted'), { name: 'AbortError' }));
+    const result = await lookupAgentIdentity('playwright', 'https://example.com');
+    expect(result.status).toBe('unreachable');
   });
 
   it('caches results for the same agent+origin', async () => {
@@ -114,10 +122,12 @@ describe('lookupAgentIdentity', () => {
     });
 
     const result = await lookupAgentIdentity('selenium', 'https://example.com');
-    expect(result).not.toBeNull();
-    expect(result!.trustScore).toBe(0);
-    expect(result!.label).toBe('selenium');
-    expect(result!.registered).toBe(true); // 200 means registered
+    expect(result.status).toBe('ok');
+    if (result.status === 'ok') {
+      expect(result.trustScore).toBe(0);
+      expect(result.label).toBe('selenium');
+      expect(result.registered).toBe(true); // 200 means registered
+    }
   });
 
   it('falls back to name when displayName is missing', async () => {
@@ -131,8 +141,10 @@ describe('lookupAgentIdentity', () => {
     });
 
     const result = await lookupAgentIdentity('my-agent', 'https://example.com');
-    expect(result).not.toBeNull();
-    expect(result!.label).toBe('my-agent');
+    expect(result.status).toBe('ok');
+    if (result.status === 'ok') {
+      expect(result.label).toBe('my-agent');
+    }
   });
 
   it('clears cache when clearAIMCache is called', async () => {
@@ -181,8 +193,23 @@ describe('lookupAgentIdentity', () => {
     const result2 = await lookupAgentIdentity('missing', 'https://example.com');
 
     expect(result1).toEqual(result2);
-    expect(result1!.registered).toBe(false);
+    expect(result1.status).toBe('unregistered');
     expect(mockFetch).toHaveBeenCalledOnce();
+  });
+
+  it('does NOT cache unreachable results so transient failures are retried', async () => {
+    mockFetch.mockResolvedValueOnce({ ok: false, status: 500 });
+    const first = await lookupAgentIdentity('retry-me', 'https://example.com');
+    expect(first.status).toBe('unreachable');
+
+    mockFetch.mockResolvedValueOnce({
+      ok: true,
+      status: 200,
+      json: () => Promise.resolve({ trustScore: 0.4, displayName: 'Retry', name: 'retry-me' }),
+    });
+    const second = await lookupAgentIdentity('retry-me', 'https://example.com');
+    expect(second.status).toBe('ok');
+    expect(mockFetch).toHaveBeenCalledTimes(2);
   });
 
   // ---------------------------------------------------------------------
@@ -191,23 +218,23 @@ describe('lookupAgentIdentity', () => {
   // trustScore: 1.0 would bypass detection escalation.
   // ---------------------------------------------------------------------
   describe('base URL validation', () => {
-    it('rejects http://hostile.example.com without making a fetch', async () => {
+    it('returns status=unreachable for http://hostile.example.com without making a fetch', async () => {
       const result = await lookupAgentIdentity('playwright', 'https://example.com', {
         baseUrl: 'http://hostile.example.com',
       });
-      expect(result).toBeNull();
+      expect(result.status).toBe('unreachable');
       expect(mockFetch).not.toHaveBeenCalled();
     });
 
-    it('rejects ftp:// and javascript: schemes', async () => {
+    it('returns status=unreachable for ftp:// and javascript: schemes', async () => {
       const ftp = await lookupAgentIdentity('playwright', 'https://example.com', {
         baseUrl: 'ftp://aim.opena2a.org',
       });
-      expect(ftp).toBeNull();
+      expect(ftp.status).toBe('unreachable');
       const jsScheme = await lookupAgentIdentity('playwright', 'https://example.com', {
         baseUrl: 'javascript:alert(1)',
       });
-      expect(jsScheme).toBeNull();
+      expect(jsScheme.status).toBe('unreachable');
       expect(mockFetch).not.toHaveBeenCalled();
     });
 
@@ -220,7 +247,7 @@ describe('lookupAgentIdentity', () => {
       const result = await lookupAgentIdentity('p', 'https://example.com', {
         baseUrl: 'http://localhost:8080',
       });
-      expect(result).not.toBeNull();
+      expect(result.status).toBe('ok');
       expect(mockFetch).toHaveBeenCalledOnce();
     });
 

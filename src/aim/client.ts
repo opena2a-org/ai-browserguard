@@ -10,17 +10,23 @@
  * record including trustScore and displayName.
  */
 
-export interface AIMResult {
-  /** Trust score between 0.0 and 1.0. */
-  trustScore: number;
-  /** Human-readable display name for the agent. */
-  label: string;
-  /** Whether the agent is registered in AIM. */
-  registered: boolean;
-}
+/**
+ * Discriminated result of an AIM identity lookup.
+ *
+ * - `ok`: AIM returned a registered agent record.
+ * - `unregistered`: AIM is reachable but reports the agent is not registered (404).
+ *   Informational only — does NOT contribute to trust score averaging.
+ * - `unreachable`: any transport-level failure (network error, timeout, non-HTTPS
+ *   base URL, non-2xx/non-404 status). Callers should treat this the same as
+ *   "no signal" — not as low trust.
+ */
+export type AIMLookupResult =
+  | { status: 'ok'; trustScore: number; label: string; registered: true }
+  | { status: 'unregistered'; label: string; registered: false }
+  | { status: 'unreachable' };
 
 interface CacheEntry {
-  result: AIMResult;
+  result: AIMLookupResult;
   expiresAt: number;
 }
 
@@ -57,20 +63,21 @@ function cacheKey(agentType: string, origin: string): string {
  * is the agent type (name). The AIM server returns a full Agent
  * object with trustScore (float64) and displayName (string).
  *
- * Returns null on any failure (network error, timeout, non-200
- * response) so callers can fall back gracefully. A 404 means the
- * agent is not registered; the result reflects that.
+ * Returns a discriminated result so callers can distinguish
+ * `unreachable` (no signal) from `unregistered` (informational only)
+ * from `ok` (a real trust score). Only `ok` and `unregistered` are
+ * cached — unreachable outcomes are transient and re-checked next call.
  */
 export async function lookupAgentIdentity(
   agentType: string,
   origin: string,
   options?: { baseUrl?: string; cacheTtlMs?: number }
-): Promise<AIMResult | null> {
+): Promise<AIMLookupResult> {
   const baseUrl = options?.baseUrl ?? DEFAULT_AIM_BASE_URL;
   const ttl = options?.cacheTtlMs ?? DEFAULT_CACHE_TTL_MS;
 
   if (!isAllowedBaseUrl(baseUrl)) {
-    return null;
+    return { status: 'unreachable' };
   }
 
   const key = cacheKey(agentType, origin);
@@ -90,9 +97,8 @@ export async function lookupAgentIdentity(
     });
 
     if (response.status === 404) {
-      // Agent not registered in AIM
-      const result: AIMResult = {
-        trustScore: 0,
+      const result: AIMLookupResult = {
+        status: 'unregistered',
         label: agentType,
         registered: false,
       };
@@ -101,7 +107,7 @@ export async function lookupAgentIdentity(
     }
 
     if (!response.ok) {
-      return null;
+      return { status: 'unreachable' };
     }
 
     // AIM Agent response shape: { trustScore: number, displayName: string, name: string, ... }
@@ -111,7 +117,8 @@ export async function lookupAgentIdentity(
       name?: string;
     };
 
-    const result: AIMResult = {
+    const result: AIMLookupResult = {
+      status: 'ok',
       trustScore: typeof data.trustScore === 'number' ? data.trustScore : 0,
       label: typeof data.displayName === 'string' ? data.displayName
         : typeof data.name === 'string' ? data.name
@@ -119,7 +126,6 @@ export async function lookupAgentIdentity(
       registered: true,
     };
 
-    // Store in cache
     cache.set(key, {
       result,
       expiresAt: Date.now() + ttl,
@@ -128,7 +134,7 @@ export async function lookupAgentIdentity(
     return result;
   } catch {
     // Network error, timeout, or parse failure
-    return null;
+    return { status: 'unreachable' };
   }
 }
 
