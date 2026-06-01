@@ -13,6 +13,10 @@ dist/
 *.pem
 *.p12
 *.pfx
+secrets.json
+secrets/
+credentials.json
+credentials/
 
 # OS files
 .DS_Store
