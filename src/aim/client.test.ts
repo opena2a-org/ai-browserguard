@@ -197,19 +197,49 @@ describe('lookupAgentIdentity', () => {
     expect(mockFetch).toHaveBeenCalledOnce();
   });
 
-  it('does NOT cache unreachable results so transient failures are retried', async () => {
+  it('caches unreachable results briefly so a brief outage does not stampede', async () => {
     mockFetch.mockResolvedValueOnce({ ok: false, status: 500 });
-    const first = await lookupAgentIdentity('retry-me', 'https://example.com');
+    const first = await lookupAgentIdentity('outage', 'https://example.com');
     expect(first.status).toBe('unreachable');
+
+    // Immediately re-call. Without negative caching the next 500 would re-fetch.
+    const second = await lookupAgentIdentity('outage', 'https://example.com');
+    expect(second.status).toBe('unreachable');
+    expect(mockFetch).toHaveBeenCalledOnce();
+  });
+
+  it('retries an unreachable lookup after the short TTL has been cleared', async () => {
+    mockFetch.mockResolvedValueOnce({ ok: false, status: 500 });
+    const first = await lookupAgentIdentity('recover', 'https://example.com');
+    expect(first.status).toBe('unreachable');
+
+    // Simulate TTL expiry by clearing the cache (the production TTL is 30s).
+    clearAIMCache();
 
     mockFetch.mockResolvedValueOnce({
       ok: true,
       status: 200,
-      json: () => Promise.resolve({ trustScore: 0.4, displayName: 'Retry', name: 'retry-me' }),
+      json: () => Promise.resolve({ trustScore: 0.4, displayName: 'Recovered', name: 'recover' }),
     });
-    const second = await lookupAgentIdentity('retry-me', 'https://example.com');
+    const second = await lookupAgentIdentity('recover', 'https://example.com');
     expect(second.status).toBe('ok');
     expect(mockFetch).toHaveBeenCalledTimes(2);
+  });
+
+  it('does NOT cache misconfigured base URL outcomes (settings may change)', async () => {
+    const first = await lookupAgentIdentity('cfg', 'https://example.com', { baseUrl: 'http://bad.example' });
+    expect(first.status).toBe('unreachable');
+    // With cached unreachable this would be a same-key hit; the misconfigured
+    // path must skip the cache so that fixing the base URL in settings has
+    // immediate effect on the next call.
+    mockFetch.mockResolvedValueOnce({
+      ok: true,
+      status: 200,
+      json: () => Promise.resolve({ trustScore: 0.5, displayName: 'Fixed', name: 'cfg' }),
+    });
+    const second = await lookupAgentIdentity('cfg', 'https://example.com', { baseUrl: 'https://aim.test' });
+    expect(second.status).toBe('ok');
+    expect(mockFetch).toHaveBeenCalledOnce();
   });
 
   // ---------------------------------------------------------------------

@@ -258,4 +258,56 @@ describe('storage schema version + corruption recovery', () => {
     const after = await chrome.storage.local.get('sessions');
     expect(after.sessions).toEqual([]);
   });
+
+  it('only writes back the corrupted keys, leaving healthy keys untouched', async () => {
+    // Seed: sessions is corrupt, delegationRules is healthy, settings is healthy.
+    const goodRules = [
+      { id: 'rule-keep', preset: 'readOnly' as const, scope: { sitePatterns: [], actionRestrictions: [], timeBound: null }, createdAt: '', isActive: true },
+    ];
+    const goodSettings = { ...DEFAULT_SETTINGS, detectionEnabled: false };
+    await chrome.storage.local.set({
+      storageSchemaVersion: CURRENT_STORAGE_SCHEMA_VERSION,
+      sessions: 'corrupt',
+      delegationRules: goodRules,
+      settings: goodSettings,
+    });
+
+    // Clear the seed call from the history so we only inspect what
+    // getStorageState writes itself.
+    (chrome.storage.local.set as unknown as { mockClear: () => void }).mockClear();
+
+    await getStorageState();
+
+    // Use the .mock.calls history to inspect every set() call argument.
+    // The corruption-recovery write-back is the call that does NOT contain
+    // the corruption log key — distinguish it from the bounded log write.
+    const allCalls = (chrome.storage.local.set as unknown as { mock: { calls: unknown[][] } }).mock.calls;
+    const writes = allCalls.map((c) => c[0] as Record<string, unknown>);
+    const recoveryWrites = writes.filter((c) => !('__corrupted_state' in c));
+    // Should be at most one recovery write, and it MUST only include the
+    // corrupted key ('sessions'), not 'delegationRules' or 'settings'.
+    expect(recoveryWrites.length).toBeLessThanOrEqual(1);
+    if (recoveryWrites.length === 1) {
+      const keys = Object.keys(recoveryWrites[0]);
+      expect(keys).toContain('sessions');
+      expect(keys).not.toContain('delegationRules');
+      expect(keys).not.toContain('settings');
+    }
+
+    // And the healthy values are still in storage afterwards.
+    const after = await chrome.storage.local.get(['delegationRules', 'settings']);
+    expect(after.delegationRules).toEqual(goodRules);
+    expect((after.settings as { detectionEnabled: boolean }).detectionEnabled).toBe(false);
+  });
+
+  it('does NOT write a lower storageSchemaVersion back on downgrade', async () => {
+    const futureVersion = CURRENT_STORAGE_SCHEMA_VERSION + 5;
+    await chrome.storage.local.set({
+      storageSchemaVersion: futureVersion,
+      sessions: [],
+    });
+    await getStorageState();
+    const after = await chrome.storage.local.get('storageSchemaVersion');
+    expect(after.storageSchemaVersion).toBe(futureVersion);
+  });
 });

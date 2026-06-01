@@ -32,6 +32,11 @@ interface CacheEntry {
 
 const DEFAULT_AIM_BASE_URL = 'https://aim.opena2a.org';
 const DEFAULT_CACHE_TTL_MS = 5 * 60 * 1000; // 5 minutes
+// Short negative-cache for transport failures. Without this, every detected
+// agent navigation re-issues a fetch when AIM is down, turning a brief
+// partial outage into a layer-7 stampede. 30s is short enough to recover
+// quickly when AIM comes back, long enough to absorb a burst.
+const UNREACHABLE_CACHE_TTL_MS = 30 * 1000;
 
 // Non-HTTPS AIM endpoints are rejected outside of tests. A trustScore of 1.0
 // returned from an attacker-controlled localhost endpoint would otherwise
@@ -65,8 +70,10 @@ function cacheKey(agentType: string, origin: string): string {
  *
  * Returns a discriminated result so callers can distinguish
  * `unreachable` (no signal) from `unregistered` (informational only)
- * from `ok` (a real trust score). Only `ok` and `unregistered` are
- * cached — unreachable outcomes are transient and re-checked next call.
+ * from `ok` (a real trust score). `ok` and `unregistered` use the full
+ * cacheTtlMs; `unreachable` uses a much shorter negative-cache window
+ * (UNREACHABLE_CACHE_TTL_MS) so a transient outage backs off the
+ * network but recovers quickly when AIM returns.
  */
 export async function lookupAgentIdentity(
   agentType: string,
@@ -76,11 +83,22 @@ export async function lookupAgentIdentity(
   const baseUrl = options?.baseUrl ?? DEFAULT_AIM_BASE_URL;
   const ttl = options?.cacheTtlMs ?? DEFAULT_CACHE_TTL_MS;
 
-  if (!isAllowedBaseUrl(baseUrl)) {
-    return { status: 'unreachable' };
+  const key = cacheKey(agentType, origin);
+
+  // Cache unreachable (short TTL) the same as other outcomes so a brief
+  // outage doesn't fire a fetch per page navigation.
+  function rememberUnreachable(): AIMLookupResult {
+    const result: AIMLookupResult = { status: 'unreachable' };
+    cache.set(key, { result, expiresAt: Date.now() + UNREACHABLE_CACHE_TTL_MS });
+    return result;
   }
 
-  const key = cacheKey(agentType, origin);
+  if (!isAllowedBaseUrl(baseUrl)) {
+    // Misconfigured base URL is a permanent-until-settings-change condition.
+    // Treat it as unreachable but don't cache — settings can change between
+    // calls and we want the next read to re-evaluate.
+    return { status: 'unreachable' };
+  }
 
   // Check cache
   const cached = cache.get(key);
@@ -107,7 +125,7 @@ export async function lookupAgentIdentity(
     }
 
     if (!response.ok) {
-      return { status: 'unreachable' };
+      return rememberUnreachable();
     }
 
     // AIM Agent response shape: { trustScore: number, displayName: string, name: string, ... }
@@ -134,7 +152,7 @@ export async function lookupAgentIdentity(
     return result;
   } catch {
     // Network error, timeout, or parse failure
-    return { status: 'unreachable' };
+    return rememberUnreachable();
   }
 }
 

@@ -83,6 +83,11 @@ export async function getStorageState(): Promise<StorageSchema> {
     const now = new Date().toISOString();
 
     let workingData: Record<string, unknown> = { ...result };
+    // Keys whose stored value was bad and need to be written back. We only
+    // write back what we cleaned: rewriting every key would clobber a
+    // concurrent legitimate writer that lands between our read and our write.
+    const keysToPersist: Record<string, unknown> = {};
+
     const storedVersion = typeof workingData.storageSchemaVersion === 'number'
       ? workingData.storageSchemaVersion
       : null;
@@ -91,50 +96,71 @@ export async function getStorageState(): Promise<StorageSchema> {
       corruption.push({ timestamp: now, key: 'storageSchemaVersion', reason: 'missing — ran migration scaffold from v0' });
       const { data } = migrateStorageShape(workingData, 0);
       workingData = data;
+      keysToPersist.storageSchemaVersion = CURRENT_STORAGE_SCHEMA_VERSION;
     } else if (storedVersion !== null && storedVersion < CURRENT_STORAGE_SCHEMA_VERSION) {
       corruption.push({ timestamp: now, key: 'storageSchemaVersion', reason: `migrated from v${storedVersion} to v${CURRENT_STORAGE_SCHEMA_VERSION}` });
       const { data } = migrateStorageShape(workingData, storedVersion);
       workingData = data;
+      keysToPersist.storageSchemaVersion = CURRENT_STORAGE_SCHEMA_VERSION;
     } else if (storedVersion !== null && storedVersion > CURRENT_STORAGE_SCHEMA_VERSION) {
-      // Downgrade scenario — keep data as-is but record it.
+      // Downgrade scenario — keep data as-is but record it. Do NOT
+      // write a lower version back, that would lose forward state.
       corruption.push({ timestamp: now, key: 'storageSchemaVersion', reason: `stored version v${storedVersion} is newer than runtime v${CURRENT_STORAGE_SCHEMA_VERSION}` });
     }
 
-    const sessions = Array.isArray(workingData.sessions)
-      ? (workingData.sessions as AgentSession[])
-      : (workingData.sessions !== undefined
-          ? (corruption.push({ timestamp: now, key: 'sessions', reason: `expected array, got ${typeof workingData.sessions}` }), DEFAULT_STORAGE.sessions)
-          : DEFAULT_STORAGE.sessions);
+    let sessions: AgentSession[];
+    if (Array.isArray(workingData.sessions)) {
+      sessions = workingData.sessions as AgentSession[];
+    } else if (workingData.sessions !== undefined) {
+      corruption.push({ timestamp: now, key: 'sessions', reason: `expected array, got ${typeof workingData.sessions}` });
+      sessions = DEFAULT_STORAGE.sessions;
+      keysToPersist.sessions = sessions;
+    } else {
+      sessions = DEFAULT_STORAGE.sessions;
+    }
 
-    const delegationRules = Array.isArray(workingData.delegationRules)
-      ? (workingData.delegationRules as DelegationRule[])
-      : (workingData.delegationRules !== undefined
-          ? (corruption.push({ timestamp: now, key: 'delegationRules', reason: `expected array, got ${typeof workingData.delegationRules}` }), DEFAULT_STORAGE.delegationRules)
-          : DEFAULT_STORAGE.delegationRules);
+    let delegationRules: DelegationRule[];
+    if (Array.isArray(workingData.delegationRules)) {
+      delegationRules = workingData.delegationRules as DelegationRule[];
+    } else if (workingData.delegationRules !== undefined) {
+      corruption.push({ timestamp: now, key: 'delegationRules', reason: `expected array, got ${typeof workingData.delegationRules}` });
+      delegationRules = DEFAULT_STORAGE.delegationRules;
+      keysToPersist.delegationRules = delegationRules;
+    } else {
+      delegationRules = DEFAULT_STORAGE.delegationRules;
+    }
 
-    const detectionLog = Array.isArray(workingData.detectionLog)
-      ? (workingData.detectionLog as DetectionEvent[])
-      : (workingData.detectionLog !== undefined
-          ? (corruption.push({ timestamp: now, key: 'detectionLog', reason: `expected array, got ${typeof workingData.detectionLog}` }), DEFAULT_STORAGE.detectionLog)
-          : DEFAULT_STORAGE.detectionLog);
+    let detectionLog: DetectionEvent[];
+    if (Array.isArray(workingData.detectionLog)) {
+      detectionLog = workingData.detectionLog as DetectionEvent[];
+    } else if (workingData.detectionLog !== undefined) {
+      corruption.push({ timestamp: now, key: 'detectionLog', reason: `expected array, got ${typeof workingData.detectionLog}` });
+      detectionLog = DEFAULT_STORAGE.detectionLog;
+      keysToPersist.detectionLog = detectionLog;
+    } else {
+      detectionLog = DEFAULT_STORAGE.detectionLog;
+    }
 
     const rawSettings = workingData.settings;
-    const settingsObject = (rawSettings !== null && typeof rawSettings === 'object' && !Array.isArray(rawSettings))
-      ? (rawSettings as Partial<UserSettings>)
-      : (rawSettings !== undefined
-          ? (corruption.push({ timestamp: now, key: 'settings', reason: `expected object, got ${Array.isArray(rawSettings) ? 'array' : typeof rawSettings}` }), {})
-          : {});
+    let settingsObject: Partial<UserSettings>;
+    if (rawSettings !== null && typeof rawSettings === 'object' && !Array.isArray(rawSettings)) {
+      settingsObject = rawSettings as Partial<UserSettings>;
+    } else if (rawSettings !== undefined) {
+      corruption.push({ timestamp: now, key: 'settings', reason: `expected object, got ${Array.isArray(rawSettings) ? 'array' : typeof rawSettings}` });
+      settingsObject = {};
+      keysToPersist.settings = { ...DEFAULT_SETTINGS };
+    } else {
+      settingsObject = {};
+    }
 
     if (corruption.length > 0) {
       void logCorruption(corruption);
-      // Persist the cleaned shape so the next read is consistent.
-      await chrome.storage.local.set({
-        storageSchemaVersion: CURRENT_STORAGE_SCHEMA_VERSION,
-        sessions,
-        delegationRules,
-        settings: { ...DEFAULT_SETTINGS, ...settingsObject },
-        detectionLog,
-      });
+      // Write back ONLY the keys we cleaned. Re-persisting non-corrupt keys
+      // here would race with concurrent writes from other extension contexts
+      // (popup + service worker + content script all share storage).
+      if (Object.keys(keysToPersist).length > 0) {
+        await chrome.storage.local.set(keysToPersist);
+      }
     }
 
     return {
