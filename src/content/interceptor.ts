@@ -103,8 +103,16 @@ const allowedOnce: Set<string> = new Set();
 /**
  * Returns true and removes the entry if a one-time override exists for this
  * capability + url combination.
+ *
+ * P1-2 sentinel gate: the wrappers (`window.open`, `form.submit`,
+ * `pushState`, etc.) call this BEFORE `isActionAllowed`, so a stale
+ * allow-once entry would otherwise bypass the kill-switch hard-block. Gate
+ * here: when the sentinel is active, refuse to consume the entry (the
+ * entry stays for after-reset) and force the wrapper to fall through to
+ * `isActionAllowed`, where the same sentinel returns blocked.
  */
 function consumeAllowedOnce(capability: string, url: string): boolean {
+  if (killSwitchActive) return false;
   const key = `${capability}:${url}`;
   if (allowedOnce.has(key)) {
     allowedOnce.delete(key);

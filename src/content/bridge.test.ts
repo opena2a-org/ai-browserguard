@@ -439,4 +439,46 @@ describe('MAIN-world interceptor — P1-2 kill-switch hard-block sentinel', () =
     expect(handlerSlice).toMatch(/chrome\.tabs\.sendMessage/);
     expect(handlerSlice).toMatch(/type:\s*'KILL_SWITCH_RESET'/);
   });
+
+  it('lock-in: consumeAllowedOnce refuses to consume entries while the sentinel is active', () => {
+    // Adversarial-review CRITICAL #1: the wrappers call consumeAllowedOnce
+    // BEFORE isActionAllowed. A stale allow-once entry would otherwise let
+    // an in-flight wrapper call bypass the sentinel entirely. The gate at
+    // the top of consumeAllowedOnce is the defense; the lock-in proves it
+    // sits before the .has(key) lookup so the entry is preserved (not
+    // consumed) for use after reset.
+    const file = readFileSync(resolve(__dirname, 'interceptor.ts'), 'utf8');
+    const fnStart = file.indexOf('function consumeAllowedOnce');
+    expect(fnStart).toBeGreaterThan(0);
+    const fnBody = file.slice(fnStart, fnStart + 500);
+    const sentinelIdx = fnBody.indexOf('if (killSwitchActive) return false');
+    const hasIdx = fnBody.indexOf('allowedOnce.has(key)');
+    expect(sentinelIdx).toBeGreaterThan(0);
+    expect(hasIdx).toBeGreaterThan(0);
+    expect(sentinelIdx).toBeLessThan(hasIdx);
+  });
+
+  it('lock-in: content script re-arms the sentinel from the STATUS_QUERY response after navigation', () => {
+    // Adversarial-review CRITICAL #2: content scripts re-inject on
+    // navigation; the new MAIN-world interceptor boots with
+    // killSwitchActive=false. Without re-syncing from the background's
+    // current killSwitch state, navigating during a kill switch silently
+    // disarms it on the new tab. The STATUS_QUERY response carries
+    // killSwitchActive; the content script must forward it to MAIN.
+    const file = readFileSync(resolve(__dirname, 'index.ts'), 'utf8');
+    const statusQueryIdx = file.indexOf("sendToBackground('STATUS_QUERY'");
+    expect(statusQueryIdx).toBeGreaterThan(0);
+    const handlerSlice = file.slice(statusQueryIdx, statusQueryIdx + 1200);
+    expect(handlerSlice).toMatch(/killSwitchActive\?:\s*boolean/);
+    expect(handlerSlice).toMatch(/data\.killSwitchActive\s*===\s*true/);
+    expect(handlerSlice).toMatch(/postToMainWorld\(\{\s*type: MSG_KILL_SWITCH,\s*active: true\s*\}\)/);
+  });
+
+  it('lock-in: background STATUS_QUERY response includes killSwitchActive (for navigation re-sync)', () => {
+    const file = readFileSync(resolve(__dirname, '..', 'background', 'index.ts'), 'utf8');
+    const handlerIdx = file.indexOf("case 'STATUS_QUERY'");
+    expect(handlerIdx).toBeGreaterThan(0);
+    const handlerSlice = file.slice(handlerIdx, handlerIdx + 1000);
+    expect(handlerSlice).toMatch(/killSwitchActive:\s*state\.killSwitch\.isActive/);
+  });
 });

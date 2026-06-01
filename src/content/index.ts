@@ -258,13 +258,23 @@ function initialize(): void {
       if (monitorCleanup) monitorCleanup();
     });
 
-    // Request active delegation rules from background
+    // Request active delegation rules from background. The STATUS_QUERY
+    // response also carries the current killSwitchActive state — when the
+    // page navigates while the kill switch is active, content scripts
+    // re-inject and need to re-arm the MAIN-world hard-block sentinel.
+    // Without this, navigation would silently bypass the kill switch.
     sendToBackground('STATUS_QUERY', {}).then((response) => {
       if (response && typeof response === 'object') {
-        const data = response as { activeDelegation?: DelegationRule };
+        const data = response as {
+          activeDelegation?: DelegationRule;
+          killSwitchActive?: boolean;
+        };
         if (data.activeDelegation) {
           updateActiveRule(data.activeDelegation);
           syncRuleToMainWorld(data.activeDelegation);
+        }
+        if (data.killSwitchActive === true) {
+          postToMainWorld({ type: MSG_KILL_SWITCH, active: true });
         }
       }
     }).catch(() => {
