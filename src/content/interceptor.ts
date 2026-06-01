@@ -31,6 +31,7 @@ import {
   MSG_ALLOW_ONCE,
   MSG_CDP_DETECTED,
   MSG_NETWORK_EVENT,
+  MSG_KILL_SWITCH,
 } from './bridge-protocol';
 import type { BridgeMessage } from './bridge-protocol';
 
@@ -42,6 +43,30 @@ interface InterceptorRule {
 }
 
 let activeRule: InterceptorRule | null = null;
+
+/**
+ * P1-2 hard-block sentinel. When the kill switch fires, the background
+ * service worker dispatches `KILL_SWITCH_ACTIVATE` to every content script;
+ * each ISOLATED-side handler forwards an `MSG_KILL_SWITCH {active: true}`
+ * envelope over the bridge to MAIN. While this flag is set, every
+ * capability check returns blocked — even for capabilities the user's
+ * delegation rule would normally allow. The flag clears when the user
+ * resets the kill switch (background broadcasts `KILL_SWITCH_RESET` to
+ * tabs, ISOLATED forwards `MSG_KILL_SWITCH {active: false}` over the
+ * bridge).
+ *
+ * Rationale: the MAIN-world wrappers (window.open, history.pushState,
+ * form.submit, Navigation API) cannot be safely unwrapped after install
+ * because page code may have captured references to the originals. A
+ * hard-block sentinel replaces "remove the wrappers" with "make every
+ * wrapper deny," giving the kill switch synchronous effect against any
+ * in-flight agent action that races the async kill-switch broadcast.
+ *
+ * The flag overrides allow-once: a one-shot override granted before the
+ * kill switch fired does NOT permit subsequent calls while the sentinel is
+ * active. The kill switch is the higher-priority signal.
+ */
+let killSwitchActive = false;
 
 /**
  * Private port to the ISOLATED-world content script. Set exactly once when
@@ -116,12 +141,21 @@ export function matchesPattern(url: string, pattern: string): boolean {
  * Fail-closed when a rule IS active: actions not explicitly permitted are blocked.
  * This ensures the extension does not break sites (login, navigation) during
  * normal use, while still enforcing boundaries when delegation is configured.
+ *
+ * Kill-switch hard-block (P1-2): when `killSwitchActive` is set, every
+ * capability returns blocked regardless of rule, override, or pass-through
+ * state. The check runs FIRST so it cannot be bypassed by a permissive rule
+ * or a stale allow-once entry.
  */
 export function isActionAllowed(
   capability: string,
   url: string,
   rule: InterceptorRule | null = activeRule
 ): { allowed: boolean; reason: string } {
+  // P1-2 hard-block sentinel — overrides rule and allow-once
+  if (killSwitchActive) {
+    return { allowed: false, reason: 'Kill switch active — all capabilities blocked' };
+  }
   // No active delegation rule → pass through (normal browsing, no agent delegation)
   if (!rule || !rule.isActive) {
     return { allowed: true, reason: 'No active delegation rule — pass-through' };
@@ -288,6 +322,24 @@ function handleIsolatedMessage(e: MessageEvent): void {
     const url = data.url as string;
     if (capability && url) {
       allowedOnce.add(`${capability}:${url}`);
+    }
+    return;
+  }
+
+  if (data.type === MSG_KILL_SWITCH) {
+    // Kill-switch sentinel (P1-2). When active, every capability check in
+    // isActionAllowed returns blocked, regardless of the active delegation
+    // rule or any prior allow-once entry. Clearing the flag (on
+    // KILL_SWITCH_RESET) restores normal rule processing without losing
+    // the existing activeRule.
+    if (typeof data.active === 'boolean') {
+      killSwitchActive = data.active;
+      // On activation, also purge any pending allow-once entries — they
+      // were granted by the user before the emergency, but the emergency
+      // is the higher-priority signal.
+      if (killSwitchActive) {
+        allowedOnce.clear();
+      }
     }
     return;
   }
