@@ -32,11 +32,17 @@ const CAPABILITY_LABELS: Record<string, string> = {
 /** Severity for determining toast persistence. */
 const CRITICAL_CAPABILITIES = new Set(['submit-form', 'execute-script']);
 
-interface ToastOptions {
+export interface ToastOptions {
   capability: string;
   url: string;
   reason: string;
+  /** "Allow once" — one-shot bypass for this exact (capability, url). */
+  onAllowOnce?: () => void;
+  /** "Whitelist this site" — permanent allow for the domain. */
   onWhitelist?: (domain: string) => void;
+  /** "Settings" — open the popup so the user can review what was blocked. */
+  onOpenSettings?: () => void;
+  /** Internal dismiss callback. */
   onDismiss?: () => void;
 }
 
@@ -47,6 +53,43 @@ function extractDomain(url: string): string | null {
   } catch {
     return null;
   }
+}
+
+/**
+ * Produce a safe-for-display version of a domain. The toast surfaces this
+ * value to the user when they click "Whitelist <domain>", so we must
+ * surface a warning marker when the underlying hostname could be confused
+ * with a different domain. Two specific cases:
+ *
+ *   - Punycode IDN labels (`xn--*`) — render as a different Unicode form
+ *     in modern browsers, classic homograph vector.
+ *   - Mixed-script labels (Latin + Cyrillic, etc.) — the typical Unicode
+ *     domain spoof where a Latin `a` is swapped for the Cyrillic
+ *     lookalike (`а`).
+ *
+ * The marker is a textual "(unverified)" suffix rather than an emoji so
+ * it lands consistently in screen readers and copy-paste contexts.
+ */
+export function safeDisplayDomain(domain: string): string {
+  if (!domain) return domain;
+  const lower = domain.toLowerCase();
+  const labels = lower.split('.');
+  const hasPunycode = labels.some((l) => l.startsWith('xn--'));
+  const hasMixedScript = labels.some((l) => {
+    let latin = false;
+    let nonLatin = false;
+    for (const ch of l) {
+      const code = ch.codePointAt(0) ?? 0;
+      if (code >= 0x61 && code <= 0x7a) latin = true;
+      else if (code >= 0x80) nonLatin = true;
+      if (latin && nonLatin) return true;
+    }
+    return false;
+  });
+  if (hasPunycode || hasMixedScript) {
+    return `${domain} (unverified)`;
+  }
+  return domain;
 }
 
 /** Ensure the toast container element exists in the page. */
@@ -84,7 +127,15 @@ function getInner(container: HTMLElement): HTMLElement {
  * Returns a cleanup function to remove the toast.
  */
 export function showBlockedToast(options: ToastOptions): () => void {
-  const { capability, url, reason, onWhitelist, onDismiss } = options;
+  const {
+    capability,
+    url,
+    reason,
+    onAllowOnce,
+    onWhitelist,
+    onOpenSettings,
+    onDismiss,
+  } = options;
   const container = ensureContainer();
   const inner = getInner(container);
 
@@ -101,25 +152,71 @@ export function showBlockedToast(options: ToastOptions): () => void {
   const label = CAPABILITY_LABELS[capability] ?? capability;
   const domain = extractDomain(url);
 
-  // Icon (shield)
+  // Header row: shield icon + BrowserGuard wordmark + close button.
+  // The wordmark stays visible for the lifetime of the toast so the user
+  // never has to guess which extension blocked the action.
+  const header = document.createElement('div');
+  header.className = 'abg-toast-header';
+
   const icon = document.createElement('span');
   icon.className = 'abg-toast-icon';
-  icon.textContent = '\u{1F6E1}'; // shield emoji as fallback — CSS replaces with SVG
+  icon.textContent = '\u{1F6E1}'; // shield emoji
   icon.setAttribute('aria-hidden', 'true');
 
-  // Message
-  const msg = document.createElement('span');
-  msg.className = 'abg-toast-msg';
-  msg.textContent = `AI Browser Guard blocked ${label} on this page.`;
+  const brand = document.createElement('span');
+  brand.className = 'abg-toast-brand';
+  brand.textContent = 'AI Browser Guard';
 
-  // Actions row
-  const actions = document.createElement('span');
+  const closeBtn = document.createElement('button');
+  closeBtn.className = 'abg-toast-close';
+  closeBtn.textContent = '×'; // multiplication sign as close glyph
+  closeBtn.setAttribute('aria-label', 'Dismiss');
+  closeBtn.addEventListener('click', () => {
+    removeToast();
+    onDismiss?.();
+  });
+
+  header.appendChild(icon);
+  header.appendChild(brand);
+  header.appendChild(closeBtn);
+
+  // Body: what was blocked + why.
+  const body = document.createElement('div');
+  body.className = 'abg-toast-body';
+
+  const what = document.createElement('div');
+  what.className = 'abg-toast-what';
+  what.textContent = `Blocked ${label}.`;
+  body.appendChild(what);
+
+  if (reason) {
+    const why = document.createElement('div');
+    why.className = 'abg-toast-why';
+    why.textContent = reason;
+    body.appendChild(why);
+  }
+
+  // Quick-action row: Allow once · Whitelist site · Settings.
+  // Every block path renders the same set of options so the user has the
+  // same recovery affordances regardless of which detector fired.
+  const actions = document.createElement('div');
   actions.className = 'abg-toast-actions';
+
+  if (onAllowOnce) {
+    const allowOnceBtn = document.createElement('button');
+    allowOnceBtn.className = 'abg-toast-btn abg-toast-btn-allow';
+    allowOnceBtn.textContent = 'Allow once';
+    allowOnceBtn.addEventListener('click', () => {
+      onAllowOnce();
+      removeToast();
+    });
+    actions.appendChild(allowOnceBtn);
+  }
 
   if (domain && onWhitelist) {
     const whitelistBtn = document.createElement('button');
-    whitelistBtn.className = 'abg-toast-btn abg-toast-btn-allow';
-    whitelistBtn.textContent = `Allow on ${domain}`;
+    whitelistBtn.className = 'abg-toast-btn abg-toast-btn-whitelist';
+    whitelistBtn.textContent = `Whitelist ${safeDisplayDomain(domain)}`;
     whitelistBtn.addEventListener('click', () => {
       onWhitelist(domain);
       removeToast();
@@ -127,18 +224,22 @@ export function showBlockedToast(options: ToastOptions): () => void {
     actions.appendChild(whitelistBtn);
   }
 
-  const dismissBtn = document.createElement('button');
-  dismissBtn.className = 'abg-toast-btn abg-toast-btn-dismiss';
-  dismissBtn.textContent = 'Dismiss';
-  dismissBtn.addEventListener('click', () => {
-    removeToast();
-    onDismiss?.();
-  });
-  actions.appendChild(dismissBtn);
+  if (onOpenSettings) {
+    const settingsBtn = document.createElement('button');
+    settingsBtn.className = 'abg-toast-btn abg-toast-btn-settings';
+    settingsBtn.textContent = 'Settings';
+    settingsBtn.addEventListener('click', () => {
+      onOpenSettings();
+      removeToast();
+    });
+    actions.appendChild(settingsBtn);
+  }
 
-  toast.appendChild(icon);
-  toast.appendChild(msg);
-  toast.appendChild(actions);
+  toast.appendChild(header);
+  toast.appendChild(body);
+  if (actions.children.length > 0) {
+    toast.appendChild(actions);
+  }
   inner.appendChild(toast);
 
   // Animate in
@@ -186,9 +287,9 @@ function getToastStyles(): string {
 
     .abg-toast {
       display: flex;
-      align-items: center;
-      gap: 8px;
-      padding: 10px 14px;
+      flex-direction: column;
+      gap: 6px;
+      padding: 10px 12px;
       background: #1a1a2e;
       border: 1px solid rgba(6, 182, 212, 0.3);
       border-radius: 8px;
@@ -200,7 +301,8 @@ function getToastStyles(): string {
       transform: translateX(120%);
       opacity: 0;
       transition: transform 0.3s ease, opacity 0.3s ease;
-      max-width: 420px;
+      width: 340px;
+      max-width: 90vw;
     }
 
     .abg-toast-visible {
@@ -213,31 +315,73 @@ function getToastStyles(): string {
       opacity: 0;
     }
 
+    .abg-toast-header {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+
     .abg-toast-icon {
       flex-shrink: 0;
-      width: 20px;
-      height: 20px;
+      width: 18px;
+      height: 18px;
       display: flex;
       align-items: center;
       justify-content: center;
-      font-size: 16px;
+      font-size: 14px;
     }
 
-    .abg-toast-msg {
+    .abg-toast-brand {
       flex: 1;
-      color: #e0e0e0;
+      font-weight: 600;
+      font-size: 12px;
+      letter-spacing: 0.02em;
+      color: #06b6d4;
+    }
+
+    .abg-toast-close {
+      background: transparent;
+      border: none;
+      color: #888;
+      font-size: 18px;
+      line-height: 1;
+      padding: 0 4px;
+      cursor: pointer;
+      transition: color 0.15s;
+    }
+    .abg-toast-close:hover {
+      color: #ccc;
+    }
+
+    .abg-toast-body {
+      display: flex;
+      flex-direction: column;
+      gap: 2px;
+    }
+
+    .abg-toast-what {
+      color: #f0f0f0;
+      font-size: 13px;
+      font-weight: 500;
+    }
+
+    .abg-toast-why {
+      color: #a0a0a0;
+      font-size: 11px;
+      line-height: 1.3;
     }
 
     .abg-toast-actions {
       display: flex;
       gap: 6px;
-      flex-shrink: 0;
+      flex-wrap: wrap;
+      margin-top: 4px;
     }
 
     .abg-toast-btn {
       border: none;
       border-radius: 4px;
-      padding: 4px 10px;
+      padding: 5px 10px;
       font-size: 11px;
       font-weight: 500;
       cursor: pointer;
@@ -254,14 +398,23 @@ function getToastStyles(): string {
       background: rgba(6, 182, 212, 0.35);
     }
 
-    .abg-toast-btn-dismiss {
-      background: rgba(255, 255, 255, 0.08);
-      color: #999;
-      border: 1px solid rgba(255, 255, 255, 0.1);
+    .abg-toast-btn-whitelist {
+      background: rgba(34, 197, 94, 0.18);
+      color: #4ade80;
+      border: 1px solid rgba(34, 197, 94, 0.3);
     }
-    .abg-toast-btn-dismiss:hover {
-      background: rgba(255, 255, 255, 0.15);
+    .abg-toast-btn-whitelist:hover {
+      background: rgba(34, 197, 94, 0.3);
+    }
+
+    .abg-toast-btn-settings {
+      background: rgba(255, 255, 255, 0.06);
       color: #ccc;
+      border: 1px solid rgba(255, 255, 255, 0.12);
+    }
+    .abg-toast-btn-settings:hover {
+      background: rgba(255, 255, 255, 0.12);
+      color: #fff;
     }
   `;
 }

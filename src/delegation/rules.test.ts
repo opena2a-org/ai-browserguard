@@ -141,6 +141,51 @@ describe('evaluateSitePatterns', () => {
     const result = evaluateSitePatterns('https://unknown.com', [], 'block');
     expect(result.allowed).toBe(false);
   });
+
+  // Regression: P0-4 — `?` is a regex zero-or-one metacharacter. Before the
+  // escape-class fix, a full-URL pattern containing a literal `?` widened the
+  // match: `https://example.com/?` became a regex that also matched
+  // `https://example.com/` (the slash made optional).
+  it('treats a literal `?` in a full-URL pattern literally', () => {
+    const patterns = [
+      { pattern: 'https://example.com/?', action: 'allow' as const },
+    ];
+    // Exact match should pass.
+    expect(
+      evaluateSitePatterns('https://example.com/?', patterns, 'block').allowed,
+    ).toBe(true);
+    // Without the trailing `?`, the prior buggy behavior would have allowed.
+    // The fix asserts this URL is NOT matched by the pattern.
+    expect(
+      evaluateSitePatterns('https://example.com/', patterns, 'block').allowed,
+    ).toBe(false);
+  });
+
+  // ---------------------------------------------------------------------
+  // ReDoS regression: a pattern with many consecutive wildcards like
+  // `*****...` previously compiled to `.*.*.*.*` against which a long URL
+  // triggers catastrophic backtracking. The collapse-runs fix caps the
+  // compiled regex at `.*.*` regardless of how many `*` the pattern has.
+  // ---------------------------------------------------------------------
+  describe('catastrophic backtracking guard', () => {
+    it('completes within 100ms on a 1000-star pattern against a long URL', () => {
+      const patterns = [{ pattern: 'https://' + '*'.repeat(1000), action: 'allow' as const }];
+      const longUrl = 'https://example.com/' + 'a/b/'.repeat(500);
+      const t0 = Date.now();
+      evaluateSitePatterns(longUrl, patterns, 'allow');
+      const elapsed = Date.now() - t0;
+      expect(elapsed).toBeLessThan(100);
+    });
+
+    it('treats `***` the same as `**` (semantics-preserving collapse)', () => {
+      const twoStar = [{ pattern: 'https://**', action: 'allow' as const }];
+      const threeStar = [{ pattern: 'https://***', action: 'allow' as const }];
+      const url = 'https://example.com/path';
+      expect(evaluateSitePatterns(url, twoStar, 'block').allowed).toBe(
+        evaluateSitePatterns(url, threeStar, 'block').allowed,
+      );
+    });
+  });
 });
 
 describe('evaluateActionRestrictions', () => {

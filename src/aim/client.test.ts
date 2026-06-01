@@ -11,7 +11,7 @@ beforeEach(() => {
 });
 
 describe('lookupAgentIdentity', () => {
-  it('returns AIM result on successful lookup', async () => {
+  it('returns status=ok with trust score on successful lookup', async () => {
     mockFetch.mockResolvedValueOnce({
       ok: true,
       status: 200,
@@ -26,44 +26,52 @@ describe('lookupAgentIdentity', () => {
       baseUrl: 'https://aim.test',
     });
 
-    expect(result).not.toBeNull();
-    expect(result!.trustScore).toBe(0.85);
-    expect(result!.label).toBe('Verified Playwright');
-    expect(result!.registered).toBe(true);
+    expect(result.status).toBe('ok');
+    if (result.status === 'ok') {
+      expect(result.trustScore).toBe(0.85);
+      expect(result.label).toBe('Verified Playwright');
+      expect(result.registered).toBe(true);
+    }
     expect(mockFetch).toHaveBeenCalledOnce();
     expect(mockFetch.mock.calls[0][0]).toContain('aim.test');
-    // Verify correct API path
     expect(mockFetch.mock.calls[0][0]).toContain('/api/v1/sdk-api/agents/playwright');
   });
 
-  it('returns unregistered result on 404', async () => {
+  it('returns status=unregistered on 404', async () => {
     mockFetch.mockResolvedValueOnce({
       ok: false,
       status: 404,
     });
 
     const result = await lookupAgentIdentity('unknown-agent', 'https://example.com');
-    expect(result).not.toBeNull();
-    expect(result!.trustScore).toBe(0);
-    expect(result!.label).toBe('unknown-agent');
-    expect(result!.registered).toBe(false);
+    expect(result.status).toBe('unregistered');
+    if (result.status === 'unregistered') {
+      expect(result.label).toBe('unknown-agent');
+      expect(result.registered).toBe(false);
+    }
   });
 
-  it('returns null on non-200/non-404 response', async () => {
+  it('returns status=unreachable on non-200/non-404 response', async () => {
     mockFetch.mockResolvedValueOnce({
       ok: false,
       status: 500,
     });
 
     const result = await lookupAgentIdentity('playwright', 'https://example.com');
-    expect(result).toBeNull();
+    expect(result.status).toBe('unreachable');
   });
 
-  it('returns null on network error', async () => {
+  it('returns status=unreachable on network error', async () => {
     mockFetch.mockRejectedValueOnce(new Error('Network error'));
 
     const result = await lookupAgentIdentity('playwright', 'https://example.com');
-    expect(result).toBeNull();
+    expect(result.status).toBe('unreachable');
+  });
+
+  it('returns status=unreachable on AbortSignal timeout', async () => {
+    mockFetch.mockRejectedValueOnce(Object.assign(new Error('aborted'), { name: 'AbortError' }));
+    const result = await lookupAgentIdentity('playwright', 'https://example.com');
+    expect(result.status).toBe('unreachable');
   });
 
   it('caches results for the same agent+origin', async () => {
@@ -114,10 +122,12 @@ describe('lookupAgentIdentity', () => {
     });
 
     const result = await lookupAgentIdentity('selenium', 'https://example.com');
-    expect(result).not.toBeNull();
-    expect(result!.trustScore).toBe(0);
-    expect(result!.label).toBe('selenium');
-    expect(result!.registered).toBe(true); // 200 means registered
+    expect(result.status).toBe('ok');
+    if (result.status === 'ok') {
+      expect(result.trustScore).toBe(0);
+      expect(result.label).toBe('selenium');
+      expect(result.registered).toBe(true); // 200 means registered
+    }
   });
 
   it('falls back to name when displayName is missing', async () => {
@@ -131,8 +141,10 @@ describe('lookupAgentIdentity', () => {
     });
 
     const result = await lookupAgentIdentity('my-agent', 'https://example.com');
-    expect(result).not.toBeNull();
-    expect(result!.label).toBe('my-agent');
+    expect(result.status).toBe('ok');
+    if (result.status === 'ok') {
+      expect(result.label).toBe('my-agent');
+    }
   });
 
   it('clears cache when clearAIMCache is called', async () => {
@@ -181,7 +193,174 @@ describe('lookupAgentIdentity', () => {
     const result2 = await lookupAgentIdentity('missing', 'https://example.com');
 
     expect(result1).toEqual(result2);
-    expect(result1!.registered).toBe(false);
+    expect(result1.status).toBe('unregistered');
     expect(mockFetch).toHaveBeenCalledOnce();
+  });
+
+  it('caches unreachable results briefly so a brief outage does not stampede', async () => {
+    mockFetch.mockResolvedValueOnce({ ok: false, status: 500 });
+    const first = await lookupAgentIdentity('outage', 'https://example.com');
+    expect(first.status).toBe('unreachable');
+
+    // Immediately re-call. Without negative caching the next 500 would re-fetch.
+    const second = await lookupAgentIdentity('outage', 'https://example.com');
+    expect(second.status).toBe('unreachable');
+    expect(mockFetch).toHaveBeenCalledOnce();
+  });
+
+  it('retries an unreachable lookup after the short TTL has been cleared', async () => {
+    mockFetch.mockResolvedValueOnce({ ok: false, status: 500 });
+    const first = await lookupAgentIdentity('recover', 'https://example.com');
+    expect(first.status).toBe('unreachable');
+
+    // Simulate TTL expiry by clearing the cache (the production TTL is 30s).
+    clearAIMCache();
+
+    mockFetch.mockResolvedValueOnce({
+      ok: true,
+      status: 200,
+      json: () => Promise.resolve({ trustScore: 0.4, displayName: 'Recovered', name: 'recover' }),
+    });
+    const second = await lookupAgentIdentity('recover', 'https://example.com');
+    expect(second.status).toBe('ok');
+    expect(mockFetch).toHaveBeenCalledTimes(2);
+  });
+
+  it('does NOT cache misconfigured base URL outcomes (settings may change)', async () => {
+    const first = await lookupAgentIdentity('cfg', 'https://example.com', { baseUrl: 'http://bad.example' });
+    expect(first.status).toBe('unreachable');
+    // With cached unreachable this would be a same-key hit; the misconfigured
+    // path must skip the cache so that fixing the base URL in settings has
+    // immediate effect on the next call.
+    mockFetch.mockResolvedValueOnce({
+      ok: true,
+      status: 200,
+      json: () => Promise.resolve({ trustScore: 0.5, displayName: 'Fixed', name: 'cfg' }),
+    });
+    const second = await lookupAgentIdentity('cfg', 'https://example.com', { baseUrl: 'https://aim.test' });
+    expect(second.status).toBe('ok');
+    expect(mockFetch).toHaveBeenCalledOnce();
+  });
+
+  // ---------------------------------------------------------------------
+  // Regression: P0-3a — AIM client must reject non-HTTPS base URLs in
+  // production. A plaintext or attacker-controlled endpoint returning
+  // trustScore: 1.0 would bypass detection escalation.
+  // ---------------------------------------------------------------------
+  describe('base URL validation', () => {
+    it('returns status=unreachable for http://hostile.example.com without making a fetch', async () => {
+      const result = await lookupAgentIdentity('playwright', 'https://example.com', {
+        baseUrl: 'http://hostile.example.com',
+      });
+      expect(result.status).toBe('unreachable');
+      expect(mockFetch).not.toHaveBeenCalled();
+    });
+
+    it('returns status=unreachable for ftp:// and javascript: schemes', async () => {
+      const ftp = await lookupAgentIdentity('playwright', 'https://example.com', {
+        baseUrl: 'ftp://aim.opena2a.org',
+      });
+      expect(ftp.status).toBe('unreachable');
+      const jsScheme = await lookupAgentIdentity('playwright', 'https://example.com', {
+        baseUrl: 'javascript:alert(1)',
+      });
+      expect(jsScheme.status).toBe('unreachable');
+      expect(mockFetch).not.toHaveBeenCalled();
+    });
+
+    it('permits http://localhost in the test environment (NODE_ENV=test)', async () => {
+      mockFetch.mockResolvedValueOnce({
+        ok: true,
+        status: 200,
+        json: () => Promise.resolve({ trustScore: 0.5, displayName: 'Local', name: 'p' }),
+      });
+      const result = await lookupAgentIdentity('p', 'https://example.com', {
+        baseUrl: 'http://localhost:8080',
+      });
+      expect(result.status).toBe('ok');
+      expect(mockFetch).toHaveBeenCalledOnce();
+    });
+
+    // Defense-in-depth lock-in: the localhost exception MUST require
+    // NODE_ENV === 'test'. Production builds have no `process.env` (the
+    // service worker runs in V8, not Node), but a future test environment
+    // change that sets `process.env = {}` without NODE_ENV must not
+    // re-open the localhost-HTTP gate.
+    it('rejects http://localhost when NODE_ENV is not "test"', async () => {
+      const original = process.env.NODE_ENV;
+      try {
+        process.env.NODE_ENV = 'production';
+        const result = await lookupAgentIdentity('p', 'https://example.com', {
+          baseUrl: 'http://localhost:8080',
+        });
+        expect(result.status).toBe('unreachable');
+        expect(mockFetch).not.toHaveBeenCalled();
+      } finally {
+        process.env.NODE_ENV = original;
+      }
+    });
+
+    it('rejects http://127.0.0.1 when NODE_ENV is unset', async () => {
+      const original = process.env.NODE_ENV;
+      try {
+        delete process.env.NODE_ENV;
+        const result = await lookupAgentIdentity('p', 'https://example.com', {
+          baseUrl: 'http://127.0.0.1:1337',
+        });
+        expect(result.status).toBe('unreachable');
+        expect(mockFetch).not.toHaveBeenCalled();
+      } finally {
+        if (original !== undefined) process.env.NODE_ENV = original;
+      }
+    });
+
+    // ---------------------------------------------------------------------
+    // Regression: localhost prefix bypass. `new URL()` resolves these to
+    // attacker.com / *.attacker.com, but a naive startsWith() check would
+    // pass them through. Both must be rejected even with NODE_ENV=test.
+    // ---------------------------------------------------------------------
+    it('rejects http://localhost@attacker.com (userinfo bypass)', async () => {
+      const result = await lookupAgentIdentity('p', 'https://example.com', {
+        baseUrl: 'http://localhost@attacker.com',
+      });
+      expect(result.status).toBe('unreachable');
+      expect(mockFetch).not.toHaveBeenCalled();
+    });
+
+    it('rejects http://127.0.0.1.attacker.com (subdomain bypass)', async () => {
+      const result = await lookupAgentIdentity('p', 'https://example.com', {
+        baseUrl: 'http://127.0.0.1.attacker.com',
+      });
+      expect(result.status).toBe('unreachable');
+      expect(mockFetch).not.toHaveBeenCalled();
+    });
+
+    it('rejects http://localhost.evil.com (subdomain bypass)', async () => {
+      const result = await lookupAgentIdentity('p', 'https://example.com', {
+        baseUrl: 'http://localhost.evil.com',
+      });
+      expect(result.status).toBe('unreachable');
+      expect(mockFetch).not.toHaveBeenCalled();
+    });
+
+    it('rejects an unparseable URL', async () => {
+      const result = await lookupAgentIdentity('p', 'https://example.com', {
+        baseUrl: 'not a url at all',
+      });
+      expect(result.status).toBe('unreachable');
+      expect(mockFetch).not.toHaveBeenCalled();
+    });
+
+    it('uses https://aim.opena2a.org when no baseUrl option is provided', async () => {
+      mockFetch.mockResolvedValueOnce({
+        ok: true,
+        status: 200,
+        json: () => Promise.resolve({ trustScore: 0.5, displayName: 'A', name: 'a' }),
+      });
+      await lookupAgentIdentity('a', 'https://example.com');
+      expect(mockFetch).toHaveBeenCalledOnce();
+      const calledUrl = String(mockFetch.mock.calls[0][0]);
+      expect(calledUrl.startsWith('https://aim.opena2a.org/')).toBe(true);
+    });
   });
 });

@@ -1115,3 +1115,59 @@ kbd {
   color: var(--text-secondary);
   margin-top: var(--spacing-xs);
 }
+
+/* ============================================================
+   Recently-blocked call-out (P0-UX-1 Layer 3)
+   ============================================================ */
+
+#recent-block-callout {
+  border-left: 3px solid #dc2626;
+}
+
+.recent-block-row {
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-sm);
+  padding: var(--spacing-xs) 0;
+  border-top: 1px solid var(--border-default);
+}
+
+.recent-block-row:first-child {
+  border-top: none;
+}
+
+.recent-block-meta {
+  flex: 1;
+  min-width: 0;
+}
+
+.recent-block-action {
+  font-size: var(--font-size-sm);
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.recent-block-url {
+  font-size: var(--font-size-xs);
+  color: var(--text-secondary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.recent-block-ts {
+  font-size: 10px;
+  color: var(--text-muted);
+  margin-top: 1px;
+}
+
+.recent-block-actions {
+  display: flex;
+  gap: var(--spacing-xs);
+  flex-shrink: 0;
+}
+
+.recent-block-btn {
+  padding: 4px 10px;
+  font-size: var(--font-size-xs);
+}

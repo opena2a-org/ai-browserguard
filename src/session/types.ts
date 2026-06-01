@@ -72,6 +72,9 @@ export interface SessionSummary {
  * This is the top-level shape of all persisted data.
  */
 export interface StorageSchema {
+  /** Schema version. Bump when incompatible shape changes ship; runtime migration runs on read. */
+  storageSchemaVersion: number;
+
   /** Last 5 agent sessions, newest first. */
   sessions: AgentSession[];
 
@@ -84,6 +87,9 @@ export interface StorageSchema {
   /** Recent detection events for debugging (last 100). */
   detectionLog: import('../types/events').DetectionEvent[];
 }
+
+/** Current storage schema version. Bump when a shape change requires migration. */
+export const CURRENT_STORAGE_SCHEMA_VERSION = 1;
 
 /**
  * User-configurable settings.
@@ -116,7 +122,7 @@ export interface UserSettings {
   /** Whether to check agents against the OpenA2A registry. Default: false. */
   registryLookupEnabled: boolean;
 
-  /** Base URL for the OpenA2A registry API. Default: https://registry.opena2a.org */
+  /** Base URL for the OpenA2A registry API. Default: https://api.oa2a.org */
   registryBaseUrl: string;
 
   /** Whether to auto-block agents with trust score below 0.3. Default: false. */
@@ -162,6 +168,6 @@ export const DEFAULT_SETTINGS: UserSettings = {
   aimLookupEnabled: false,
   aimBaseUrl: 'https://aim.opena2a.org',
   registryLookupEnabled: false,
-  registryBaseUrl: 'https://registry.opena2a.org',
+  registryBaseUrl: 'https://api.oa2a.org',
   autoBlockUntrustedAgents: false,
 };

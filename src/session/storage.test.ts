@@ -11,7 +11,7 @@ import {
   updateSettings,
   clearAllStorage,
 } from './storage';
-import { DEFAULT_SETTINGS } from './types';
+import { DEFAULT_SETTINGS, CURRENT_STORAGE_SCHEMA_VERSION } from './types';
 import type { AgentSession } from './types';
 import type { AgentIdentity } from '../types/agent';
 import type { DetectionEvent } from '../types/events';
@@ -169,5 +169,200 @@ describe('clearAllStorage', () => {
     await clearAllStorage();
     const state = await getStorageState();
     expect(state.sessions).toEqual([]);
+  });
+});
+
+describe('storage schema version + corruption recovery', () => {
+  it('tags an empty load with the current schema version', async () => {
+    const state = await getStorageState();
+    expect(state.storageSchemaVersion).toBe(CURRENT_STORAGE_SCHEMA_VERSION);
+  });
+
+  it('resets a non-array sessions value to default and logs the corruption', async () => {
+    await chrome.storage.local.set({
+      storageSchemaVersion: CURRENT_STORAGE_SCHEMA_VERSION,
+      sessions: 'not-an-array',
+    });
+    const state = await getStorageState();
+    expect(state.sessions).toEqual([]);
+    const corruption = await chrome.storage.local.get('__corrupted_state');
+    const log = corruption.__corrupted_state as Array<{ key: string; reason: string }>;
+    expect(log).toBeInstanceOf(Array);
+    expect(log.some((e) => e.key === 'sessions' && e.reason.includes('expected array'))).toBe(true);
+  });
+
+  it('resets a non-array delegationRules value to default and logs the corruption', async () => {
+    await chrome.storage.local.set({
+      storageSchemaVersion: CURRENT_STORAGE_SCHEMA_VERSION,
+      delegationRules: { not: 'an-array' },
+    });
+    const state = await getStorageState();
+    expect(state.delegationRules).toEqual([]);
+    const corruption = await chrome.storage.local.get('__corrupted_state');
+    const log = corruption.__corrupted_state as Array<{ key: string; reason: string }>;
+    expect(log.some((e) => e.key === 'delegationRules')).toBe(true);
+  });
+
+  it('resets a non-object settings value to defaults and logs the corruption', async () => {
+    await chrome.storage.local.set({
+      storageSchemaVersion: CURRENT_STORAGE_SCHEMA_VERSION,
+      settings: 'corrupt-string',
+    });
+    const state = await getStorageState();
+    expect(state.settings).toEqual(DEFAULT_SETTINGS);
+    const corruption = await chrome.storage.local.get('__corrupted_state');
+    const log = corruption.__corrupted_state as Array<{ key: string; reason: string }>;
+    expect(log.some((e) => e.key === 'settings' && e.reason.includes('expected object'))).toBe(true);
+  });
+
+  it('runs migration scaffold and logs when version is missing on existing data', async () => {
+    // Pre-versioning data: sessions exist, no storageSchemaVersion.
+    await chrome.storage.local.set({ sessions: [] });
+    const state = await getStorageState();
+    expect(state.storageSchemaVersion).toBe(CURRENT_STORAGE_SCHEMA_VERSION);
+    const corruption = await chrome.storage.local.get('__corrupted_state');
+    const log = corruption.__corrupted_state as Array<{ key: string; reason: string }>;
+    expect(log.some((e) => e.key === 'storageSchemaVersion' && e.reason.includes('migration scaffold'))).toBe(true);
+  });
+
+  it('records a downgrade marker when stored version is newer than runtime', async () => {
+    await chrome.storage.local.set({
+      storageSchemaVersion: CURRENT_STORAGE_SCHEMA_VERSION + 5,
+      sessions: [],
+    });
+    await getStorageState();
+    const corruption = await chrome.storage.local.get('__corrupted_state');
+    const log = corruption.__corrupted_state as Array<{ key: string; reason: string }>;
+    expect(log.some((e) => e.key === 'storageSchemaVersion' && e.reason.includes('newer'))).toBe(true);
+  });
+
+  it('does not log corruption for a clean current-version load', async () => {
+    await chrome.storage.local.set({
+      storageSchemaVersion: CURRENT_STORAGE_SCHEMA_VERSION,
+      sessions: [],
+      delegationRules: [],
+      settings: DEFAULT_SETTINGS,
+      detectionLog: [],
+    });
+    await getStorageState();
+    const corruption = await chrome.storage.local.get('__corrupted_state');
+    expect(corruption.__corrupted_state).toBeUndefined();
+  });
+
+  it('persists the cleaned shape after corruption is detected', async () => {
+    await chrome.storage.local.set({
+      storageSchemaVersion: CURRENT_STORAGE_SCHEMA_VERSION,
+      sessions: 'bad',
+    });
+    await getStorageState();
+    const after = await chrome.storage.local.get('sessions');
+    expect(after.sessions).toEqual([]);
+  });
+
+  it('only writes back the corrupted keys, leaving healthy keys untouched', async () => {
+    // Seed: sessions is corrupt, delegationRules is healthy, settings is healthy.
+    const goodRules = [
+      { id: 'rule-keep', preset: 'readOnly' as const, scope: { sitePatterns: [], actionRestrictions: [], timeBound: null }, createdAt: '', isActive: true },
+    ];
+    const goodSettings = { ...DEFAULT_SETTINGS, detectionEnabled: false };
+    await chrome.storage.local.set({
+      storageSchemaVersion: CURRENT_STORAGE_SCHEMA_VERSION,
+      sessions: 'corrupt',
+      delegationRules: goodRules,
+      settings: goodSettings,
+    });
+
+    // Clear the seed call from the history so we only inspect what
+    // getStorageState writes itself.
+    (chrome.storage.local.set as unknown as { mockClear: () => void }).mockClear();
+
+    await getStorageState();
+
+    // Use the .mock.calls history to inspect every set() call argument.
+    // The corruption-recovery write-back is the call that does NOT contain
+    // the corruption log key — distinguish it from the bounded log write.
+    const allCalls = (chrome.storage.local.set as unknown as { mock: { calls: unknown[][] } }).mock.calls;
+    const writes = allCalls.map((c) => c[0] as Record<string, unknown>);
+    const recoveryWrites = writes.filter((c) => !('__corrupted_state' in c));
+    // Should be at most one recovery write, and it MUST only include the
+    // corrupted key ('sessions'), not 'delegationRules' or 'settings'.
+    expect(recoveryWrites.length).toBeLessThanOrEqual(1);
+    if (recoveryWrites.length === 1) {
+      const keys = Object.keys(recoveryWrites[0]);
+      expect(keys).toContain('sessions');
+      expect(keys).not.toContain('delegationRules');
+      expect(keys).not.toContain('settings');
+    }
+
+    // And the healthy values are still in storage afterwards.
+    const after = await chrome.storage.local.get(['delegationRules', 'settings']);
+    expect(after.delegationRules).toEqual(goodRules);
+    expect((after.settings as { detectionEnabled: boolean }).detectionEnabled).toBe(false);
+  });
+
+  it('does NOT write a lower storageSchemaVersion back on downgrade', async () => {
+    const futureVersion = CURRENT_STORAGE_SCHEMA_VERSION + 5;
+    await chrome.storage.local.set({
+      storageSchemaVersion: futureVersion,
+      sessions: [],
+    });
+    await getStorageState();
+    const after = await chrome.storage.local.get('storageSchemaVersion');
+    expect(after.storageSchemaVersion).toBe(futureVersion);
+  });
+
+  it('rejects http:// aimBaseUrl in settings and resets to default', async () => {
+    await chrome.storage.local.set({
+      storageSchemaVersion: CURRENT_STORAGE_SCHEMA_VERSION,
+      settings: { ...DEFAULT_SETTINGS, aimBaseUrl: 'http://attacker.example' },
+    });
+    const state = await getStorageState();
+    expect(state.settings.aimBaseUrl).toBe(DEFAULT_SETTINGS.aimBaseUrl);
+    const corruption = await chrome.storage.local.get('__corrupted_state');
+    const log = corruption.__corrupted_state as Array<{ key: string; reason: string }>;
+    expect(log.some((e) => e.reason.includes('aimBaseUrl'))).toBe(true);
+  });
+
+  it('rejects javascript: scheme in registryBaseUrl and resets to default', async () => {
+    await chrome.storage.local.set({
+      storageSchemaVersion: CURRENT_STORAGE_SCHEMA_VERSION,
+      settings: { ...DEFAULT_SETTINGS, registryBaseUrl: 'javascript:alert(1)' },
+    });
+    const state = await getStorageState();
+    expect(state.settings.registryBaseUrl).toBe(DEFAULT_SETTINGS.registryBaseUrl);
+  });
+
+  it('rejects array-typed aimBaseUrl (not a string) and resets to default', async () => {
+    await chrome.storage.local.set({
+      storageSchemaVersion: CURRENT_STORAGE_SCHEMA_VERSION,
+      settings: { ...DEFAULT_SETTINGS, aimBaseUrl: ['http://attacker'] },
+    });
+    const state = await getStorageState();
+    expect(state.settings.aimBaseUrl).toBe(DEFAULT_SETTINGS.aimBaseUrl);
+  });
+
+  it('rejects non-boolean detectionEnabled and resets to default', async () => {
+    await chrome.storage.local.set({
+      storageSchemaVersion: CURRENT_STORAGE_SCHEMA_VERSION,
+      settings: { ...DEFAULT_SETTINGS, detectionEnabled: 'yes' },
+    });
+    const state = await getStorageState();
+    expect(state.settings.detectionEnabled).toBe(DEFAULT_SETTINGS.detectionEnabled);
+  });
+
+  it('accepts a fully valid settings object without rewriting', async () => {
+    const sane = { ...DEFAULT_SETTINGS, detectionEnabled: false, aimBaseUrl: 'https://aim.example.com' };
+    await chrome.storage.local.set({
+      storageSchemaVersion: CURRENT_STORAGE_SCHEMA_VERSION,
+      settings: sane,
+    });
+    (chrome.storage.local.set as unknown as { mockClear: () => void }).mockClear();
+    const state = await getStorageState();
+    expect(state.settings.detectionEnabled).toBe(false);
+    expect(state.settings.aimBaseUrl).toBe('https://aim.example.com');
+    const allCalls = (chrome.storage.local.set as unknown as { mock: { calls: unknown[][] } }).mock.calls;
+    const writes = allCalls.map((c) => c[0] as Record<string, unknown>);
+    const recovery = writes.filter((c) => !('__corrupted_state' in c));
+    expect(recovery).toEqual([]);
   });
 });

@@ -37,15 +37,31 @@ function isContextValid(): boolean {
   }
 }
 
-/** Show an inline toast for a blocked action and handle the whitelist callback. */
+/**
+ * Show an inline toast for a blocked action. Routes the three quick-action
+ * callbacks back to the right surface: ALLOW_ONCE goes to the MAIN world
+ * interceptor (which already understands the message), DOMAIN_WHITELIST and
+ * OPEN_POPUP go to the background.
+ */
 function showBlockedActionToast(capability: string, url: string, reason: string): void {
   showBlockedToast({
     capability,
     url,
     reason,
+    onAllowOnce: () => {
+      // Relay the one-shot allow directly to the MAIN world interceptor.
+      // Same payload shape as the chrome.notifications "Allow once" button
+      // already wired through background/handlers.ts handleAllowOnce.
+      window.postMessage(
+        { type: MSG_ALLOW_ONCE, nonce: GUARD_NONCE, capability, url },
+        '*',
+      );
+    },
     onWhitelist: (domain: string) => {
-      // Send whitelist request to background to add *.domain.com allow pattern
       sendToBackground('DOMAIN_WHITELIST', { domain }).catch(() => { /* ignore */ });
+    },
+    onOpenSettings: () => {
+      sendToBackground('OPEN_POPUP', {}).catch(() => { /* ignore */ });
     },
   });
 }

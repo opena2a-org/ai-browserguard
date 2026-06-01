@@ -10,22 +10,58 @@
  * record including trustScore and displayName.
  */
 
-export interface AIMResult {
-  /** Trust score between 0.0 and 1.0. */
-  trustScore: number;
-  /** Human-readable display name for the agent. */
-  label: string;
-  /** Whether the agent is registered in AIM. */
-  registered: boolean;
-}
+/**
+ * Discriminated result of an AIM identity lookup.
+ *
+ * - `ok`: AIM returned a registered agent record.
+ * - `unregistered`: AIM is reachable but reports the agent is not registered (404).
+ *   Informational only — does NOT contribute to trust score averaging.
+ * - `unreachable`: any transport-level failure (network error, timeout, non-HTTPS
+ *   base URL, non-2xx/non-404 status). Callers should treat this the same as
+ *   "no signal" — not as low trust.
+ */
+export type AIMLookupResult =
+  | { status: 'ok'; trustScore: number; label: string; registered: true }
+  | { status: 'unregistered'; label: string; registered: false }
+  | { status: 'unreachable' };
 
 interface CacheEntry {
-  result: AIMResult;
+  result: AIMLookupResult;
   expiresAt: number;
 }
 
-const DEFAULT_AIM_BASE_URL = 'http://localhost:8080';
+const DEFAULT_AIM_BASE_URL = 'https://aim.opena2a.org';
 const DEFAULT_CACHE_TTL_MS = 5 * 60 * 1000; // 5 minutes
+// Short negative-cache for transport failures. Without this, every detected
+// agent navigation re-issues a fetch when AIM is down, turning a brief
+// partial outage into a layer-7 stampede. 30s is short enough to recover
+// quickly when AIM comes back, long enough to absorb a burst.
+const UNREACHABLE_CACHE_TTL_MS = 30 * 1000;
+
+// Non-HTTPS AIM endpoints are rejected outside of tests. A trustScore of 1.0
+// returned from an attacker-controlled localhost endpoint would otherwise
+// bypass detection escalation.
+//
+// Parse the URL with `new URL()` rather than string-matching the prefix.
+// `http://localhost@attacker.com` and `http://127.0.0.1.attacker.com`
+// both pass a naive `startsWith` check but resolve to `attacker.com`.
+function isAllowedBaseUrl(url: string): boolean {
+  let parsed: URL;
+  try {
+    parsed = new URL(url);
+  } catch {
+    return false;
+  }
+  if (parsed.protocol === 'https:') return true;
+  if (parsed.protocol !== 'http:') return false;
+  // http:// only allowed for the exact localhost loopback hostname in
+  // test mode. Anything that resolves elsewhere is rejected.
+  const host = parsed.hostname.toLowerCase();
+  if (host !== 'localhost' && host !== '127.0.0.1' && host !== '[::1]') {
+    return false;
+  }
+  return typeof process !== 'undefined' && process.env?.NODE_ENV === 'test';
+}
 
 const cache = new Map<string, CacheEntry>();
 
@@ -43,19 +79,37 @@ function cacheKey(agentType: string, origin: string): string {
  * is the agent type (name). The AIM server returns a full Agent
  * object with trustScore (float64) and displayName (string).
  *
- * Returns null on any failure (network error, timeout, non-200
- * response) so callers can fall back gracefully. A 404 means the
- * agent is not registered; the result reflects that.
+ * Returns a discriminated result so callers can distinguish
+ * `unreachable` (no signal) from `unregistered` (informational only)
+ * from `ok` (a real trust score). `ok` and `unregistered` use the full
+ * cacheTtlMs; `unreachable` uses a much shorter negative-cache window
+ * (UNREACHABLE_CACHE_TTL_MS) so a transient outage backs off the
+ * network but recovers quickly when AIM returns.
  */
 export async function lookupAgentIdentity(
   agentType: string,
   origin: string,
   options?: { baseUrl?: string; cacheTtlMs?: number }
-): Promise<AIMResult | null> {
+): Promise<AIMLookupResult> {
   const baseUrl = options?.baseUrl ?? DEFAULT_AIM_BASE_URL;
   const ttl = options?.cacheTtlMs ?? DEFAULT_CACHE_TTL_MS;
 
   const key = cacheKey(agentType, origin);
+
+  // Cache unreachable (short TTL) the same as other outcomes so a brief
+  // outage doesn't fire a fetch per page navigation.
+  function rememberUnreachable(): AIMLookupResult {
+    const result: AIMLookupResult = { status: 'unreachable' };
+    cache.set(key, { result, expiresAt: Date.now() + UNREACHABLE_CACHE_TTL_MS });
+    return result;
+  }
+
+  if (!isAllowedBaseUrl(baseUrl)) {
+    // Misconfigured base URL is a permanent-until-settings-change condition.
+    // Treat it as unreachable but don't cache — settings can change between
+    // calls and we want the next read to re-evaluate.
+    return { status: 'unreachable' };
+  }
 
   // Check cache
   const cached = cache.get(key);
@@ -72,9 +126,8 @@ export async function lookupAgentIdentity(
     });
 
     if (response.status === 404) {
-      // Agent not registered in AIM
-      const result: AIMResult = {
-        trustScore: 0,
+      const result: AIMLookupResult = {
+        status: 'unregistered',
         label: agentType,
         registered: false,
       };
@@ -83,7 +136,7 @@ export async function lookupAgentIdentity(
     }
 
     if (!response.ok) {
-      return null;
+      return rememberUnreachable();
     }
 
     // AIM Agent response shape: { trustScore: number, displayName: string, name: string, ... }
@@ -93,7 +146,8 @@ export async function lookupAgentIdentity(
       name?: string;
     };
 
-    const result: AIMResult = {
+    const result: AIMLookupResult = {
+      status: 'ok',
       trustScore: typeof data.trustScore === 'number' ? data.trustScore : 0,
       label: typeof data.displayName === 'string' ? data.displayName
         : typeof data.name === 'string' ? data.name
@@ -101,7 +155,6 @@ export async function lookupAgentIdentity(
       registered: true,
     };
 
-    // Store in cache
     cache.set(key, {
       result,
       expiresAt: Date.now() + ttl,
@@ -110,7 +163,7 @@ export async function lookupAgentIdentity(
     return result;
   } catch {
     // Network error, timeout, or parse failure
-    return null;
+    return rememberUnreachable();
   }
 }
 

@@ -68,6 +68,7 @@ const chromeMock = {
     },
   },
   runtime: {
+    id: 'test-id',
     onMessage: createEventMock(),
     sendMessage: vi.fn((_message: unknown, callback?: (response: unknown) => void) => {
       if (callback) callback(undefined);
@@ -79,6 +80,7 @@ const chromeMock = {
   tabs: {
     query: vi.fn(() => Promise.resolve([])),
     sendMessage: vi.fn(() => Promise.resolve(undefined)),
+    create: vi.fn(() => Promise.resolve({ id: 1 })),
     onRemoved: createEventMock(),
   },
   notifications: {
