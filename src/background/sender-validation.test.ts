@@ -15,6 +15,7 @@ function contentSender(overrides: Partial<chrome.runtime.MessageSender> = {}): c
   return {
     id: 'test-id',
     tab: { id: 42 } as chrome.tabs.Tab,
+    frameId: 0,
     ...overrides,
   };
 }
@@ -90,6 +91,38 @@ describe('isValidSender', () => {
         expect(isValidSender(type, popupSender({ id: 'hostile-extension-id' }))).toBe(false);
       });
     }
+  });
+
+  describe('main-frame-only message types', () => {
+    // Defense-in-depth: OPEN_POPUP is the only main-frame-only type today.
+    // The toast that emits it only renders in the main frame; a sub-iframe
+    // sending OPEN_POPUP is a UX abuse vector (popup spam), not a privilege
+    // escalation, but the gate is still cheap.
+
+    it('OPEN_POPUP accepts a main-frame content sender (frameId === 0)', () => {
+      expect(isValidSender('OPEN_POPUP', contentSender({ frameId: 0 }))).toBe(true);
+    });
+
+    it('OPEN_POPUP rejects a sub-iframe sender (frameId > 0)', () => {
+      expect(isValidSender('OPEN_POPUP', contentSender({ frameId: 1 }))).toBe(false);
+      expect(isValidSender('OPEN_POPUP', contentSender({ frameId: 42 }))).toBe(false);
+    });
+
+    it('OPEN_POPUP rejects a sender with missing frameId (defensive default)', () => {
+      // Real Chrome always populates frameId on content-script messages,
+      // but if it's ever missing we default-reject rather than default-allow.
+      const sender = contentSender();
+      delete (sender as { frameId?: number }).frameId;
+      expect(isValidSender('OPEN_POPUP', sender)).toBe(false);
+    });
+
+    it('non-OPEN_POPUP content-only types accept any frameId', () => {
+      // DETECTION_RESULT et al. legitimately fire from sub-iframes that
+      // contain agent activity — we must not regress that.
+      expect(isValidSender('DETECTION_RESULT', contentSender({ frameId: 7 }))).toBe(true);
+      expect(isValidSender('AGENT_ACTION', contentSender({ frameId: 99 }))).toBe(true);
+      expect(isValidSender('NETWORK_EVENT', contentSender({ frameId: 1 }))).toBe(true);
+    });
   });
 
   describe('uncategorized message types', () => {

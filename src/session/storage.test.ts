@@ -310,4 +310,59 @@ describe('storage schema version + corruption recovery', () => {
     const after = await chrome.storage.local.get('storageSchemaVersion');
     expect(after.storageSchemaVersion).toBe(futureVersion);
   });
+
+  it('rejects http:// aimBaseUrl in settings and resets to default', async () => {
+    await chrome.storage.local.set({
+      storageSchemaVersion: CURRENT_STORAGE_SCHEMA_VERSION,
+      settings: { ...DEFAULT_SETTINGS, aimBaseUrl: 'http://attacker.example' },
+    });
+    const state = await getStorageState();
+    expect(state.settings.aimBaseUrl).toBe(DEFAULT_SETTINGS.aimBaseUrl);
+    const corruption = await chrome.storage.local.get('__corrupted_state');
+    const log = corruption.__corrupted_state as Array<{ key: string; reason: string }>;
+    expect(log.some((e) => e.reason.includes('aimBaseUrl'))).toBe(true);
+  });
+
+  it('rejects javascript: scheme in registryBaseUrl and resets to default', async () => {
+    await chrome.storage.local.set({
+      storageSchemaVersion: CURRENT_STORAGE_SCHEMA_VERSION,
+      settings: { ...DEFAULT_SETTINGS, registryBaseUrl: 'javascript:alert(1)' },
+    });
+    const state = await getStorageState();
+    expect(state.settings.registryBaseUrl).toBe(DEFAULT_SETTINGS.registryBaseUrl);
+  });
+
+  it('rejects array-typed aimBaseUrl (not a string) and resets to default', async () => {
+    await chrome.storage.local.set({
+      storageSchemaVersion: CURRENT_STORAGE_SCHEMA_VERSION,
+      settings: { ...DEFAULT_SETTINGS, aimBaseUrl: ['http://attacker'] },
+    });
+    const state = await getStorageState();
+    expect(state.settings.aimBaseUrl).toBe(DEFAULT_SETTINGS.aimBaseUrl);
+  });
+
+  it('rejects non-boolean detectionEnabled and resets to default', async () => {
+    await chrome.storage.local.set({
+      storageSchemaVersion: CURRENT_STORAGE_SCHEMA_VERSION,
+      settings: { ...DEFAULT_SETTINGS, detectionEnabled: 'yes' },
+    });
+    const state = await getStorageState();
+    expect(state.settings.detectionEnabled).toBe(DEFAULT_SETTINGS.detectionEnabled);
+  });
+
+  it('accepts a fully valid settings object without rewriting', async () => {
+    const sane = { ...DEFAULT_SETTINGS, detectionEnabled: false, aimBaseUrl: 'https://aim.example.com' };
+    await chrome.storage.local.set({
+      storageSchemaVersion: CURRENT_STORAGE_SCHEMA_VERSION,
+      settings: sane,
+    });
+    (chrome.storage.local.set as unknown as { mockClear: () => void }).mockClear();
+    const state = await getStorageState();
+    expect(state.settings.detectionEnabled).toBe(false);
+    expect(state.settings.aimBaseUrl).toBe('https://aim.example.com');
+    const allCalls = (chrome.storage.local.set as unknown as { mock: { calls: unknown[][] } }).mock.calls;
+    const writes = allCalls.map((c) => c[0] as Record<string, unknown>);
+    const recovery = writes.filter((c) => !('__corrupted_state' in c));
+    expect(recovery).toEqual([]);
+  });
 });

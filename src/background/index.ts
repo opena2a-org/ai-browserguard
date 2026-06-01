@@ -370,10 +370,13 @@ function handleMessage(
     }
 
     case 'OPEN_POPUP': {
-      // Sent from the content-side toast's "Settings" button. Tries the
-      // native action.openPopup() first (Chrome 127+); falls back to
-      // opening the popup HTML as a tab if the API is unavailable or
-      // rejects (e.g., no active window).
+      // Sent from the content-side toast's "Settings" button. Sender
+      // gate already requires sender.tab !== undefined AND
+      // sender.frameId === 0 (main-frame only — toast only renders there;
+      // sub-iframe origins are spam vectors). Tries the native
+      // action.openPopup() first (Chrome 127+); falls back to opening
+      // the popup HTML as a tab if the API is unavailable or rejects
+      // (e.g., no active window).
       (async () => {
         const openPopup = (chrome.action as { openPopup?: () => Promise<void> }).openPopup;
         if (typeof openPopup === 'function') {

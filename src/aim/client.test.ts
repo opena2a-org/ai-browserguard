@@ -281,6 +281,39 @@ describe('lookupAgentIdentity', () => {
       expect(mockFetch).toHaveBeenCalledOnce();
     });
 
+    // Defense-in-depth lock-in: the localhost exception MUST require
+    // NODE_ENV === 'test'. Production builds have no `process.env` (the
+    // service worker runs in V8, not Node), but a future test environment
+    // change that sets `process.env = {}` without NODE_ENV must not
+    // re-open the localhost-HTTP gate.
+    it('rejects http://localhost when NODE_ENV is not "test"', async () => {
+      const original = process.env.NODE_ENV;
+      try {
+        process.env.NODE_ENV = 'production';
+        const result = await lookupAgentIdentity('p', 'https://example.com', {
+          baseUrl: 'http://localhost:8080',
+        });
+        expect(result.status).toBe('unreachable');
+        expect(mockFetch).not.toHaveBeenCalled();
+      } finally {
+        process.env.NODE_ENV = original;
+      }
+    });
+
+    it('rejects http://127.0.0.1 when NODE_ENV is unset', async () => {
+      const original = process.env.NODE_ENV;
+      try {
+        delete process.env.NODE_ENV;
+        const result = await lookupAgentIdentity('p', 'https://example.com', {
+          baseUrl: 'http://127.0.0.1:1337',
+        });
+        expect(result.status).toBe('unreachable');
+        expect(mockFetch).not.toHaveBeenCalled();
+      } finally {
+        if (original !== undefined) process.env.NODE_ENV = original;
+      }
+    });
+
     it('uses https://aim.opena2a.org when no baseUrl option is provided', async () => {
       mockFetch.mockResolvedValueOnce({
         ok: true,

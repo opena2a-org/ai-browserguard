@@ -45,6 +45,82 @@ async function logCorruption(entries: CorruptionLogEntry[]): Promise<void> {
 }
 
 /**
+ * Per-field validator for the settings object.
+ *
+ * The top-level settings type-guard (object & !array) only verifies the
+ * container shape. Individual fields can still arrive with the wrong runtime
+ * type if storage is tampered, the user manually edits chrome.storage, or a
+ * future version migration goes wrong. This validator coerces each known
+ * field back to its default when the runtime type doesn't match, and also
+ * rejects URL fields whose value cannot pass `new URL()` parsing or is not
+ * `https:`.
+ *
+ * Returns the cleaned settings object plus the keys that were rewritten.
+ * Callers add the rewritten-keys list to the corruption log.
+ */
+function validateSettingsFields(raw: Partial<UserSettings>): { clean: UserSettings; rewrittenKeys: string[] } {
+  const clean: UserSettings = { ...DEFAULT_SETTINGS };
+  const rewritten: string[] = [];
+
+  function takeBoolean(key: keyof UserSettings & string, source: unknown): void {
+    if (typeof source === 'boolean') {
+      (clean[key] as boolean) = source;
+    } else if (source !== undefined) {
+      rewritten.push(`settings.${key}`);
+    }
+  }
+
+  function takeString(key: keyof UserSettings & string, source: unknown): void {
+    if (typeof source === 'string') {
+      (clean[key] as string) = source;
+    } else if (source !== undefined) {
+      rewritten.push(`settings.${key}`);
+    }
+  }
+
+  function takeNumber(key: keyof UserSettings & string, source: unknown): void {
+    if (typeof source === 'number' && Number.isFinite(source) && source >= 0) {
+      (clean[key] as number) = source;
+    } else if (source !== undefined) {
+      rewritten.push(`settings.${key}`);
+    }
+  }
+
+  function takeHttpsUrl(key: keyof UserSettings & string, source: unknown): void {
+    if (typeof source !== 'string') {
+      if (source !== undefined) rewritten.push(`settings.${key}`);
+      return;
+    }
+    let parsed: URL;
+    try {
+      parsed = new URL(source);
+    } catch {
+      rewritten.push(`settings.${key}`);
+      return;
+    }
+    if (parsed.protocol !== 'https:') {
+      rewritten.push(`settings.${key}`);
+      return;
+    }
+    (clean[key] as string) = source;
+  }
+
+  takeBoolean('detectionEnabled', raw.detectionEnabled);
+  takeBoolean('notificationsEnabled', raw.notificationsEnabled);
+  takeString('killSwitchShortcut', raw.killSwitchShortcut);
+  takeNumber('maxSessions', raw.maxSessions);
+  takeNumber('maxDetectionLogEntries', raw.maxDetectionLogEntries);
+  takeBoolean('autoBlockUnknownAgents', raw.autoBlockUnknownAgents);
+  takeBoolean('aimLookupEnabled', raw.aimLookupEnabled);
+  takeHttpsUrl('aimBaseUrl', raw.aimBaseUrl);
+  takeBoolean('registryLookupEnabled', raw.registryLookupEnabled);
+  takeHttpsUrl('registryBaseUrl', raw.registryBaseUrl);
+  takeBoolean('autoBlockUntrustedAgents', raw.autoBlockUntrustedAgents);
+
+  return { clean, rewrittenKeys: rewritten };
+}
+
+/**
  * Run a migration from the stored version to CURRENT_STORAGE_SCHEMA_VERSION.
  * Currently a no-op scaffold: future version bumps add cases that mutate `data` in place.
  */
@@ -142,15 +218,27 @@ export async function getStorageState(): Promise<StorageSchema> {
     }
 
     const rawSettings = workingData.settings;
-    let settingsObject: Partial<UserSettings>;
+    let settingsRaw: Partial<UserSettings>;
     if (rawSettings !== null && typeof rawSettings === 'object' && !Array.isArray(rawSettings)) {
-      settingsObject = rawSettings as Partial<UserSettings>;
+      settingsRaw = rawSettings as Partial<UserSettings>;
     } else if (rawSettings !== undefined) {
       corruption.push({ timestamp: now, key: 'settings', reason: `expected object, got ${Array.isArray(rawSettings) ? 'array' : typeof rawSettings}` });
-      settingsObject = {};
-      keysToPersist.settings = { ...DEFAULT_SETTINGS };
+      settingsRaw = {};
     } else {
-      settingsObject = {};
+      settingsRaw = {};
+    }
+
+    // Even when the settings container shape is valid, per-field types can
+    // still be wrong (storage manipulation, partial migration, etc). Validate
+    // each known field and coerce bad ones back to default. URL fields go
+    // through new URL() + protocol === 'https:'.
+    const { clean: cleanSettings, rewrittenKeys } = validateSettingsFields(settingsRaw);
+    if (rewrittenKeys.length > 0) {
+      corruption.push({ timestamp: now, key: 'settings', reason: `rewrote invalid fields: ${rewrittenKeys.join(', ')}` });
+      keysToPersist.settings = cleanSettings;
+    } else if (rawSettings !== undefined && (rawSettings === null || typeof rawSettings !== 'object' || Array.isArray(rawSettings))) {
+      // Container shape was bad — also persist the cleaned-from-defaults shape.
+      keysToPersist.settings = cleanSettings;
     }
 
     if (corruption.length > 0) {
@@ -167,7 +255,7 @@ export async function getStorageState(): Promise<StorageSchema> {
       storageSchemaVersion: CURRENT_STORAGE_SCHEMA_VERSION,
       sessions,
       delegationRules,
-      settings: { ...DEFAULT_SETTINGS, ...settingsObject },
+      settings: cleanSettings,
       detectionLog,
     };
   } catch (err) {

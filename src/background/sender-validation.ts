@@ -22,6 +22,14 @@ const CONTENT_ONLY_TYPES: ReadonlySet<MessageType> = new Set([
   'OPEN_POPUP',
 ]);
 
+// Message types that must originate from the main frame (frameId === 0)
+// even when content-only validation passes. The toast that emits OPEN_POPUP
+// only renders in the main frame; a sub-iframe sending OPEN_POPUP is a
+// spam / UX abuse vector.
+const MAIN_FRAME_ONLY_TYPES: ReadonlySet<MessageType> = new Set([
+  'OPEN_POPUP',
+]);
+
 const POPUP_ONLY_TYPES: ReadonlySet<MessageType> = new Set([
   'KILL_SWITCH_ACTIVATE',
   'KILL_SWITCH_RESET',
@@ -51,7 +59,12 @@ export function isValidSender(
 
   if (CONTENT_ONLY_TYPES.has(type)) {
     // Content scripts always have sender.tab populated by Chrome.
-    return sender.tab !== undefined;
+    if (sender.tab === undefined) return false;
+    // Some content-only types must additionally be in the main frame.
+    if (MAIN_FRAME_ONLY_TYPES.has(type) && sender.frameId !== 0) {
+      return false;
+    }
+    return true;
   }
 
   if (POPUP_ONLY_TYPES.has(type)) {
