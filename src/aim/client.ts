@@ -41,15 +41,26 @@ const UNREACHABLE_CACHE_TTL_MS = 30 * 1000;
 // Non-HTTPS AIM endpoints are rejected outside of tests. A trustScore of 1.0
 // returned from an attacker-controlled localhost endpoint would otherwise
 // bypass detection escalation.
+//
+// Parse the URL with `new URL()` rather than string-matching the prefix.
+// `http://localhost@attacker.com` and `http://127.0.0.1.attacker.com`
+// both pass a naive `startsWith` check but resolve to `attacker.com`.
 function isAllowedBaseUrl(url: string): boolean {
-  if (url.startsWith('https://')) return true;
-  // Permit http only for localhost in test/development. We detect the test
-  // environment via process.env.NODE_ENV when available; otherwise we accept
-  // localhost http exclusively (covers self-hosted AIM during development).
-  if (url.startsWith('http://localhost') || url.startsWith('http://127.0.0.1')) {
-    return typeof process !== 'undefined' && process.env?.NODE_ENV === 'test';
+  let parsed: URL;
+  try {
+    parsed = new URL(url);
+  } catch {
+    return false;
   }
-  return false;
+  if (parsed.protocol === 'https:') return true;
+  if (parsed.protocol !== 'http:') return false;
+  // http:// only allowed for the exact localhost loopback hostname in
+  // test mode. Anything that resolves elsewhere is rejected.
+  const host = parsed.hostname.toLowerCase();
+  if (host !== 'localhost' && host !== '127.0.0.1' && host !== '[::1]') {
+    return false;
+  }
+  return typeof process !== 'undefined' && process.env?.NODE_ENV === 'test';
 }
 
 const cache = new Map<string, CacheEntry>();

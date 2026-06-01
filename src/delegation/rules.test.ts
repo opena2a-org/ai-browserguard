@@ -160,6 +160,32 @@ describe('evaluateSitePatterns', () => {
       evaluateSitePatterns('https://example.com/', patterns, 'block').allowed,
     ).toBe(false);
   });
+
+  // ---------------------------------------------------------------------
+  // ReDoS regression: a pattern with many consecutive wildcards like
+  // `*****...` previously compiled to `.*.*.*.*` against which a long URL
+  // triggers catastrophic backtracking. The collapse-runs fix caps the
+  // compiled regex at `.*.*` regardless of how many `*` the pattern has.
+  // ---------------------------------------------------------------------
+  describe('catastrophic backtracking guard', () => {
+    it('completes within 100ms on a 1000-star pattern against a long URL', () => {
+      const patterns = [{ pattern: 'https://' + '*'.repeat(1000), action: 'allow' as const }];
+      const longUrl = 'https://example.com/' + 'a/b/'.repeat(500);
+      const t0 = Date.now();
+      evaluateSitePatterns(longUrl, patterns, 'allow');
+      const elapsed = Date.now() - t0;
+      expect(elapsed).toBeLessThan(100);
+    });
+
+    it('treats `***` the same as `**` (semantics-preserving collapse)', () => {
+      const twoStar = [{ pattern: 'https://**', action: 'allow' as const }];
+      const threeStar = [{ pattern: 'https://***', action: 'allow' as const }];
+      const url = 'https://example.com/path';
+      expect(evaluateSitePatterns(url, twoStar, 'block').allowed).toBe(
+        evaluateSitePatterns(url, threeStar, 'block').allowed,
+      );
+    });
+  });
 });
 
 describe('evaluateActionRestrictions', () => {

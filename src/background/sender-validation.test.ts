@@ -125,6 +125,38 @@ describe('isValidSender', () => {
     });
   });
 
+  describe('sender.origin defense-in-depth', () => {
+    // Chrome 80+ populates sender.origin. We require it to match our
+    // chrome-extension origin if present, so a future externally_connectable
+    // misconfiguration (matches added) can't smuggle a web origin through
+    // the id check alone.
+
+    it('accepts a content sender with the correct chrome-extension origin', () => {
+      expect(isValidSender('DETECTION_RESULT', contentSender({
+        origin: 'chrome-extension://test-id',
+      }))).toBe(true);
+    });
+
+    it('rejects a sender claiming a web origin even with our extension id', () => {
+      expect(isValidSender('DETECTION_RESULT', contentSender({
+        origin: 'https://attacker.com',
+      }))).toBe(false);
+    });
+
+    it('rejects a popup sender with a foreign chrome-extension origin', () => {
+      expect(isValidSender('STATUS_QUERY', popupSender({
+        origin: 'chrome-extension://hostile-id',
+      }))).toBe(false);
+    });
+
+    it('accepts when sender.origin is undefined (older Chrome compat)', () => {
+      // Backwards compat: sender.origin was added in Chrome 80. Older
+      // versions populate everything else. The id check is the load-bearing
+      // gate when origin is missing.
+      expect(isValidSender('DETECTION_RESULT', contentSender())).toBe(true);
+    });
+  });
+
   describe('uncategorized message types', () => {
     it('rejects an unknown type even from our own extension', () => {
       // Cast through unknown to feed an unclassified value.

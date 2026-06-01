@@ -157,12 +157,19 @@ export function evaluateSitePatterns(
  */
 function matchGlob(url: string, pattern: string): boolean {
   try {
+    // Collapse runs of 3+ wildcards down to two BEFORE the regex build.
+    // A pattern like `*****` would otherwise compile to `.*.*.*.*.*`, which
+    // is a classic ReDoS catastrophic-backtracking shape against long URLs.
+    // Two stars (`**`) already covers "match anything", so the collapse is
+    // semantics-preserving.
+    const collapsed = pattern.replace(/\*{3,}/g, '**');
+
     // If pattern doesn't contain protocol, match against hostname
-    if (!pattern.includes('://')) {
+    if (!collapsed.includes('://')) {
       const parsedUrl = new URL(url);
       const hostname = parsedUrl.hostname;
       // Convert glob to regex: * matches any characters except dots in domain context
-      const regexStr = pattern
+      const regexStr = collapsed
         .replace(/\./g, '\\.')
         .replace(/\*\*/g, '.*')
         .replace(/\*/g, '[^.]*');
@@ -173,7 +180,7 @@ function matchGlob(url: string, pattern: string): boolean {
     // literal `?` in a URL pattern (which is a regex zero-or-one metacharacter)
     // does not silently widen the match. `*` is intentionally not escaped here
     // — the next replace converts `\*` back into `.*` for glob semantics.
-    const regexStr = pattern
+    const regexStr = collapsed
       .replace(/[.+^${}()|[\]\\?]/g, '\\$&')
       .replace(/\\\*/g, '.*');
     return new RegExp(`^${regexStr}$`).test(url);

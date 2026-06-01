@@ -314,6 +314,43 @@ describe('lookupAgentIdentity', () => {
       }
     });
 
+    // ---------------------------------------------------------------------
+    // Regression: localhost prefix bypass. `new URL()` resolves these to
+    // attacker.com / *.attacker.com, but a naive startsWith() check would
+    // pass them through. Both must be rejected even with NODE_ENV=test.
+    // ---------------------------------------------------------------------
+    it('rejects http://localhost@attacker.com (userinfo bypass)', async () => {
+      const result = await lookupAgentIdentity('p', 'https://example.com', {
+        baseUrl: 'http://localhost@attacker.com',
+      });
+      expect(result.status).toBe('unreachable');
+      expect(mockFetch).not.toHaveBeenCalled();
+    });
+
+    it('rejects http://127.0.0.1.attacker.com (subdomain bypass)', async () => {
+      const result = await lookupAgentIdentity('p', 'https://example.com', {
+        baseUrl: 'http://127.0.0.1.attacker.com',
+      });
+      expect(result.status).toBe('unreachable');
+      expect(mockFetch).not.toHaveBeenCalled();
+    });
+
+    it('rejects http://localhost.evil.com (subdomain bypass)', async () => {
+      const result = await lookupAgentIdentity('p', 'https://example.com', {
+        baseUrl: 'http://localhost.evil.com',
+      });
+      expect(result.status).toBe('unreachable');
+      expect(mockFetch).not.toHaveBeenCalled();
+    });
+
+    it('rejects an unparseable URL', async () => {
+      const result = await lookupAgentIdentity('p', 'https://example.com', {
+        baseUrl: 'not a url at all',
+      });
+      expect(result.status).toBe('unreachable');
+      expect(mockFetch).not.toHaveBeenCalled();
+    });
+
     it('uses https://aim.opena2a.org when no baseUrl option is provided', async () => {
       mockFetch.mockResolvedValueOnce({
         ok: true,

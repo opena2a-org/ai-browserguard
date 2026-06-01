@@ -55,6 +55,43 @@ function extractDomain(url: string): string | null {
   }
 }
 
+/**
+ * Produce a safe-for-display version of a domain. The toast surfaces this
+ * value to the user when they click "Whitelist <domain>", so we must
+ * surface a warning marker when the underlying hostname could be confused
+ * with a different domain. Two specific cases:
+ *
+ *   - Punycode IDN labels (`xn--*`) — render as a different Unicode form
+ *     in modern browsers, classic homograph vector.
+ *   - Mixed-script labels (Latin + Cyrillic, etc.) — the typical Unicode
+ *     domain spoof where a Latin `a` is swapped for the Cyrillic
+ *     lookalike (`а`).
+ *
+ * The marker is a textual "(unverified)" suffix rather than an emoji so
+ * it lands consistently in screen readers and copy-paste contexts.
+ */
+export function safeDisplayDomain(domain: string): string {
+  if (!domain) return domain;
+  const lower = domain.toLowerCase();
+  const labels = lower.split('.');
+  const hasPunycode = labels.some((l) => l.startsWith('xn--'));
+  const hasMixedScript = labels.some((l) => {
+    let latin = false;
+    let nonLatin = false;
+    for (const ch of l) {
+      const code = ch.codePointAt(0) ?? 0;
+      if (code >= 0x61 && code <= 0x7a) latin = true;
+      else if (code >= 0x80) nonLatin = true;
+      if (latin && nonLatin) return true;
+    }
+    return false;
+  });
+  if (hasPunycode || hasMixedScript) {
+    return `${domain} (unverified)`;
+  }
+  return domain;
+}
+
 /** Ensure the toast container element exists in the page. */
 function ensureContainer(): HTMLElement {
   let container = document.getElementById(TOAST_CONTAINER_ID);
@@ -179,7 +216,7 @@ export function showBlockedToast(options: ToastOptions): () => void {
   if (domain && onWhitelist) {
     const whitelistBtn = document.createElement('button');
     whitelistBtn.className = 'abg-toast-btn abg-toast-btn-whitelist';
-    whitelistBtn.textContent = `Whitelist ${domain}`;
+    whitelistBtn.textContent = `Whitelist ${safeDisplayDomain(domain)}`;
     whitelistBtn.addEventListener('click', () => {
       onWhitelist(domain);
       removeToast();

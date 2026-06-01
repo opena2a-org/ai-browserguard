@@ -56,6 +56,16 @@ export function isValidSender(
   if (sender.id !== chrome.runtime.id) {
     return false;
   }
+  // Defense-in-depth: if `sender.origin` is populated (Chrome 80+), it
+  // must be our own chrome-extension origin. This blocks any future
+  // externally_connectable misconfiguration: web origins listed in
+  // matches would have sender.origin === "https://...", not our id.
+  if (typeof sender.origin === 'string') {
+    const expectedOrigin = `chrome-extension://${chrome.runtime.id}`;
+    if (sender.origin !== expectedOrigin) {
+      return false;
+    }
+  }
 
   if (CONTENT_ONLY_TYPES.has(type)) {
     // Content scripts always have sender.tab populated by Chrome.
