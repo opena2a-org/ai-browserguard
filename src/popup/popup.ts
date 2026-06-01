@@ -205,7 +205,7 @@ function setupEventListeners(): void {
     const wizardContainer = document.getElementById('wizard-container');
     if (wizardContainer) {
       wizardContainer.classList.add('hidden');
-      wizardContainer.innerHTML = '';
+      wizardContainer.replaceChildren();
     }
     renderAll();
 
@@ -241,7 +241,7 @@ function onDelegationWizardClick(): void {
     renderWizardUI();
   } else {
     wizardContainer.classList.add('hidden');
-    wizardContainer.innerHTML = '';
+    wizardContainer.replaceChildren();
     popupState.wizardState = null;
   }
   // Re-render delegation panel so Configure/Cancel label updates
@@ -416,17 +416,25 @@ function renderDetectionPanel(): void {
   const container = document.getElementById('detection-content');
   if (!container) return;
 
+  function renderPlaceholder(text: string): void {
+    container!.replaceChildren();
+    const p = document.createElement('p');
+    p.className = 'placeholder-text-inline';
+    p.textContent = text;
+    container!.appendChild(p);
+  }
+
   if (popupState.loading) {
-    container.innerHTML = '<p class="placeholder-text-inline">Loading...</p>';
+    renderPlaceholder('Loading...');
     return;
   }
 
   if (popupState.detectedAgents.length === 0) {
-    container.innerHTML = '<p class="placeholder-text-inline">No agents detected</p>';
+    renderPlaceholder('No agents detected');
     return;
   }
 
-  container.innerHTML = '';
+  container.replaceChildren();
   for (const agent of popupState.detectedAgents) {
     const card = document.createElement('div');
     card.className = 'detection-card';
@@ -583,7 +591,7 @@ function onQuickAllowClick(preset: 'readOnly' | 'fullAccess'): void {
   const wizardContainer = document.getElementById('wizard-container');
   if (wizardContainer) {
     wizardContainer.classList.add('hidden');
-    wizardContainer.innerHTML = '';
+    wizardContainer.replaceChildren();
   }
   renderAll();
 
@@ -610,7 +618,7 @@ function renderDelegationPanel(): void {
       fullAccess: 'Full Access',
     };
 
-    content.innerHTML = '';
+    content.replaceChildren();
     const row = document.createElement('div');
     row.className = 'delegation-empty';
 
@@ -668,16 +676,23 @@ function renderDelegationPanel(): void {
     content.appendChild(row);
   } else {
     const wizardOpen = popupState.wizardState !== null;
-    content.innerHTML = `
-      <div class="delegation-empty">
-        <span class="placeholder-text-inline">No delegation active</span>
-        <button id="delegation-wizard-btn" class="btn ${wizardOpen ? 'btn-secondary' : 'btn-primary'} btn-sm">${wizardOpen ? 'Cancel' : 'Configure'}</button>
-      </div>
-    `;
-    const wizardBtn = document.getElementById('delegation-wizard-btn');
-    if (wizardBtn) {
-      wizardBtn.addEventListener('click', onDelegationWizardClick);
-    }
+    content.replaceChildren();
+    const empty = document.createElement('div');
+    empty.className = 'delegation-empty';
+
+    const placeholder = document.createElement('span');
+    placeholder.className = 'placeholder-text-inline';
+    placeholder.textContent = 'No delegation active';
+
+    const wizardBtn = document.createElement('button');
+    wizardBtn.id = 'delegation-wizard-btn';
+    wizardBtn.className = `btn ${wizardOpen ? 'btn-secondary' : 'btn-primary'} btn-sm`;
+    wizardBtn.textContent = wizardOpen ? 'Cancel' : 'Configure';
+    wizardBtn.addEventListener('click', onDelegationWizardClick);
+
+    empty.appendChild(placeholder);
+    empty.appendChild(wizardBtn);
+    content.appendChild(empty);
   }
 }
 
@@ -692,7 +707,7 @@ function renderViolationsPanel(): void {
   }
 
   panel.classList.remove('hidden');
-  container.innerHTML = '';
+  container.replaceChildren();
 
   // Quick-whitelist: show recently blocked domains with one-click allow
   const blockedDomains = new Map<string, number>();
@@ -792,7 +807,7 @@ function renderTimelinePanel(): void {
   }
 
   panel.classList.remove('hidden');
-  container.innerHTML = '';
+  container.replaceChildren();
 
   // Show "No session history" message if sessions array is empty
   if (sessions.length === 0) {
@@ -944,7 +959,18 @@ function renderReportsPanel(): void {
     panel = document.createElement('div');
     panel.id = 'reports-panel';
     panel.className = 'panel';
-    panel.innerHTML = '<div class="panel-header"><h3>Session Reports</h3></div><div id="reports-list"></div>';
+
+    const header = document.createElement('div');
+    header.className = 'panel-header';
+    const heading = document.createElement('h3');
+    heading.textContent = 'Session Reports';
+    header.appendChild(heading);
+
+    const list = document.createElement('div');
+    list.id = 'reports-list';
+
+    panel.appendChild(header);
+    panel.appendChild(list);
     metricsPanel.parentElement.insertBefore(panel, metricsPanel);
   }
 
@@ -957,7 +983,7 @@ function renderReportsPanel(): void {
   }
 
   panel.classList.remove('hidden');
-  container.innerHTML = '';
+  container.replaceChildren();
 
   // Show report detail view if a report is selected
   if (popupState.selectedReport) {
@@ -999,7 +1025,12 @@ function renderReportsPanel(): void {
       lines.push(`Network: ${report.networkSummary.totalRequests} requests (${report.networkSummary.agentInitiated} agent, ${report.networkSummary.uniqueDomains} domains)`);
     }
 
-    detail.innerHTML = lines.map(l => `<div>${l}</div>`).join('');
+    detail.replaceChildren();
+    for (const line of lines) {
+      const lineEl = document.createElement('div');
+      lineEl.textContent = line;
+      detail.appendChild(lineEl);
+    }
     container.appendChild(detail);
 
     const exportBtn = document.createElement('button');
@@ -1084,7 +1115,22 @@ function renderNetworkPanel(): void {
     panel = document.createElement('div');
     panel.id = 'network-panel';
     panel.className = 'panel';
-    panel.innerHTML = '<div class="panel-header"><h3>Network Activity</h3></div><div id="network-filters"></div><div id="network-list"></div>';
+
+    const header = document.createElement('div');
+    header.className = 'panel-header';
+    const heading = document.createElement('h3');
+    heading.textContent = 'Network Activity';
+    header.appendChild(heading);
+
+    const filters = document.createElement('div');
+    filters.id = 'network-filters';
+
+    const list = document.createElement('div');
+    list.id = 'network-list';
+
+    panel.appendChild(header);
+    panel.appendChild(filters);
+    panel.appendChild(list);
     metricsPanel.parentElement.insertBefore(panel, metricsPanel);
   }
 
@@ -1101,7 +1147,7 @@ function renderNetworkPanel(): void {
   panel.classList.remove('hidden');
 
   // Render filter buttons
-  filtersContainer.innerHTML = '';
+  filtersContainer.replaceChildren();
   const filterRow = document.createElement('div');
   filterRow.style.cssText = 'display: flex; gap: 4px; margin-bottom: 8px; padding: 0 8px;';
 
@@ -1128,7 +1174,7 @@ function renderNetworkPanel(): void {
     ? events
     : events.filter(e => e.initiator === popupState.networkFilter);
 
-  container.innerHTML = '';
+  container.replaceChildren();
 
   if (filtered.length === 0) {
     const empty = document.createElement('p');
@@ -1183,7 +1229,7 @@ function renderMetricsPanel(): void {
   }
 
   panel.classList.remove('hidden');
-  grid.innerHTML = '';
+  grid.replaceChildren();
 
   // Sessions monitored
   addMetricCell(grid, String(stats.totalSessions), 'sessions monitored');
@@ -1265,7 +1311,7 @@ function renderSettingsPanel(): void {
   }
 
   panel.classList.remove('hidden');
-  container.innerHTML = '';
+  container.replaceChildren();
 
   // Toggle settings
   const toggles: Array<{
