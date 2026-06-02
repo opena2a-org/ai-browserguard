@@ -14,6 +14,10 @@ Chrome extension that detects, monitors, and controls AI agents operating in you
 
 [Install from Chrome Web Store](https://chromewebstore.google.com/detail/ojphpdmabflmcjhglfogmkdgchkncikf) | [Website](https://opena2a.org/aibrowserguard) | [Privacy Policy](https://opena2a.org/aibrowserguard/privacy)
 
+![An AI agent takes over a banking tab. AI Browser Guard detects it, blocks the transfer it tries to submit with an in-page notice, and the kill switch ends every connection.](docs/browserguard-demo.gif)
+
+An AI agent takes over a tab. AI Browser Guard detects it without the agent identifying itself, blocks the transfer it tries to submit, and the kill switch (Ctrl+Shift+K) ends every connection.
+
 ---
 
 ## What It Protects Against
