@@ -30,6 +30,28 @@ describe('sanitizeDownloadFilename', () => {
     expect(sanitizeDownloadFilename(undefined)).toBe('report.json');
     expect(sanitizeDownloadFilename('////')).toBe('report.json');
   });
+
+  it('keeps a .json suffix on a double-extension input (OS sees .json last)', () => {
+    // Documents actual behavior: a non-.json tail gets .json appended, so the
+    // effective extension the OS honors is always .json.
+    expect(sanitizeDownloadFilename('report.json.exe')).toBe('report.json.exe.json');
+    expect(sanitizeDownloadFilename('evil.sh')).toBe('evil.sh.json');
+  });
+
+  it('caps very long basenames', () => {
+    const long = 'a'.repeat(500);
+    const out = sanitizeDownloadFilename(`${long}.json`);
+    expect(out.length).toBeLessThanOrEqual(120 + '.json'.length);
+    expect(out.endsWith('.json')).toBe(true);
+  });
+
+  it('a leading-dots-only name does not become a dotfile', () => {
+    // '...json' -> strip leading dots -> 'json' -> already ends with json? no
+    // ('json' !== '*.json') -> 'json.json'. The point: never starts with '.'.
+    const out = sanitizeDownloadFilename('...json');
+    expect(out.startsWith('.')).toBe(false);
+    expect(out).toBe('json.json');
+  });
 });
 
 describe('buildReportDownloadArgs', () => {
@@ -52,5 +74,24 @@ describe('buildReportDownloadArgs', () => {
   it('sanitizes the filename it returns', () => {
     const { filename } = buildReportDownloadArgs('../../../evil', '{}');
     expect(filename).toBe('evil.json');
+  });
+
+  it('does not throw on a lone surrogate in report content (worker fallback must survive)', () => {
+    // JSON.stringify passes raw lone surrogates through; the old
+    // encodeURIComponent path threw URIError and silently killed the fallback.
+    const json = '{"originUrl":"https://x.test/\uD83D","ok":true}';
+    expect(() => buildReportDownloadArgs('r.json', json)).not.toThrow();
+    const { url } = buildReportDownloadArgs('r.json', json);
+    expect(url.startsWith('data:application/json;base64,')).toBe(true);
+    // It still decodes to valid JSON (lone surrogate replaced with U+FFFD).
+    const decoded = new TextDecoder().decode(
+      Uint8Array.from(atob(url.split(',')[1]), (c) => c.charCodeAt(0))
+    );
+    expect(() => JSON.parse(decoded)).not.toThrow();
+  });
+
+  it('handles a large report without throwing (chunked base64)', () => {
+    const json = JSON.stringify({ blob: 'x'.repeat(200_000) });
+    expect(() => buildReportDownloadArgs('big.json', json)).not.toThrow();
   });
 });

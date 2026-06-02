@@ -124,4 +124,19 @@ describe('triggerJsonDownload (popup export)', () => {
       })
     ).rejects.toThrow('boom');
   });
+
+  it('rejects when the anchor path throws and the fallback also rejects', async () => {
+    // Guards the "success-on-failure" defect: a fallback that signals failure
+    // (e.g. worker returned {ok:false}, which the popup turns into a throw)
+    // must propagate, not resolve as a successful download.
+    const { doc } = makeFakeDoc();
+    await expect(
+      triggerJsonDownload('r.json', '{}', {
+        doc,
+        createObjectURL: () => { throw new Error('blob unavailable'); },
+        revokeObjectURL: vi.fn(),
+        fallback: () => Promise.reject(new Error('service worker download failed')),
+      })
+    ).rejects.toThrow('service worker download failed');
+  });
 });

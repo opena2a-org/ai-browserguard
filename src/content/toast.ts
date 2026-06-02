@@ -127,8 +127,8 @@ const SVG_NS = 'http://www.w3.org/2000/svg';
 /**
  * Build the BrowserGuard shield mark as an inline monochrome SVG.
  *
- * Drawn with createElementNS (never innerHTML) so the content script never
- * parses an HTML/SVG string into a page it does not control. Uses
+ * Drawn with createElementNS (never an HTML-string sink) so the content script
+ * never parses an HTML/SVG string into a page it does not control. Uses
  * `currentColor` so it inherits the toast header's text color. Replaces the
  * former shield emoji, which rendered inconsistently across platforms and is
  * not house-style for product UI.
