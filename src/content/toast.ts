@@ -122,6 +122,35 @@ function getInner(container: HTMLElement): HTMLElement {
   return (container as unknown as { _inner: HTMLElement })._inner;
 }
 
+const SVG_NS = 'http://www.w3.org/2000/svg';
+
+/**
+ * Build the BrowserGuard shield mark as an inline monochrome SVG.
+ *
+ * Drawn with createElementNS (never innerHTML) so the content script never
+ * parses an HTML/SVG string into a page it does not control. Uses
+ * `currentColor` so it inherits the toast header's text color. Replaces the
+ * former shield emoji, which rendered inconsistently across platforms and is
+ * not house-style for product UI.
+ */
+function buildShieldIcon(): SVGSVGElement {
+  const svg = document.createElementNS(SVG_NS, 'svg');
+  svg.setAttribute('viewBox', '0 0 24 24');
+  svg.setAttribute('width', '16');
+  svg.setAttribute('height', '16');
+  svg.setAttribute('fill', 'none');
+  svg.setAttribute('stroke', 'currentColor');
+  svg.setAttribute('stroke-width', '2');
+  svg.setAttribute('stroke-linecap', 'round');
+  svg.setAttribute('stroke-linejoin', 'round');
+  svg.setAttribute('aria-hidden', 'true');
+  svg.setAttribute('focusable', 'false');
+  const path = document.createElementNS(SVG_NS, 'path');
+  path.setAttribute('d', 'M12 2 4 5v6c0 5 3.4 8.4 8 11 4.6-2.6 8-6 8-11V5z');
+  svg.appendChild(path);
+  return svg;
+}
+
 /**
  * Show a toast notification for a blocked action.
  * Returns a cleanup function to remove the toast.
@@ -160,8 +189,8 @@ export function showBlockedToast(options: ToastOptions): () => void {
 
   const icon = document.createElement('span');
   icon.className = 'abg-toast-icon';
-  icon.textContent = '\u{1F6E1}'; // shield emoji
   icon.setAttribute('aria-hidden', 'true');
+  icon.appendChild(buildShieldIcon());
 
   const brand = document.createElement('span');
   brand.className = 'abg-toast-brand';

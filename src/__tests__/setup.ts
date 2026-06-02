@@ -110,6 +110,9 @@ const chromeMock = {
   commands: {
     onCommand: createEventMock(),
   },
+  downloads: {
+    download: vi.fn((_options: unknown) => Promise.resolve(1)),
+  },
 };
 
 // Install chrome mock globally

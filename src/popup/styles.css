@@ -980,11 +980,17 @@ kbd {
   background: none;
   border: none;
   cursor: pointer;
-  font-size: 16px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
   color: var(--text-secondary);
   padding: 2px 4px;
   border-radius: 4px;
   transition: color 0.15s ease;
+}
+
+.settings-btn svg {
+  display: block;
 }
 
 .settings-btn:hover {

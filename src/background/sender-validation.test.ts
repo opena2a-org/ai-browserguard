@@ -64,6 +64,7 @@ describe('isValidSender', () => {
       'SETTINGS_UPDATE',
       'REPORTS_QUERY',
       'REPORT_EXPORT',
+      'REPORT_DOWNLOAD',
       'CONTRIBUTE_STATS',
       'CONTRIBUTE_ENABLE',
       'CONTRIBUTE_DISABLE',

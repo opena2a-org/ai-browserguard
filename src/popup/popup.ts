@@ -16,6 +16,7 @@ import type { WizardState } from '../delegation/wizard';
 import { createRuleFromPreset } from '../delegation/rules';
 import type { AIMAuthState } from '../aim/auth';
 import { getAIMAuthState, loginToAIM, logoutFromAIM, isTokenExpired } from '../aim/auth';
+import { triggerJsonDownload } from './download';
 
 interface PopupState {
   detectedAgents: AgentIdentity[];
@@ -1039,13 +1040,17 @@ function renderReportsPanel(): void {
     exportBtn.style.cssText = 'margin-top: 8px;';
     exportBtn.addEventListener('click', () => {
       const json = JSON.stringify(report, null, 2);
-      const blob = new Blob([json], { type: 'application/json' });
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement('a');
-      a.href = url;
-      a.download = `report-${report.sessionId.substring(0, 8)}.json`;
-      a.click();
-      URL.revokeObjectURL(url);
+      const filename = `report-${report.sessionId.substring(0, 8)}.json`;
+      // Hardened anchor download with a service-worker fallback. The popup is a
+      // transient window, so the worker (non-transient) downloads via
+      // chrome.downloads if the in-popup anchor path throws. See ./download.ts.
+      void triggerJsonDownload(filename, json, {
+        fallback: async (name, body) => {
+          await sendToBackground('REPORT_DOWNLOAD', { filename: name, json: body });
+        },
+      }).catch((err) => {
+        console.error('[ABG] report export failed', err);
+      });
     });
     container.appendChild(exportBtn);
 
