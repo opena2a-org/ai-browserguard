@@ -20,6 +20,7 @@ import {
   MSG_ALLOW_ONCE,
   MSG_CDP_DETECTED,
   MSG_NETWORK_EVENT,
+  MSG_KILL_SWITCH,
 } from './bridge-protocol';
 import type { BridgeMessage } from './bridge-protocol';
 
@@ -257,13 +258,23 @@ function initialize(): void {
       if (monitorCleanup) monitorCleanup();
     });
 
-    // Request active delegation rules from background
+    // Request active delegation rules from background. The STATUS_QUERY
+    // response also carries the current killSwitchActive state — when the
+    // page navigates while the kill switch is active, content scripts
+    // re-inject and need to re-arm the MAIN-world hard-block sentinel.
+    // Without this, navigation would silently bypass the kill switch.
     sendToBackground('STATUS_QUERY', {}).then((response) => {
       if (response && typeof response === 'object') {
-        const data = response as { activeDelegation?: DelegationRule };
+        const data = response as {
+          activeDelegation?: DelegationRule;
+          killSwitchActive?: boolean;
+        };
         if (data.activeDelegation) {
           updateActiveRule(data.activeDelegation);
           syncRuleToMainWorld(data.activeDelegation);
+        }
+        if (data.killSwitchActive === true) {
+          postToMainWorld({ type: MSG_KILL_SWITCH, active: true });
         }
       }
     }).catch(() => {
@@ -341,12 +352,30 @@ function handleMessage(
     }
 
     case 'KILL_SWITCH_ACTIVATE': {
+      // P1-2: send the hard-block sentinel to MAIN BEFORE tearing down the
+      // monitors. The wrappers in MAIN cannot be safely unwrapped (page
+      // code may have captured references), so we flip a flag that makes
+      // every isActionAllowed call return blocked. This is synchronous on
+      // the JS event loop, narrowing the in-flight-action race window from
+      // "executeKillSwitch's whole async chain" to "one microtask delivery
+      // over the bridge port."
+      postToMainWorld({ type: MSG_KILL_SWITCH, active: true });
       // Stop all monitoring and clean up
       const result = executeContentKillSwitch();
       detectionCleanup = null;
       monitorCleanup = null;
       currentAgentId = null;
       sendResponse({ success: true, ...result });
+      return false;
+    }
+
+    case 'KILL_SWITCH_RESET': {
+      // P1-2: lift the hard-block in MAIN. The activeRule and allowedOnce
+      // state in MAIN are independent of this flag — clearing the sentinel
+      // restores normal rule processing without losing the previously
+      // installed delegation rule.
+      postToMainWorld({ type: MSG_KILL_SWITCH, active: false });
+      sendResponse({ success: true });
       return false;
     }
 

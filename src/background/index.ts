@@ -188,6 +188,20 @@ function handleMessage(
       state.killSwitch.lastEvent = null;
       state.killSwitch.lastActivatedAt = null;
       updateBadge();
+      // P1-2: broadcast the reset to every tab so each content script can
+      // lift the MAIN-world hard-block sentinel. Without this, MAIN-world
+      // wrappers would continue to deny every capability check after the
+      // user resets the kill switch from the popup.
+      chrome.tabs.query({}).then((tabs) => {
+        for (const tab of tabs) {
+          if (tab.id === undefined) continue;
+          chrome.tabs.sendMessage(tab.id, {
+            type: 'KILL_SWITCH_RESET',
+            data: {},
+            sentAt: new Date().toISOString(),
+          }).catch(() => { /* tab may not have a content script */ });
+        }
+      }).catch(() => { /* best effort */ });
       sendResponse({ success: true });
       return false;
     }
