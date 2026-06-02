@@ -13,19 +13,27 @@ import { startBoundaryMonitor, updateActiveRule, getMonitorState } from './monit
 import { executeContentKillSwitch, registerCleanup } from '../killswitch/index';
 import type { DelegationRule } from '../types/delegation';
 import { showBlockedToast } from './toast';
-
-const GUARD_NONCE = crypto.randomUUID();
-const MSG_INIT = 'AI_GUARD:INIT';
-const MSG_RULE_UPDATE = 'AI_GUARD:RULE_UPDATE';
-const MSG_ACTION = 'AI_GUARD:ACTION';
-const MSG_ALLOW_ONCE = 'AI_GUARD:ALLOW_ONCE';
-const MSG_CDP_DETECTED = 'AI_GUARD:CDP_DETECTED';
-const MSG_NETWORK_EVENT = 'AI_GUARD:NETWORK_EVENT';
+import {
+  MSG_BRIDGE_BOOTSTRAP,
+  MSG_RULE_UPDATE,
+  MSG_ACTION,
+  MSG_ALLOW_ONCE,
+  MSG_CDP_DETECTED,
+  MSG_NETWORK_EVENT,
+} from './bridge-protocol';
+import type { BridgeMessage } from './bridge-protocol';
 
 let detectionCleanup: (() => void) | null = null;
 let monitorCleanup: (() => void) | null = null;
 let currentAgentId: string | null = null;
 let contextInvalidated = false;
+
+/**
+ * Private port to the MAIN-world interceptor. Held in closure; only this
+ * module's code can read or write through it. After the bootstrap transfer,
+ * `window` is no longer used to communicate with MAIN.
+ */
+let mainWorldPort: MessagePort | null = null;
 
 /** Returns true when the extension context is still valid. */
 function isContextValid(): boolean {
@@ -38,10 +46,22 @@ function isContextValid(): boolean {
 }
 
 /**
+ * Send a message to the MAIN-world interceptor through the bridge port.
+ * No-op if the bootstrap has not yet completed (early synthetic calls before
+ * MAIN attaches its handler are dropped; production callers run well after
+ * document_start so the port is always ready).
+ */
+function postToMainWorld(message: BridgeMessage): void {
+  if (mainWorldPort) {
+    mainWorldPort.postMessage(message);
+  }
+}
+
+/**
  * Show an inline toast for a blocked action. Routes the three quick-action
  * callbacks back to the right surface: ALLOW_ONCE goes to the MAIN world
- * interceptor (which already understands the message), DOMAIN_WHITELIST and
- * OPEN_POPUP go to the background.
+ * interceptor (via the private bridge port), DOMAIN_WHITELIST and OPEN_POPUP
+ * go to the background.
  */
 function showBlockedActionToast(capability: string, url: string, reason: string): void {
   showBlockedToast({
@@ -52,10 +72,7 @@ function showBlockedActionToast(capability: string, url: string, reason: string)
       // Relay the one-shot allow directly to the MAIN world interceptor.
       // Same payload shape as the chrome.notifications "Allow once" button
       // already wired through background/handlers.ts handleAllowOnce.
-      window.postMessage(
-        { type: MSG_ALLOW_ONCE, nonce: GUARD_NONCE, capability, url },
-        '*',
-      );
+      postToMainWorld({ type: MSG_ALLOW_ONCE, capability, url });
     },
     onWhitelist: (domain: string) => {
       sendToBackground('DOMAIN_WHITELIST', { domain }).catch(() => { /* ignore */ });
@@ -82,98 +99,138 @@ function syncRuleToMainWorld(rule: DelegationRule | null): void {
         })),
       }
     : null;
-  window.postMessage({ type: MSG_RULE_UPDATE, nonce: GUARD_NONCE, rule: ruleData }, '*');
+  postToMainWorld({ type: MSG_RULE_UPDATE, rule: ruleData });
+}
+
+/**
+ * Handle messages received from the MAIN-world interceptor via the bridge port.
+ *
+ * Validates each field shape before forwarding to background. The port itself
+ * is a trust boundary, but if an attacker ever wins the bootstrap race (the
+ * known residual risk of the document_start ordering defense), field-level
+ * validation prevents forged messages from reaching downstream consumers with
+ * arbitrary payloads.
+ */
+function handleMainWorldMessage(e: MessageEvent): void {
+  const data = e.data as BridgeMessage | undefined;
+  if (!data || typeof data.type !== 'string') return;
+
+  // Handle CDP automation detection from the MAIN world stack trace trap
+  if (data.type === MSG_CDP_DETECTED) {
+    const framework = typeof data.framework === 'string' ? data.framework : '';
+    const detail = typeof data.detail === 'string' ? data.detail : '';
+    const signals = (data.signals && typeof data.signals === 'object')
+      ? (data.signals as Record<string, unknown>)
+      : {};
+    const timestamp = typeof data.timestamp === 'string' ? data.timestamp : new Date().toISOString();
+    if (!framework) return;
+
+    const agentTypeMap: Record<string, import('../types/agent').AgentType> = {
+      playwright: 'playwright',
+      puppeteer: 'puppeteer',
+      selenium: 'selenium',
+      'anthropic-computer-use': 'anthropic-computer-use',
+      'openai-operator': 'openai-operator',
+    };
+    const agentType = agentTypeMap[framework] ?? 'cdp-generic';
+
+    const agent: import('../types/agent').AgentIdentity = {
+      id: crypto.randomUUID(),
+      type: agentType,
+      detectionMethods: ['framework-fingerprint'],
+      confidence: 'confirmed',
+      detectedAt: timestamp,
+      originUrl: window.location.href,
+      observedCapabilities: [],
+      isActive: true,
+    };
+
+    currentAgentId = agent.id;
+
+    const event: import('../types/events').DetectionEvent = {
+      id: crypto.randomUUID(),
+      timestamp,
+      methods: ['framework-fingerprint'],
+      confidence: 'confirmed',
+      agent,
+      url: window.location.href,
+      signals: { ...signals, source: 'stack-trace-trap', detail },
+    };
+
+    sendToBackground('DETECTION_RESULT', event).catch(() => { /* ignore */ });
+    return;
+  }
+
+  // Relay network events from the MAIN world interceptor to background
+  if (data.type === MSG_NETWORK_EVENT) {
+    if (!data.event || typeof data.event !== 'object') return;
+    sendToBackground('NETWORK_EVENT', data.event).catch(() => { /* ignore */ });
+    return;
+  }
+
+  if (data.type !== MSG_ACTION) return;
+
+  const capability = typeof data.capability === 'string' ? data.capability : null;
+  const url = typeof data.url === 'string' ? data.url : null;
+  const blocked = typeof data.blocked === 'boolean' ? data.blocked : null;
+  const reason = typeof data.reason === 'string' ? data.reason : '';
+  const timestamp = typeof data.timestamp === 'string' ? data.timestamp : new Date().toISOString();
+  if (!capability || !url || blocked === null) return;
+
+  if (blocked) {
+    const violation: BoundaryViolation = {
+      id: crypto.randomUUID(),
+      timestamp,
+      agentId: currentAgentId ?? '',
+      attemptedAction: capability as BoundaryViolation['attemptedAction'],
+      url,
+      targetSelector: undefined,
+      blockingRuleId: getMonitorState().activeRule?.id ?? 'none',
+      reason,
+      userOverride: false,
+    };
+    sendToBackground('BOUNDARY_CHECK_REQUEST', violation).catch(() => { /* ignore */ });
+    showBlockedActionToast(capability, url, reason);
+  }
+}
+
+/**
+ * Set up the MAIN-world bridge. Creates a `MessageChannel`, transfers `port2`
+ * to the MAIN-world interceptor via a one-shot `window.postMessage`, then
+ * holds `port1` privately in this module's closure. All subsequent ISOLATED↔
+ * MAIN traffic flows through the port.
+ *
+ * SECURITY: drops the `nonce`-on-`window.postMessage` design. A page that
+ * registered `window.addEventListener('message', ...)` before our bundle
+ * parsed could read every nonce off the wire and forge messages with it.
+ * Port traffic is not visible to any other `window` listener.
+ *
+ * TIMING: relies on `manifest.json` content-script declaration ordering.
+ * ISOLATED is declared first and runs first, queueing the bootstrap as a
+ * post-message task. MAIN loads next and registers its one-shot bootstrap
+ * listener synchronously. The task then dispatches. No page script can
+ * register a `'message'` listener before this exchange because page parsing
+ * has not advanced past document_start.
+ */
+function installMainWorldBridge(): void {
+  const channel = new MessageChannel();
+  mainWorldPort = channel.port1;
+  mainWorldPort.onmessage = handleMainWorldMessage;
+  mainWorldPort.start();
+
+  // Target self-origin so that mid-stream cross-origin navigation cannot
+  // accidentally deliver the bootstrap to a different document. `port2` is
+  // transferred — the local handle is detached and the receiving realm gets
+  // the entangled endpoint.
+  window.postMessage(
+    { type: MSG_BRIDGE_BOOTSTRAP },
+    window.location.origin,
+    [channel.port2],
+  );
 }
 
 function initialize(): void {
-  // Introduce ourselves to the MAIN world interceptor with our nonce
-  window.postMessage({ type: MSG_INIT, nonce: GUARD_NONCE }, '*');
-
-  // Receive action reports and CDP detection from the MAIN world interceptor
-  window.addEventListener('message', (e: MessageEvent) => {
-    if (e.source !== window || !e.data) return;
-
-    // Handle CDP automation detection from the MAIN world stack trace trap
-    if (e.data.type === MSG_CDP_DETECTED) {
-      // The MAIN world interceptor detected automation via stack trace analysis.
-      // Create a detection event and forward it to the background.
-      const { framework, detail, signals, timestamp } = e.data as {
-        framework: string;
-        detail: string;
-        signals: Record<string, unknown>;
-        timestamp: string;
-      };
-
-      const agentTypeMap: Record<string, import('../types/agent').AgentType> = {
-        playwright: 'playwright',
-        puppeteer: 'puppeteer',
-        selenium: 'selenium',
-        'anthropic-computer-use': 'anthropic-computer-use',
-        'openai-operator': 'openai-operator',
-      };
-      const agentType = agentTypeMap[framework] ?? 'cdp-generic';
-
-      const agent: import('../types/agent').AgentIdentity = {
-        id: crypto.randomUUID(),
-        type: agentType,
-        detectionMethods: ['framework-fingerprint'],
-        confidence: 'confirmed',
-        detectedAt: timestamp ?? new Date().toISOString(),
-        originUrl: window.location.href,
-        observedCapabilities: [],
-        isActive: true,
-      };
-
-      currentAgentId = agent.id;
-
-      const event: import('../types/events').DetectionEvent = {
-        id: crypto.randomUUID(),
-        timestamp: timestamp ?? new Date().toISOString(),
-        methods: ['framework-fingerprint'],
-        confidence: 'confirmed',
-        agent,
-        url: window.location.href,
-        signals: { ...signals, source: 'stack-trace-trap', detail },
-      };
-
-      sendToBackground('DETECTION_RESULT', event).catch(() => { /* ignore */ });
-      return;
-    }
-
-    // Relay network events from the MAIN world interceptor to background
-    if (e.data.type === MSG_NETWORK_EVENT) {
-      if (!e.data.nonce || e.data.nonce !== GUARD_NONCE) return;
-      sendToBackground('NETWORK_EVENT', e.data.event).catch(() => { /* ignore */ });
-      return;
-    }
-
-    if (e.data.type !== MSG_ACTION) return;
-    if (!e.data.nonce || e.data.nonce !== GUARD_NONCE) return;
-
-    const { capability, url, blocked, reason, timestamp } = e.data as {
-      capability: string;
-      url: string;
-      blocked: boolean;
-      reason: string;
-      timestamp: string;
-    };
-
-    if (blocked) {
-      const violation: BoundaryViolation = {
-        id: crypto.randomUUID(),
-        timestamp: timestamp ?? new Date().toISOString(),
-        agentId: currentAgentId ?? '',
-        attemptedAction: capability as BoundaryViolation['attemptedAction'],
-        url,
-        targetSelector: undefined,
-        blockingRuleId: getMonitorState().activeRule?.id ?? 'none',
-        reason,
-        userOverride: false,
-      };
-      sendToBackground('BOUNDARY_CHECK_REQUEST', violation).catch(() => { /* ignore */ });
-      showBlockedActionToast(capability, url, reason);
-    }
-  });
+  installMainWorldBridge();
 
   // Set up message listener for background communication
   chrome.runtime.onMessage.addListener(handleMessage);
@@ -305,11 +362,9 @@ function handleMessage(
 
     case 'ALLOW_ONCE': {
       const { capability, url } = message.data as { capability: string; url: string };
-      // Relay the allow-once signal to the MAIN world interceptor via postMessage.
-      window.postMessage(
-        { type: MSG_ALLOW_ONCE, nonce: GUARD_NONCE, capability, url },
-        '*'
-      );
+      // Relay the allow-once signal to the MAIN world interceptor via the
+      // private bridge port (no longer visible to other window listeners).
+      postToMainWorld({ type: MSG_ALLOW_ONCE, capability, url });
       sendResponse({ success: true });
       return false;
     }
