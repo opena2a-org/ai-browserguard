@@ -274,6 +274,7 @@ describe('anonymizeSession', () => {
       delegationRule: {
         id: 'rule-1',
         preset: 'limited',
+        agentId: null,
         scope: {
           sitePatterns: [
             { pattern: '*.example.com', action: 'allow' },

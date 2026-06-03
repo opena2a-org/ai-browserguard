@@ -13,14 +13,24 @@ import type { BoundaryAlert } from '../alerts/boundary';
 import type { SessionReport } from '../session/report';
 import { createInitialWizardState, renderWizard } from '../delegation/wizard';
 import type { WizardState } from '../delegation/wizard';
-import { createRuleFromPreset } from '../delegation/rules';
+import { createRuleFromPreset, FULL_ACCESS_MAX_MINUTES } from '../delegation/rules';
+import { selectEffectiveRule } from '../delegation/effective';
 import type { AIMAuthState } from '../aim/auth';
 import { getAIMAuthState } from '../aim/auth';
 import { triggerJsonDownload } from './download';
 
 interface PopupState {
   detectedAgents: AgentIdentity[];
+  /** The session-wide delegation rule shown in the delegation panel. */
   activeDelegation: DelegationRule | null;
+  /** All delegation rules, used to render per-agent grant state on each card. */
+  delegationRules: DelegationRule[];
+  /**
+   * Agent id whose "Allow Full Access" button is awaiting a second confirming
+   * click. Full Access is never granted on a single click. (window.confirm is
+   * avoided — it can dismiss an MV3 action popup.)
+   */
+  pendingFullAccessAgentId: string | null;
   killSwitchActive: boolean;
   recentViolations: BoundaryAlert[];
   sessions: AgentSession[];
@@ -41,6 +51,8 @@ interface PopupState {
 let popupState: PopupState = {
   detectedAgents: [],
   activeDelegation: null,
+  delegationRules: [],
+  pendingFullAccessAgentId: null,
   killSwitchActive: false,
   recentViolations: [],
   sessions: [],
@@ -82,11 +94,13 @@ async function queryBackgroundStatus(): Promise<void> {
       const data = response as {
         detectedAgents?: AgentIdentity[];
         activeDelegation?: DelegationRule | null;
+        delegationRules?: DelegationRule[];
         killSwitchActive?: boolean;
         recentViolations?: BoundaryAlert[];
       };
       popupState.detectedAgents = data.detectedAgents ?? [];
       popupState.activeDelegation = data.activeDelegation ?? null;
+      popupState.delegationRules = data.delegationRules ?? [];
       popupState.killSwitchActive = data.killSwitchActive ?? false;
       popupState.recentViolations = data.recentViolations ?? [];
       popupState.lifetimeStats = (data as { lifetimeStats?: LifetimeStats }).lifetimeStats ?? null;
@@ -458,7 +472,10 @@ function renderDetectionPanel(): void {
     // Common frameworks (Playwright, Puppeteer, Selenium) get a "Known tool" indicator.
     const KNOWN_TOOLS = new Set(['playwright', 'puppeteer', 'selenium']);
     const isKnownTool = KNOWN_TOOLS.has(agent.type);
-    const hasActiveDelegation = popupState.activeDelegation?.isActive === true;
+    // Per-agent: this agent is "managed" only if a rule is bound to THIS agent
+    // (or a session-wide rule applies), not because any delegation exists.
+    const agentRule = getActiveRuleForAgent(agent.id);
+    const hasActiveDelegation = agentRule !== null;
 
     const trustBadge = document.createElement('span');
     if (hasActiveDelegation && (isKnownTool || (agent.trustScore !== undefined && agent.trustScore < 0.3))) {
@@ -516,26 +533,74 @@ function renderDetectionPanel(): void {
     urlRow.title = agent.originUrl;
 
     const quickAllowRow = document.createElement('div');
-    quickAllowRow.style.cssText = 'display: flex; gap: 6px; margin-top: 6px;';
+    quickAllowRow.style.cssText = 'display: flex; gap: 6px; margin-top: 6px; align-items: center;';
 
-    const allowReadOnlyBtn = document.createElement('button');
-    allowReadOnlyBtn.type = 'button';
-    allowReadOnlyBtn.className = 'btn btn-secondary btn-sm';
-    allowReadOnlyBtn.textContent = 'Allow Read-Only';
-    allowReadOnlyBtn.addEventListener('click', () => {
-      onQuickAllowClick('readOnly');
-    });
+    if (agentRule) {
+      // This agent already has a grant. Show it (with its scope) and offer a
+      // revoke instead of re-presenting Allow buttons that imply no access.
+      const presetNames: Record<string, string> = {
+        readOnly: 'Read-Only', limited: 'Limited', fullAccess: 'Full Access',
+      };
+      const isSessionWide = agentRule.agentId === null;
+      const grantLabel = document.createElement('span');
+      grantLabel.style.cssText = 'font-size: 12px; color: var(--text-secondary); font-weight: 500;';
+      grantLabel.textContent = isSessionWide
+        ? `Session: ${presetNames[agentRule.preset] ?? agentRule.preset}`
+        : `Allowed: ${presetNames[agentRule.preset] ?? agentRule.preset}`;
+      quickAllowRow.appendChild(grantLabel);
 
-    const allowFullBtn = document.createElement('button');
-    allowFullBtn.type = 'button';
-    allowFullBtn.className = 'btn btn-primary btn-sm';
-    allowFullBtn.textContent = 'Allow Full Access';
-    allowFullBtn.addEventListener('click', () => {
-      onQuickAllowClick('fullAccess');
-    });
+      // Only a grant bound to THIS agent can be revoked from its card. A
+      // session-wide rule is managed from the delegation panel so revoking it
+      // here cannot silently change every other tab.
+      if (!isSessionWide) {
+        const revokeBtn = document.createElement('button');
+        revokeBtn.type = 'button';
+        revokeBtn.className = 'btn btn-secondary btn-sm';
+        revokeBtn.textContent = 'Revoke';
+        revokeBtn.style.marginLeft = 'auto';
+        revokeBtn.addEventListener('click', () => {
+          onRevokeAgentGrant(agentRule);
+        });
+        quickAllowRow.appendChild(revokeBtn);
+      } else {
+        grantLabel.title = 'Managed in the Session delegation panel below';
+      }
+    } else {
+      const allowReadOnlyBtn = document.createElement('button');
+      allowReadOnlyBtn.type = 'button';
+      allowReadOnlyBtn.className = 'btn btn-secondary btn-sm';
+      allowReadOnlyBtn.textContent = 'Allow Read-Only';
+      allowReadOnlyBtn.addEventListener('click', () => {
+        popupState.pendingFullAccessAgentId = null;
+        onQuickAllowClick('readOnly', agent.id);
+      });
 
-    quickAllowRow.appendChild(allowReadOnlyBtn);
-    quickAllowRow.appendChild(allowFullBtn);
+      const allowFullBtn = document.createElement('button');
+      allowFullBtn.type = 'button';
+      const awaitingConfirm = popupState.pendingFullAccessAgentId === agent.id;
+      if (awaitingConfirm) {
+        // Second click confirms and grants the time-bounded Full Access.
+        allowFullBtn.className = 'btn-danger-compact';
+        allowFullBtn.textContent = `Confirm Full Access (${FULL_ACCESS_MAX_MINUTES}m)`;
+        allowFullBtn.title =
+          `Grants click, type, submit, and script for ${FULL_ACCESS_MAX_MINUTES} minutes, to this agent only.`;
+        allowFullBtn.addEventListener('click', () => {
+          popupState.pendingFullAccessAgentId = null;
+          onQuickAllowClick('fullAccess', agent.id);
+        });
+      } else {
+        // First click arms the confirmation; it does not grant.
+        allowFullBtn.className = 'btn btn-primary btn-sm';
+        allowFullBtn.textContent = 'Allow Full Access';
+        allowFullBtn.addEventListener('click', () => {
+          popupState.pendingFullAccessAgentId = agent.id;
+          renderAll();
+        });
+      }
+
+      quickAllowRow.appendChild(allowReadOnlyBtn);
+      quickAllowRow.appendChild(allowFullBtn);
+    }
 
     card.appendChild(headerRow);
     card.appendChild(metaRow);
@@ -583,21 +648,48 @@ async function onResumeMonitoringClick(): Promise<void> {
   }
 }
 
-function onQuickAllowClick(preset: 'readOnly' | 'fullAccess'): void {
-  const rule = createRuleFromPreset(preset);
+/**
+ * The rule that currently governs a given detected agent — a rule bound to this
+ * agent id, else the session-wide rule. Uses the same resolver the background
+ * enforces with (selectEffectiveRule) so the card reflects what is enforced.
+ */
+function getActiveRuleForAgent(agentId: string): DelegationRule | null {
+  return selectEffectiveRule(popupState.delegationRules, agentId);
+}
 
-  // Optimistic update — same pattern as wizard activation.
-  popupState.activeDelegation = rule;
-  popupState.wizardState = null;
-  const wizardContainer = document.getElementById('wizard-container');
-  if (wizardContainer) {
-    wizardContainer.classList.add('hidden');
-    wizardContainer.replaceChildren();
-  }
+/**
+ * Grant a per-agent delegation. Full Access is gated by a two-step confirm in
+ * the card UI before this runs; the rule engine additionally time-bounds it.
+ */
+function onQuickAllowClick(preset: 'readOnly' | 'fullAccess', agentId: string): void {
+  const rule = createRuleFromPreset(preset, { agentId });
+
+  // Optimistic update — drop any prior grant for this same agent, add the new
+  // one, so the card re-renders as managed immediately.
+  popupState.delegationRules = [
+    ...popupState.delegationRules.filter((r) => r.agentId !== agentId),
+    rule,
+  ];
   renderAll();
 
   sendToBackground('DELEGATION_UPDATE', rule).catch((err) => {
     console.error('[AI Browser Guard] Failed to sync quick-allow to background:', err);
+  });
+}
+
+/**
+ * Revoke a per-agent grant by deactivating it and syncing to the background.
+ * A session-wide rule is revoked through the delegation panel, not here.
+ */
+function onRevokeAgentGrant(rule: DelegationRule): void {
+  const revoked: DelegationRule = { ...rule, isActive: false };
+  popupState.delegationRules = popupState.delegationRules.map((r) =>
+    r.id === rule.id ? revoked : r,
+  );
+  renderAll();
+
+  sendToBackground('DELEGATION_UPDATE', revoked).catch((err) => {
+    console.error('[AI Browser Guard] Failed to sync revoke to background:', err);
   });
 }
 

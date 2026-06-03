@@ -21,6 +21,15 @@ function generateId(): string {
   return crypto.randomUUID();
 }
 
+/**
+ * Maximum lifetime of a Full Access grant, in minutes.
+ *
+ * Full Access permits every capability, so it must not linger indefinitely or
+ * silently re-arm after a service-worker restart. Every Full Access rule is
+ * time-bounded to this ceiling so it expires on its own.
+ */
+export const FULL_ACCESS_MAX_MINUTES = 60;
+
 const READ_ONLY_CAPABILITIES: AgentCapability[] = ['navigate', 'read-dom'];
 const LIMITED_CAPABILITIES: AgentCapability[] = ['navigate', 'read-dom', 'click', 'type-text'];
 const ALL_CAPABILITIES: AgentCapability[] = [
@@ -45,6 +54,8 @@ export function createRuleFromPreset(
     sitePatterns?: SitePattern[];
     durationMinutes?: number;
     label?: string;
+    /** Bind this rule to a specific detected agent. Omit/null for session-wide. */
+    agentId?: string | null;
   }
 ): DelegationRule {
   const now = new Date();
@@ -75,13 +86,26 @@ export function createRuleFromPreset(
       break;
     }
 
-    case 'fullAccess':
+    case 'fullAccess': {
+      // Full Access is always time-bounded — it must expire rather than grant
+      // every capability indefinitely. Callers may shorten it but not exceed
+      // the ceiling, and may not disable the bound.
+      const durationMinutes = Math.min(
+        options?.durationMinutes ?? FULL_ACCESS_MAX_MINUTES,
+        FULL_ACCESS_MAX_MINUTES,
+      );
+      const expiresAt = new Date(now.getTime() + durationMinutes * 60000);
       scope = {
         sitePatterns: [],
         actionRestrictions: buildActionRestrictions(ALL_CAPABILITIES),
-        timeBound: null,
+        timeBound: {
+          durationMinutes,
+          grantedAt: now.toISOString(),
+          expiresAt: expiresAt.toISOString(),
+        },
       };
       break;
+    }
   }
 
   return {
@@ -89,6 +113,7 @@ export function createRuleFromPreset(
     preset,
     scope,
     createdAt: now.toISOString(),
+    agentId: options?.agentId ?? null,
     isActive: true,
     label: options?.label,
   };

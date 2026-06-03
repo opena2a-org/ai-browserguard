@@ -131,7 +131,7 @@ describe('updateSession', () => {
 describe('saveDelegationRules / getDelegationRules', () => {
   it('saves and retrieves rules', async () => {
     const rules = [
-      { id: 'r1', preset: 'readOnly' as const, scope: { sitePatterns: [], actionRestrictions: [], timeBound: null }, createdAt: '', isActive: true },
+      { id: 'r1', preset: 'readOnly' as const, agentId: null, scope: { sitePatterns: [], actionRestrictions: [], timeBound: null }, createdAt: '', isActive: true },
     ];
     await saveDelegationRules(rules);
     const retrieved = await getDelegationRules();
