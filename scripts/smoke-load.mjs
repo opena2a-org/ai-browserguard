@@ -47,24 +47,28 @@ async function main() {
 
     const extId = swTarget ? new URL(swTarget.url()).host : null;
 
-    // 2. Manifest has no externally_connectable
-    if (swTarget) {
-      const worker = await swTarget.worker();
-      const manifest = await worker.evaluate(() => chrome.runtime.getManifest());
-      if ('externally_connectable' in manifest) {
-        fail('manifest omits externally_connectable', `field present: ${JSON.stringify(manifest.externally_connectable)}`);
-      } else {
-        ok('manifest omits externally_connectable', `v${manifest.version}, default-closed`);
-      }
-    }
-
-    // 3. Popup renders core UI
+    // 2. + 3. Manifest + popup UI, both read from a stable extension-page
+    // context (the popup page). We deliberately avoid evaluating in the MV3
+    // service-worker handle: it can be terminated mid-run, leaving a dead
+    // context where `chrome` is undefined (flaky). An extension page is stable.
     if (extId) {
       const popup = await browser.newPage();
       const popupErrors = [];
       popup.on('pageerror', (e) => popupErrors.push(e.message));
       await popup.goto(`chrome-extension://${extId}/popup/index.html`, { waitUntil: 'domcontentloaded' });
       await new Promise((r) => setTimeout(r, 400)); // let popup.js paint
+
+      // Manifest has no externally_connectable (fetched from the extension origin).
+      const manifest = await popup.evaluate(async () => {
+        const res = await fetch(chrome.runtime.getURL('manifest.json'));
+        return res.json();
+      });
+      if ('externally_connectable' in manifest) {
+        fail('manifest omits externally_connectable', `field present: ${JSON.stringify(manifest.externally_connectable)}`);
+      } else {
+        ok('manifest omits externally_connectable', `v${manifest.version}, default-closed`);
+      }
+
       const ui = await popup.evaluate(() => ({
         title: document.querySelector('h1.header-title')?.textContent?.trim() ?? null,
         status: document.querySelector('#status-text')?.textContent?.trim() ?? null,
