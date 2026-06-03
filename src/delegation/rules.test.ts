@@ -7,6 +7,7 @@ import {
   isTimeBoundExpired,
   issueToken,
   revokeToken,
+  FULL_ACCESS_MAX_MINUTES,
 } from './rules';
 
 describe('createRuleFromPreset', () => {
@@ -47,11 +48,26 @@ describe('createRuleFromPreset', () => {
   it('creates a fullAccess rule with all capabilities allowed', () => {
     const rule = createRuleFromPreset('fullAccess');
     expect(rule.preset).toBe('fullAccess');
-    expect(rule.scope.timeBound).toBeNull();
 
     const blocked = rule.scope.actionRestrictions
       .filter((r) => r.action === 'block');
     expect(blocked).toHaveLength(0);
+  });
+
+  it('time-bounds fullAccess so it cannot grant everything indefinitely', () => {
+    const rule = createRuleFromPreset('fullAccess');
+    expect(rule.scope.timeBound).not.toBeNull();
+    expect(rule.scope.timeBound!.durationMinutes).toBe(FULL_ACCESS_MAX_MINUTES);
+  });
+
+  it('caps a requested fullAccess duration at the maximum', () => {
+    const rule = createRuleFromPreset('fullAccess', { durationMinutes: 10_000 });
+    expect(rule.scope.timeBound!.durationMinutes).toBe(FULL_ACCESS_MAX_MINUTES);
+  });
+
+  it('binds a rule to an agent when agentId is supplied (session-wide otherwise)', () => {
+    expect(createRuleFromPreset('readOnly').agentId).toBeNull();
+    expect(createRuleFromPreset('readOnly', { agentId: 'agent-42' }).agentId).toBe('agent-42');
   });
 
   it('defaults limited duration to 60 minutes when not specified', () => {

@@ -89,7 +89,22 @@ export interface DelegationRule {
   /** ISO 8601 timestamp when this rule was created. */
   createdAt: string;
 
-  /** Whether this rule is currently active. Only one rule can be active at a time. */
+  /**
+   * The detected agent this rule is bound to.
+   *
+   * - A string binds the rule to one specific detected agent (by `agent.id`).
+   *   It is enforced only in the tab where that agent is active, so allowing
+   *   one agent never grants access to another.
+   * - `null` is a session-wide rule (created by the delegation wizard) that
+   *   applies to any tab without a more specific per-agent rule.
+   *
+   * Multiple rules can be active at once: at most one per agent, plus at most
+   * one session-wide rule. A per-agent rule takes precedence over the
+   * session-wide rule in its tab.
+   */
+  agentId: string | null;
+
+  /** Whether this rule is currently active. */
   isActive: boolean;
 
   /** Optional label for this rule (e.g., "Banking session", "Development work"). */

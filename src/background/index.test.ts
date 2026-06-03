@@ -30,6 +30,7 @@ function makeDelegationRule(overrides?: Partial<DelegationRule>): DelegationRule
       timeBound: null,
     },
     createdAt: new Date().toISOString(),
+    agentId: null,
     isActive: true,
     label: 'Test Rule',
     ...overrides,

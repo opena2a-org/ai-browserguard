@@ -15,6 +15,7 @@ import { createTimelineEvent, appendEventToSession } from '../session/timeline';
 import { executeBackgroundKillSwitch, createInitialKillSwitchState } from '../killswitch/index';
 import type { KillSwitchState } from '../killswitch/index';
 import { isTimeBoundExpired } from '../delegation/rules';
+import { selectEffectiveRule, applyDelegationUpdate } from '../delegation/effective';
 import { setupNotificationHandlers, clearAllNotifications } from '../alerts/notification';
 import type { BoundaryAlert } from '../alerts/boundary';
 import { processBoundaryViolation, handleAllowOnce } from './handlers';
@@ -262,10 +263,12 @@ function handleMessage(
 
     case 'STATUS_QUERY': {
       const agents = Array.from(state.activeAgents.values());
-      const activeRule = state.delegationRules.find((r) => r.isActive) ?? null;
       sendResponse({
         detectedAgents: agents,
-        activeDelegation: activeRule,
+        // The popup's session-delegation panel shows the session-wide rule;
+        // per-agent grants are rendered on their agent cards from
+        // delegationRules below.
+        activeDelegation: getActiveSessionRule(),
         killSwitchActive: state.killSwitch.isActive,
         recentViolations: state.recentAlerts,
         delegationRules: state.delegationRules,
@@ -437,7 +440,7 @@ function handleMessage(
 
     case 'DOMAIN_WHITELIST': {
       const { domain } = message.data as { domain: string };
-      handleDomainWhitelist(domain).then(() => {
+      handleDomainWhitelist(tabId, domain).then(() => {
         sendResponse({ success: true });
       }).catch(() => {
         sendResponse({ success: false });
@@ -484,11 +487,12 @@ async function handleDetection(tabId: number, event: DetectionEvent): Promise<vo
 
   state.activeAgents.set(tabId, event.agent);
 
-  // Create a new session
+  // Create a new session. Attribute it to the rule that actually governs this
+  // tab's agent (per-agent rule if one exists, else the session-wide rule).
   const session: AgentSession = {
     id: crypto.randomUUID(),
     agent: event.agent,
-    delegationRule: state.delegationRules.find((r) => r.isActive) ?? null,
+    delegationRule: getEffectiveRuleForTab(tabId),
     events: [],
     startedAt: new Date().toISOString(),
     endedAt: null,
@@ -522,6 +526,14 @@ async function handleDetection(tabId: number, event: DetectionEvent): Promise<vo
 
   await saveSession(updatedSession);
   state.activeSessions.set(tabId, updatedSession.id);
+
+  // Push the tab's effective rule so a session-wide grant (or none) is enforced
+  // in the freshly-detecting tab without waiting for the next delegation change.
+  chrome.tabs.sendMessage(tabId, {
+    type: 'DELEGATION_UPDATE',
+    data: getEffectiveRuleForTab(tabId),
+    sentAt: new Date().toISOString(),
+  }).catch(() => { /* tab may not have a content script yet */ });
 
   // AIM + Registry trust lookup (non-blocking)
   enrichAgentTrust(tabId, event.agent).catch(() => { /* non-critical */ });
@@ -620,7 +632,7 @@ function handleAgentAction(tabId: number, event: AgentEvent): void {
 }
 
 function handleBoundaryViolation(tabId: number | undefined, violation: BoundaryViolation): void {
-  const activeRule = state.delegationRules.find((r) => r.isActive);
+  const activeRule = tabId !== undefined ? getEffectiveRuleForTab(tabId) : null;
   if (!activeRule) return;
 
   // processBoundaryViolation creates the alert, shows the notification, stores the pending
@@ -656,48 +668,65 @@ function handleBoundaryViolation(tabId: number | undefined, violation: BoundaryV
   updateLifetimeStats(() => state.lifetimeStats).catch(() => { /* non-critical */ });
 }
 
-async function handleDelegationUpdate(rule: DelegationRule): Promise<void> {
-  // Add or update the new rule first, then deactivate all others (atomic swap — avoids brief gap with no active rule)
-  const existingIndex = state.delegationRules.findIndex((r) => r.id === rule.id);
-  if (existingIndex >= 0) {
-    state.delegationRules[existingIndex] = rule;
-  } else {
-    state.delegationRules.push(rule);
-  }
+/**
+ * Resolve the delegation rule in effect for a given tab: the rule bound to the
+ * agent detected in this tab, else the session-wide rule, else none.
+ */
+function getEffectiveRuleForTab(tabId: number): DelegationRule | null {
+  const agentId = state.activeAgents.get(tabId)?.id ?? null;
+  return selectEffectiveRule(state.delegationRules, agentId);
+}
 
-  // Deactivate all rules except the new one
-  for (const r of state.delegationRules) {
-    if (r.id !== rule.id) {
-      r.isActive = false;
-    }
-  }
+/** The session-wide rule currently active, if any (for the popup panel). */
+function getActiveSessionRule(): DelegationRule | null {
+  return selectEffectiveRule(state.delegationRules, null);
+}
 
-  await saveDelegationRules(state.delegationRules);
-
-  // Broadcast to all content scripts
+/**
+ * Push each tab the rule that actually governs it. Sending the per-tab
+ * effective rule (rather than one global rule to everyone) is what keeps a
+ * grant for one agent from leaking into another agent's tab.
+ */
+async function broadcastEffectiveRules(): Promise<void> {
   const tabs = await chrome.tabs.query({});
   for (const tab of tabs) {
     if (tab.id === undefined) continue;
+    const effective = getEffectiveRuleForTab(tab.id);
     try {
       await chrome.tabs.sendMessage(tab.id, {
         type: 'DELEGATION_UPDATE',
-        data: rule,
+        data: effective,
         sentAt: new Date().toISOString(),
       });
     } catch {
       // Tab may not have content script
     }
   }
+}
+
+async function handleDelegationUpdate(rule: DelegationRule): Promise<void> {
+  // Add/replace the incoming rule and deactivate only prior rules in the SAME
+  // scope (same agent, or the single session-wide slot). Grants for other
+  // agents are left untouched — this is the fix for the "allow one agent grants
+  // all agents" bug.
+  state.delegationRules = applyDelegationUpdate(state.delegationRules, rule);
+
+  await saveDelegationRules(state.delegationRules);
+
+  // Route each tab its own effective rule.
+  await broadcastEffectiveRules();
 
   updateBadge();
 }
 
 /**
- * Add a *.domain allow pattern to the active delegation rule.
- * Called when the user clicks "Allow on [domain]" in a blocked-action toast.
+ * Add a *.domain allow pattern to the rule governing the requesting tab.
+ * Called when the user clicks "Allow on [domain]" in a blocked-action toast,
+ * which originates from a specific tab — so the whitelist is applied to that
+ * tab's effective rule, not to some other agent's grant.
  */
-async function handleDomainWhitelist(domain: string): Promise<void> {
-  const activeRule = state.delegationRules.find((r) => r.isActive);
+async function handleDomainWhitelist(tabId: number | undefined, domain: string): Promise<void> {
+  const activeRule = tabId !== undefined ? getEffectiveRuleForTab(tabId) : null;
   if (!activeRule) return;
 
   const pattern = `*.${domain}`;
@@ -712,20 +741,8 @@ async function handleDomainWhitelist(domain: string): Promise<void> {
 
   await saveDelegationRules(state.delegationRules);
 
-  // Broadcast updated rule to all content scripts
-  const tabs = await chrome.tabs.query({});
-  for (const tab of tabs) {
-    if (tab.id === undefined) continue;
-    try {
-      await chrome.tabs.sendMessage(tab.id, {
-        type: 'DELEGATION_UPDATE',
-        data: activeRule,
-        sentAt: new Date().toISOString(),
-      });
-    } catch {
-      // Tab may not have content script
-    }
-  }
+  // Re-route each tab its effective rule (this one now has the new pattern).
+  await broadcastEffectiveRules();
 }
 
 async function executeKillSwitch(
@@ -874,26 +891,16 @@ async function checkDelegationExpiration(): Promise<void> {
     if (rule.isActive && isTimeBoundExpired(rule.scope.timeBound)) {
       rule.isActive = false;
       changed = true;
-
-      // Notify content scripts
-      const tabs = await chrome.tabs.query({});
-      for (const tab of tabs) {
-        if (tab.id === undefined) continue;
-        try {
-          await chrome.tabs.sendMessage(tab.id, {
-            type: 'DELEGATION_UPDATE',
-            data: null,
-            sentAt: new Date().toISOString(),
-          });
-        } catch {
-          // Tab may not have content script
-        }
-      }
     }
   }
 
   if (changed) {
     await saveDelegationRules(state.delegationRules);
+    // Re-route each tab its effective rule. Broadcasting a blanket `null` here
+    // would drop OTHER agents' still-valid grants (and any session-wide
+    // fallback) to pass-through — the per-agent isolation must hold on expiry,
+    // not just on grant.
+    await broadcastEffectiveRules();
     updateBadge();
   }
 }
