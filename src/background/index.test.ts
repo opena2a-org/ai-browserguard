@@ -94,6 +94,20 @@ describe('processBoundaryViolation', () => {
     expect(chromeMock.notifications.create).toHaveBeenCalledTimes(1);
   });
 
+  it('suppresses the Chrome notification when notificationsEnabled is false (regression)', () => {
+    const rule = makeDelegationRule();
+    const violation = makeViolation();
+    const sessions = new Map<number, string>();
+
+    const alert = processBoundaryViolation(1, violation, rule, sessions, false);
+
+    // No system notification, but the alert is still produced (badge/timeline/toast paths run).
+    expect(chromeMock.notifications.create).not.toHaveBeenCalled();
+    expect(alert).toBeTruthy();
+    // And no pending override is stored, since there is no notification to act on.
+    expect(pendingOverrides.size).toBe(0);
+  });
+
   it('stores a pending override keyed by the notification ID when tabId is provided', () => {
     const rule = makeDelegationRule();
     // Use 'navigate' (severity: medium) to meet the default minimumSeverity: 'medium' threshold.

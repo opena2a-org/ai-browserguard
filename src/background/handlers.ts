@@ -42,11 +42,15 @@ export function processBoundaryViolation(
   tabId: number | undefined,
   violation: BoundaryViolation,
   activeRule: DelegationRule,
-  activeSessions: Map<number, string>
+  activeSessions: Map<number, string>,
+  notificationsEnabled = true
 ): BoundaryAlert {
   const alert = createBoundaryAlert(violation, activeRule);
 
-  const notificationId = showBoundaryNotification(alert);
+  // Honor the user's "Notifications" setting. When disabled, no Chrome
+  // notification is shown (showBoundaryNotification returns null), but the
+  // timeline event, badge, and in-page toast paths still run.
+  const notificationId = showBoundaryNotification(alert, { enabled: notificationsEnabled });
 
   // Store the pending override so the notification button handler can act on it.
   if (notificationId !== null && tabId !== undefined) {
