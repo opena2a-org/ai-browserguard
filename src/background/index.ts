@@ -8,7 +8,7 @@ import type { MessagePayload, DetectionEvent, KillSwitchEvent, AgentEvent, Bound
 import type { AgentIdentity } from '../types/agent';
 import type { DelegationRule } from '../types/delegation';
 import type { AgentSession } from '../session/types';
-import { getStorageState, saveSession, updateSession, saveDelegationRules, appendDetectionLog, updateSettings, getLifetimeStats, updateLifetimeStats, getKillSwitchState, saveKillSwitchState } from '../session/storage';
+import { getStorageState, saveSession, updateSession, saveDelegationRules, appendDetectionLog, updateSettings, getSettings, getLifetimeStats, updateLifetimeStats, getKillSwitchState, saveKillSwitchState } from '../session/storage';
 import type { LifetimeStats } from '../session/types';
 import { DEFAULT_LIFETIME_STATS } from '../session/types';
 import { createTimelineEvent, appendEventToSession } from '../session/timeline';
@@ -39,6 +39,8 @@ interface BackgroundState {
   killSwitch: KillSwitchState;
   recentAlerts: BoundaryAlert[];
   lifetimeStats: LifetimeStats;
+  /** Cached copy of settings.notificationsEnabled (refreshed on SETTINGS_UPDATE). */
+  notificationsEnabled: boolean;
   /**
    * Epoch ms of the most recent block. Drives the transient "!" icon badge
    * that surfaces a block to the user even if they missed the toast. Cleared
@@ -54,6 +56,7 @@ const state: BackgroundState = {
   killSwitch: createInitialKillSwitchState(),
   recentAlerts: [],
   lifetimeStats: { ...DEFAULT_LIFETIME_STATS },
+  notificationsEnabled: true,
   lastBlockAt: null,
 };
 
@@ -119,6 +122,7 @@ async function loadPersistedState(): Promise<void> {
   // Rehydrate the latched kill switch. Without this, an MV3 idle-timeout would
   // reconstruct it as inactive and silently lift the block (fail-open).
   state.killSwitch = await getKillSwitchState();
+  state.notificationsEnabled = stored.settings.notificationsEnabled;
 
   // Check for active sessions that may have survived a restart
   for (const session of stored.sessions) {
@@ -255,7 +259,10 @@ function handleMessage(
 
     case 'SETTINGS_UPDATE': {
       const updates = message.data as Record<string, unknown>;
-      updateSettings(updates).then(() => {
+      updateSettings(updates).then(() => getSettings()).then((settings) => {
+        // Keep the hot-path cache in sync so the Notifications toggle takes
+        // effect immediately without a service-worker restart.
+        state.notificationsEnabled = settings.notificationsEnabled;
         sendResponse({ success: true });
       }).catch(() => {
         sendResponse({ success: false });
@@ -594,7 +601,7 @@ function handleBoundaryViolation(tabId: number | undefined, violation: BoundaryV
 
   // processBoundaryViolation creates the alert, shows the notification, stores the pending
   // override, and logs the timeline event.
-  const alert = processBoundaryViolation(tabId, violation, activeRule, state.activeSessions);
+  const alert = processBoundaryViolation(tabId, violation, activeRule, state.activeSessions, state.notificationsEnabled);
 
   state.recentAlerts.push(alert);
   if (state.recentAlerts.length > 20) {
