@@ -177,6 +177,24 @@ describe('evaluateSitePatterns', () => {
     ).toBe(false);
   });
 
+  // Regression: `**` must match across labels at the authoritative delegation
+  // layer. The previous local matcher substituted `**` -> `.*` before the
+  // single-`*` pass, which then corrupted the `*` in `.*` into `[^.]*` — so a
+  // grant like `**.example.com` silently failed to cover deep subdomains (and a
+  // `**.evil.com` block left them unblocked). The shared matcher uses a sentinel
+  // so cross-label matching holds.
+  it('matches deep subdomains for a `**` pattern (cross-label)', () => {
+    const patterns = [{ pattern: '**.example.com', action: 'allow' as const }];
+    expect(evaluateSitePatterns('https://sub.example.com', patterns, 'block').allowed).toBe(true);
+    expect(evaluateSitePatterns('https://deep.sub.example.com', patterns, 'block').allowed).toBe(true);
+  });
+
+  it('keeps single-`*` within one label (does not cross dots)', () => {
+    const patterns = [{ pattern: '*.example.com', action: 'allow' as const }];
+    expect(evaluateSitePatterns('https://sub.example.com', patterns, 'block').allowed).toBe(true);
+    expect(evaluateSitePatterns('https://deep.sub.example.com', patterns, 'block').allowed).toBe(false);
+  });
+
   // ---------------------------------------------------------------------
   // ReDoS regression: a pattern with many consecutive wildcards like
   // `*****...` previously compiled to `.*.*.*.*` against which a long URL

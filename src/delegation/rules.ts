@@ -16,6 +16,7 @@ import type {
   TimeBound,
 } from '../types/delegation';
 import type { AgentCapability } from '../types/agent';
+import { matchUrlPattern } from '../url/match-pattern';
 
 function generateId(): string {
   return crypto.randomUUID();
@@ -167,7 +168,7 @@ export function evaluateSitePatterns(
   defaultAction: 'allow' | 'block'
 ): { allowed: boolean; matchedPattern: SitePattern | null } {
   for (const pattern of patterns) {
-    if (matchGlob(url, pattern.pattern)) {
+    if (matchUrlPattern(url, pattern.pattern)) {
       return {
         allowed: pattern.action === 'allow',
         matchedPattern: pattern,
@@ -175,43 +176,6 @@ export function evaluateSitePatterns(
     }
   }
   return { allowed: defaultAction === 'allow', matchedPattern: null };
-}
-
-/**
- * Match a URL against a glob pattern.
- */
-function matchGlob(url: string, pattern: string): boolean {
-  try {
-    // Collapse runs of 3+ wildcards down to two BEFORE the regex build.
-    // A pattern like `*****` would otherwise compile to `.*.*.*.*.*`, which
-    // is a classic ReDoS catastrophic-backtracking shape against long URLs.
-    // Two stars (`**`) already covers "match anything", so the collapse is
-    // semantics-preserving.
-    const collapsed = pattern.replace(/\*{3,}/g, '**');
-
-    // If pattern doesn't contain protocol, match against hostname
-    if (!collapsed.includes('://')) {
-      const parsedUrl = new URL(url);
-      const hostname = parsedUrl.hostname;
-      // Convert glob to regex: * matches any characters except dots in domain context
-      const regexStr = collapsed
-        .replace(/\./g, '\\.')
-        .replace(/\*\*/g, '.*')
-        .replace(/\*/g, '[^.]*');
-      return new RegExp(`^${regexStr}$`).test(hostname);
-    }
-
-    // Full URL pattern matching. The escape class includes `?` so that a
-    // literal `?` in a URL pattern (which is a regex zero-or-one metacharacter)
-    // does not silently widen the match. `*` is intentionally not escaped here
-    // — the next replace converts `\*` back into `.*` for glob semantics.
-    const regexStr = collapsed
-      .replace(/[.+^${}()|[\]\\?]/g, '\\$&')
-      .replace(/\\\*/g, '.*');
-    return new RegExp(`^${regexStr}$`).test(url);
-  } catch {
-    return false;
-  }
 }
 
 /**
