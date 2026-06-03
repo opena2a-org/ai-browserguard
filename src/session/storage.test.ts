@@ -10,6 +10,8 @@ import {
   getSettings,
   updateSettings,
   clearAllStorage,
+  getKillSwitchState,
+  saveKillSwitchState,
 } from './storage';
 import { DEFAULT_SETTINGS, CURRENT_STORAGE_SCHEMA_VERSION } from './types';
 import type { AgentSession } from './types';
@@ -169,6 +171,42 @@ describe('clearAllStorage', () => {
     await clearAllStorage();
     const state = await getStorageState();
     expect(state.sessions).toEqual([]);
+  });
+});
+
+describe('kill-switch persistence (regression: fail-open on SW restart)', () => {
+  it('defaults to inactive when nothing is persisted', async () => {
+    await clearAllStorage();
+    const ks = await getKillSwitchState();
+    expect(ks.isActive).toBe(false);
+    expect(ks.lastEvent).toBeNull();
+    expect(ks.lastActivatedAt).toBeNull();
+  });
+
+  it('round-trips an active kill switch so a restart can rehydrate it', async () => {
+    await clearAllStorage();
+    await saveKillSwitchState({
+      isActive: true,
+      lastEvent: null,
+      lastActivatedAt: '2026-06-03T00:00:00.000Z',
+    });
+    // Simulates a fresh service-worker cold start reading persisted state.
+    const ks = await getKillSwitchState();
+    expect(ks.isActive).toBe(true);
+    expect(ks.lastActivatedAt).toBe('2026-06-03T00:00:00.000Z');
+  });
+
+  it('persists a reset so a later restart does not re-arm', async () => {
+    await saveKillSwitchState({ isActive: true, lastEvent: null, lastActivatedAt: 'x' });
+    await saveKillSwitchState({ isActive: false, lastEvent: null, lastActivatedAt: null });
+    const ks = await getKillSwitchState();
+    expect(ks.isActive).toBe(false);
+  });
+
+  it('falls back to inactive on a corrupt persisted value', async () => {
+    await chrome.storage.local.set({ killSwitchState: 'not-an-object' });
+    const ks = await getKillSwitchState();
+    expect(ks.isActive).toBe(false);
   });
 });
 
