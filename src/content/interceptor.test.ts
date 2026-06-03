@@ -167,18 +167,22 @@ describe('matchesPattern — hostname patterns (no ://)', () => {
  * The tests below document this actual runtime behaviour.
  */
 describe('matchesPattern — full URL patterns (contain ://)', () => {
-  it('matches the base URL when the pattern ends with /* (zero slashes)', () => {
-    // /* in regex = zero or more '/' → base URL without trailing slash matches
-    expect(matchesPattern('https://example.com', 'https://example.com/*')).toBe(true);
-  });
-
   it('matches the base URL with a single trailing slash', () => {
     expect(matchesPattern('https://example.com/', 'https://example.com/*')).toBe(true);
   });
 
-  it('does not match a path with non-slash characters after the domain (implementation limitation)', () => {
-    // /* does not act as a glob — /foo/bar does not satisfy the quantifier
-    expect(matchesPattern('https://example.com/foo/bar', 'https://example.com/*')).toBe(false);
+  it('globs the full path under the origin when the pattern ends with /*', () => {
+    // `*` in a full-URL pattern is a glob (`.*`) and matches any path depth —
+    // previously it was a broken regex quantifier on `/` (matched only the bare
+    // origin / trailing slash), which silently under-matched real paths.
+    expect(matchesPattern('https://example.com/foo', 'https://example.com/*')).toBe(true);
+    expect(matchesPattern('https://example.com/foo/bar', 'https://example.com/*')).toBe(true);
+  });
+
+  it('matches a bare origin against /* (URL normalization adds the path "/")', () => {
+    // `new URL('https://example.com').href` === 'https://example.com/', which the
+    // browser is what actually navigates, so it is in scope for `/*`.
+    expect(matchesPattern('https://example.com', 'https://example.com/*')).toBe(true);
   });
 
   it('does not match a different scheme', () => {

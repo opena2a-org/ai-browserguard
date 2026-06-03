@@ -10,6 +10,7 @@ import type { AgentEvent, BoundaryViolation } from '../types/events';
 import type { DelegationRule } from '../types/delegation';
 import { evaluateRule, isTimeBoundExpired } from '../delegation/rules';
 import { createTimelineEvent } from '../session/timeline';
+import { matchUrlPattern } from '../url/match-pattern';
 
 export interface MonitorState {
   activeRule: DelegationRule | null;
@@ -80,26 +81,12 @@ export function checkBoundary(
 
 /**
  * Match a URL against a site pattern using glob-style matching.
+ *
+ * Delegates to the shared hardened matcher so the monitor, the interceptor, and
+ * delegation-rule evaluation agree exactly (ReDoS guard + literal `?`).
  */
 export function matchSitePattern(url: string, pattern: string): boolean {
-  try {
-    if (!pattern.includes('://')) {
-      const parsedUrl = new URL(url);
-      const hostname = parsedUrl.hostname;
-      const regexStr = pattern
-        .replace(/\./g, '\\.')
-        .replace(/\*\*/g, '\x00')
-        .replace(/\*/g, '[^.]*')
-        .replace(/\x00/g, '.*');
-      return new RegExp(`^${regexStr}$`).test(hostname);
-    }
-    const regexStr = pattern
-      .replace(/[.+^${}()|[\]\\]/g, '\\$&')
-      .replace(/\\\*/g, '.*');
-    return new RegExp(`^${regexStr}$`).test(url);
-  } catch {
-    return false;
-  }
+  return matchUrlPattern(url, pattern);
 }
 
 function mapEventToCapability(eventType: string): AgentCapability | null {

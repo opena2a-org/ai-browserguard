@@ -24,6 +24,7 @@
  */
 
 import { installNetworkInterceptor } from './network-interceptor';
+import { matchUrlPattern } from '../url/match-pattern';
 import {
   MSG_BRIDGE_BOOTSTRAP,
   MSG_RULE_UPDATE,
@@ -121,25 +122,13 @@ function consumeAllowedOnce(capability: string, url: string): boolean {
   return false;
 }
 
-/** Glob-style URL pattern matching (mirrors monitor.ts matchSitePattern). */
+/**
+ * Glob-style URL pattern matching. Delegates to the shared hardened matcher so
+ * the MAIN-world interceptor agrees exactly with the boundary monitor and
+ * delegation-rule evaluation (ReDoS guard + literal `?`).
+ */
 export function matchesPattern(url: string, pattern: string): boolean {
-  try {
-    if (!pattern.includes('://')) {
-      const hostname = new URL(url).hostname;
-      const regexStr = pattern
-        .replace(/\./g, '\\.')
-        .replace(/\*\*/g, '\x00') // placeholder to protect double-star from single-star pass
-        .replace(/\*/g, '[^.]*')
-        .replace(/\x00/g, '.*');  // restore double-star as any-depth wildcard
-      return new RegExp(`^${regexStr}$`).test(hostname);
-    }
-    const regexStr = pattern
-      .replace(/[.+^${}()|[\]\\]/g, '\\$&')
-      .replace(/\\\*/g, '.*');
-    return new RegExp(`^${regexStr}$`).test(url);
-  } catch {
-    return false;
-  }
+  return matchUrlPattern(url, pattern);
 }
 
 /**
