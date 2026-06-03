@@ -4,7 +4,7 @@
 AI Browser Guard
 
 ## Short Description (132 chars max)
-[BETA] Detect and control AI agents in your browser. Kill switch, delegation rules, boundary alerts. Local-only, zero tracking.
+[BETA] Detect and control AI agents in your browser. Kill switch, delegation rules, boundary alerts. Local-first, no tracking.
 
 ## Detailed Description
 
@@ -42,13 +42,15 @@ FIVE CORE FEATURES
 
 PRIVACY
 
-All processing happens locally on your device. Zero network requests. No analytics, no tracking, no data collection. Session logs and settings are stored in chrome.storage.local and deleted when you uninstall.
+By default, all processing happens locally on your device and the extension makes zero network requests. No analytics, no telemetry, no tracking. Session logs and settings are stored in chrome.storage.local and deleted when you uninstall.
+
+Three optional community-intelligence features are off by default and only send data after you explicitly enable them: AIM identity lookup and registry trust lookup (which send only the detected agent type, such as "playwright", to look up a trust score), and anonymized contribution (which shares anonymized detection summaries to improve community threat intelligence). None of these transmit your URLs, page content, keystrokes, or identity, and each can be turned off with one click.
 
 See full privacy policy: https://opena2a.org/aibrowserguard/privacy
 
 PERMISSIONS EXPLAINED
 
-This extension requires host access to all URLs because AI agents can operate on any website. Detection content scripts must run on every page to provide coverage. The extension makes no network requests and processes all data locally.
+This extension requires host access to all URLs because AI agents can operate on any website. Detection content scripts must run on every page to provide coverage. By default the extension makes no network requests; the only outbound requests are the optional, off-by-default community-intelligence features described under PRIVACY.
 
 ABOUT OPENA2A
 
@@ -98,6 +100,12 @@ Required to schedule periodic checks for delegation rule expiration and detectio
 
 ### notifications
 Required to alert the user when an AI agent attempts an action that violates the active delegation rules.
+
+### debugger
+Required to detect when an automation framework (Playwright, Puppeteer) attaches a Chrome DevTools Protocol (CDP) debugger to the browser. CDP attachment is one of the core, hard-to-spoof signals that an AI agent has taken control. The extension uses this permission only to observe debugger attachment for detection; it does not read page content or inject code through the debugger.
+
+### downloads
+Required to save a session report as a JSON file when the user chooses to export it from the popup. Used only for user-initiated exports.
 
 ### host_permissions (<all_urls>)
 AI agents can operate on any website. The detection content script must run on all pages to identify automation frameworks (WebDriver flags, CDP markers, behavioral patterns). Limiting to specific domains would leave users unprotected on unlisted sites. No page content is read or transmitted; only automation indicators are analyzed locally.

@@ -1,8 +1,9 @@
 {
   "manifest_version": 3,
   "name": "AI Browser Guard",
-  "version": "0.4.1",
+  "version": "0.4.2",
   "description": "Detect, monitor, and control AI agents operating in your browser",
+  "homepage_url": "https://opena2a.org/aibrowserguard",
   "permissions": [
     "storage",
     "alarms",

@@ -1,7 +1,15 @@
 # ADR-003: Local-Only Processing With Zero Network Requests
 
-**Status:** Accepted
+**Status:** Superseded by [ADR-006](006-opt-in-network-features.md) (2026-06-02)
 **Date:** 2026-02-27
+
+> **Note (2026-06-02):** The absolute "zero network requests" claim in this ADR
+> is superseded by ADR-006. The extension still makes **zero network requests by
+> default**, but three optional, consent-gated community-intelligence features
+> (AIM lookup, registry lookup, anonymized contribution) can be enabled by the
+> user. The local-only engineering measures below (self-hosted fonts, no external
+> scripts, no analytics SDKs) remain in force. See ADR-006 for the accurate
+> network posture.
 
 ## Context
 

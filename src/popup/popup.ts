@@ -15,7 +15,7 @@ import { createInitialWizardState, renderWizard } from '../delegation/wizard';
 import type { WizardState } from '../delegation/wizard';
 import { createRuleFromPreset } from '../delegation/rules';
 import type { AIMAuthState } from '../aim/auth';
-import { getAIMAuthState, loginToAIM, logoutFromAIM, isTokenExpired } from '../aim/auth';
+import { getAIMAuthState } from '../aim/auth';
 import { triggerJsonDownload } from './download';
 
 interface PopupState {

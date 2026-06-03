@@ -29,10 +29,10 @@
 </head>
 <body>
   <h1>AI Browser Guard - Privacy Policy</h1>
-  <p class="last-updated">Last updated: February 27, 2026</p>
+  <p class="last-updated">Last updated: June 2, 2026</p>
 
   <div class="highlight">
-    <p><strong>Summary:</strong> AI Browser Guard processes all data locally on your device. No data is collected, transmitted, or shared with any external server, third party, or analytics service.</p>
+    <p><strong>Summary:</strong> By default, AI Browser Guard processes all data locally on your device and makes zero network requests. There is no analytics, telemetry, or tracking. The extension also offers optional community-intelligence features (trust lookups and anonymized contribution) that are turned <strong>off by default</strong> and send data only after you explicitly opt in. When enabled, they transmit only a detected agent type and anonymized detection summaries -- never your URLs, page content, keystrokes, or identity.</p>
   </div>
 
   <h2>1. What This Extension Does</h2>
@@ -45,15 +45,24 @@
     <li>A session timeline logging agent activity</li>
   </ul>
 
-  <h2>2. Data We Collect</h2>
+  <h2>2. Data We Process Locally</h2>
   <p><strong>We do not collect any personal data.</strong></p>
-  <p>The extension processes the following information entirely on your local device:</p>
+  <p>The extension processes the following information entirely on your local device. By default none of it leaves your browser:</p>
   <ul>
-    <li><strong>Detection signals:</strong> Browser automation indicators such as <code>navigator.webdriver</code> flags, CDP markers, and event timing patterns. These are analyzed locally and never transmitted.</li>
+    <li><strong>Detection signals:</strong> Browser automation indicators such as <code>navigator.webdriver</code> flags, CDP markers, and event timing patterns. These are analyzed locally.</li>
     <li><strong>Session logs:</strong> A chronological record of detected agent actions (timestamps, action types, target URLs, CSS selectors, and outcomes). The last 5 sessions are stored locally.</li>
     <li><strong>Delegation rules:</strong> Access control rules you configure (presets, site patterns, time bounds). Stored locally in <code>chrome.storage.local</code>.</li>
     <li><strong>Violation records:</strong> Logs of boundary violations (what was attempted, which rule blocked it). Stored locally, limited to the 100 most recent entries.</li>
   </ul>
+
+  <h2>2a. Optional Community-Intelligence Features (Off by Default)</h2>
+  <p>The extension includes three optional features that communicate with OpenA2A servers. <strong>All three are disabled by default.</strong> A fresh install makes zero network requests. Each feature only sends data after you explicitly enable it, and you can turn it off again at any time with one click.</p>
+  <ul>
+    <li><strong>AIM identity lookup</strong> (setting <code>aimLookupEnabled</code>, default off): when an agent is detected, the extension can query <code>aim.opena2a.org</code> for a published identity and trust score for that <em>agent type</em>. The request contains only the detected agent type string (for example <code>playwright</code>). The page origin is used only as a local cache key and is never sent.</li>
+    <li><strong>Registry trust lookup</strong> (setting <code>registryLookupEnabled</code>, default off): the extension can query <code>api.oa2a.org</code> for a registry trust score for the detected agent type. The request contains only the detected agent type string.</li>
+    <li><strong>Anonymized contribution</strong> (consent default off, with a one-time tip after 5 detections that you can dismiss): if you opt in, the extension can send anonymized detection and behavior summaries to <code>api.oa2a.org</code> to improve community threat intelligence. Each contribution contains an anonymous contributor token (derived from the extension ID, for deduplication only -- it does not identify you), the detected framework name, detection summaries (agents found, framework types), behavior summaries (interaction count, success rate, anomaly count), the extension version, and timestamps.</li>
+  </ul>
+  <p>These features never transmit your URLs, page content, form data, keystrokes, cookies, authentication tokens, personal identity, or browsing history. To enable or disable them, use the extension settings. Disabling a feature stops all outbound requests for it immediately; disabling contribution also clears any queued events.</p>
 
   <h2>3. How Data Is Stored</h2>
   <p>All data is stored in <code>chrome.storage.local</code>, which is a browser-provided storage mechanism that keeps data on your device only. Data is not synced across devices.</p>
@@ -65,32 +74,34 @@
   </ul>
   <p>Uninstalling the extension deletes all stored data.</p>
 
-  <h2>4. Data We Do NOT Collect</h2>
+  <h2>4. Data We NEVER Collect or Transmit</h2>
+  <p>Regardless of which optional features you enable, the extension never collects or transmits:</p>
   <ul>
     <li>No personal information (name, email, account credentials)</li>
-    <li>No browsing history beyond what is logged in the session timeline</li>
-    <li>No page content, form data, or user input</li>
+    <li>No browsing history, full URLs, or page content</li>
+    <li>No form data, keystrokes, or user input</li>
     <li>No cookies, authentication tokens, or session identifiers</li>
-    <li>No analytics, telemetry, or usage statistics</li>
+    <li>No usage analytics, behavioral telemetry, or tracking</li>
     <li>No crash reports or error telemetry</li>
   </ul>
 
   <h2>5. Network Communication</h2>
-  <p><strong>This extension makes zero network requests.</strong> All detection, analysis, and enforcement happens locally in your browser. There are no external API calls, no update checks beyond Chrome's built-in extension update mechanism, and no data transmission of any kind.</p>
+  <p><strong>By default, this extension makes zero network requests.</strong> All detection, analysis, and enforcement happens locally in your browser, and there are no update checks beyond Chrome's built-in extension update mechanism.</p>
+  <p>The only outbound network requests the extension can make are the three optional, off-by-default community-intelligence features described in section 2a (AIM identity lookup to <code>aim.opena2a.org</code>, registry trust lookup to <code>api.oa2a.org</code>, and anonymized contribution to <code>api.oa2a.org</code>). None of these run unless you explicitly enable them, and each can be turned off again at any time. There is no analytics or telemetry of any kind.</p>
 
   <h2>6. Permissions Explained</h2>
   <p>The extension requests the following Chrome permissions:</p>
   <ul>
-    <li><strong>activeTab:</strong> Access the currently active tab to detect automation and enforce delegation rules.</li>
     <li><strong>storage:</strong> Store session logs, delegation rules, and settings locally on your device.</li>
-    <li><strong>alarms:</strong> Schedule periodic checks for delegation rule expiration.</li>
-    <li><strong>tabs:</strong> Monitor tab navigation to detect agent activity across tabs and broadcast kill switch commands.</li>
+    <li><strong>alarms:</strong> Schedule periodic checks for delegation rule expiration and detection sweeps.</li>
     <li><strong>notifications:</strong> Display boundary violation alerts when an agent attempts unauthorized actions.</li>
-    <li><strong>host_permissions (&lt;all_urls&gt;):</strong> The content script must run on all pages to detect automation frameworks, since AI agents can operate on any website. Detection cannot be limited to specific domains without losing coverage.</li>
+    <li><strong>debugger:</strong> Detect when an automation framework (Playwright, Puppeteer) attaches a Chrome DevTools Protocol debugger to the browser. This is a core detection signal. The extension does not use the debugger to read page content or inject code.</li>
+    <li><strong>downloads:</strong> Save a session report as a JSON file when you choose to export it.</li>
+    <li><strong>host_permissions (&lt;all_urls&gt;):</strong> The content script must run on all pages to detect automation frameworks, since AI agents can operate on any website. Detection cannot be limited to specific domains without losing coverage. Page content is analyzed locally and is never transmitted.</li>
   </ul>
 
   <h2>7. Third-Party Services</h2>
-  <p>This extension does not use, integrate with, or transmit data to any third-party services, APIs, analytics platforms, or advertising networks.</p>
+  <p>This extension does not use or integrate with any third-party analytics platforms, advertising networks, or trackers. The only servers it can contact -- and only when you opt into the features in section 2a -- are OpenA2A's own <code>aim.opena2a.org</code> and <code>api.oa2a.org</code>.</p>
 
   <h2>8. Children's Privacy</h2>
   <p>This extension does not knowingly collect any information from anyone, including children under 13. Since no personal data is collected, COPPA considerations do not apply.</p>
