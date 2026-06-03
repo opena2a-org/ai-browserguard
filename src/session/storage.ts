@@ -28,6 +28,34 @@ const DEFAULT_STORAGE: StorageSchema = {
 const CORRUPTION_LOG_KEY = '__corrupted_state';
 const MAX_CORRUPTION_LOG_ENTRIES = 50;
 
+/**
+ * Serialize read-modify-write storage operations within this realm.
+ *
+ * chrome.storage.local has no atomic read-modify-write primitive. Functions
+ * like saveSession / appendDetectionLog read the whole array, mutate it, then
+ * write it back. When two such operations run concurrently in the same context
+ * — e.g. the service worker handling several CDP detections at once — they read
+ * the same base state and the second write clobbers the first, silently losing
+ * sessions and detection-log entries.
+ *
+ * A promise-chain mutex makes every guarded operation run to completion before
+ * the next begins, eliminating the intra-realm interleaving race. (Cross-realm
+ * writes from the popup remain rare and read-mostly; the service worker is the
+ * sole high-frequency writer.)
+ */
+let storageWriteChain: Promise<unknown> = Promise.resolve();
+
+function withStorageLock<T>(operation: () => Promise<T>): Promise<T> {
+  const run = storageWriteChain.then(operation, operation);
+  // Keep the chain alive whether the operation resolves or rejects, and never
+  // let a prior rejection propagate into the next queued operation.
+  storageWriteChain = run.then(
+    () => undefined,
+    () => undefined,
+  );
+  return run;
+}
+
 interface CorruptionLogEntry {
   timestamp: string;
   key: string;
@@ -276,17 +304,19 @@ export async function getStorageState(): Promise<StorageSchema> {
  * Enforces the limit of 5 sessions by evicting the oldest.
  */
 export async function saveSession(session: AgentSession): Promise<void> {
-  try {
-    const state = await getStorageState();
-    const sessions = [session, ...state.sessions];
-    const maxSessions = state.settings.maxSessions ?? 5;
-    if (sessions.length > maxSessions) {
-      sessions.length = maxSessions;
+  return withStorageLock(async () => {
+    try {
+      const state = await getStorageState();
+      const sessions = [session, ...state.sessions];
+      const maxSessions = state.settings.maxSessions ?? 5;
+      if (sessions.length > maxSessions) {
+        sessions.length = maxSessions;
+      }
+      await chrome.storage.local.set({ sessions });
+    } catch (err) {
+      console.error('[AI Browser Guard] Failed to save session:', err);
     }
-    await chrome.storage.local.set({ sessions });
-  } catch (err) {
-    console.error('[AI Browser Guard] Failed to save session:', err);
-  }
+  });
 }
 
 /**
@@ -296,18 +326,20 @@ export async function updateSession(
   sessionId: string,
   updater: (session: AgentSession) => AgentSession
 ): Promise<void> {
-  try {
-    const state = await getStorageState();
-    const index = state.sessions.findIndex((s) => s.id === sessionId);
-    if (index === -1) {
-      console.warn('[AI Browser Guard] Session not found:', sessionId);
-      return;
+  return withStorageLock(async () => {
+    try {
+      const state = await getStorageState();
+      const index = state.sessions.findIndex((s) => s.id === sessionId);
+      if (index === -1) {
+        console.warn('[AI Browser Guard] Session not found:', sessionId);
+        return;
+      }
+      state.sessions[index] = updater(state.sessions[index]);
+      await chrome.storage.local.set({ sessions: state.sessions });
+    } catch (err) {
+      console.error('[AI Browser Guard] Failed to update session:', err);
     }
-    state.sessions[index] = updater(state.sessions[index]);
-    await chrome.storage.local.set({ sessions: state.sessions });
-  } catch (err) {
-    console.error('[AI Browser Guard] Failed to update session:', err);
-  }
+  });
 }
 
 /**
@@ -342,17 +374,19 @@ export async function getDelegationRules(): Promise<DelegationRule[]> {
  * Enforces the limit of 100 log entries by evicting the oldest.
  */
 export async function appendDetectionLog(event: DetectionEvent): Promise<void> {
-  try {
-    const state = await getStorageState();
-    const log = [...state.detectionLog, event];
-    const maxEntries = state.settings.maxDetectionLogEntries ?? 100;
-    if (log.length > maxEntries) {
-      log.splice(0, log.length - maxEntries);
+  return withStorageLock(async () => {
+    try {
+      const state = await getStorageState();
+      const log = [...state.detectionLog, event];
+      const maxEntries = state.settings.maxDetectionLogEntries ?? 100;
+      if (log.length > maxEntries) {
+        log.splice(0, log.length - maxEntries);
+      }
+      await chrome.storage.local.set({ detectionLog: log });
+    } catch (err) {
+      console.error('[AI Browser Guard] Failed to append detection log:', err);
     }
-    await chrome.storage.local.set({ detectionLog: log });
-  } catch (err) {
-    console.error('[AI Browser Guard] Failed to append detection log:', err);
-  }
+  });
 }
 
 /**
@@ -367,13 +401,15 @@ export async function getSettings(): Promise<UserSettings> {
  * Update user settings in storage (partial merge).
  */
 export async function updateSettings(updates: Partial<UserSettings>): Promise<void> {
-  try {
-    const current = await getSettings();
-    const merged = { ...current, ...updates };
-    await chrome.storage.local.set({ settings: merged });
-  } catch (err) {
-    console.error('[AI Browser Guard] Failed to update settings:', err);
-  }
+  return withStorageLock(async () => {
+    try {
+      const current = await getSettings();
+      const merged = { ...current, ...updates };
+      await chrome.storage.local.set({ settings: merged });
+    } catch (err) {
+      console.error('[AI Browser Guard] Failed to update settings:', err);
+    }
+  });
 }
 
 /**
@@ -394,13 +430,15 @@ export async function getLifetimeStats(): Promise<LifetimeStats> {
 export async function updateLifetimeStats(
   updater: (stats: LifetimeStats) => LifetimeStats
 ): Promise<void> {
-  try {
-    const current = await getLifetimeStats();
-    const updated = updater(current);
-    await chrome.storage.local.set({ lifetimeStats: updated });
-  } catch {
-    // Best effort — stats are non-critical
-  }
+  return withStorageLock(async () => {
+    try {
+      const current = await getLifetimeStats();
+      const updated = updater(current);
+      await chrome.storage.local.set({ lifetimeStats: updated });
+    } catch {
+      // Best effort — stats are non-critical
+    }
+  });
 }
 
 /**

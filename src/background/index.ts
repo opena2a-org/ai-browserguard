@@ -20,7 +20,7 @@ import type { BoundaryAlert } from '../alerts/boundary';
 import { processBoundaryViolation, handleAllowOnce } from './handlers';
 import { isValidSender } from './sender-validation';
 import { computeBadge, BLOCK_BADGE_TTL_MS } from './badge';
-import { monitorDebuggerAttachment } from '../detection/cdp-debugger';
+import { monitorDebuggerAttachment, detectDebuggerAttachment } from '../detection/cdp-debugger';
 import type { DebuggerDetectionResult } from '../detection/cdp-debugger';
 import { lookupAgentIdentity } from '../aim/client';
 import { lookupRegistryTrust } from '../registry/client';
@@ -77,13 +77,23 @@ function initialize(): void {
 
   // Delegation expiration alarm
   chrome.alarms.create('delegation-check', { periodInMinutes: 1 });
-  // Service worker keepalive — MV3 workers terminate after ~5 min idle
+  // Service worker keepalive — MV3 workers are torn down after ~30s idle.
+  // The alarm fires often enough to wake the worker before long idle gaps.
   chrome.alarms.create('keepalive-ping', { periodInMinutes: 0.4 });
   // Periodic flush of queued contribution events
   chrome.alarms.create('contribute-flush', { periodInMinutes: 5 });
+  // CDP attachment self-wake. The in-session setInterval poll below dies with
+  // the service worker and cannot restart itself, so an alarm tick re-runs the
+  // check after every idle teardown, closing the gap where CDP-attached
+  // automation would otherwise go undetected. (Chrome clamps the alarm period
+  // to a 1-minute floor; the interval covers sub-minute latency while alive.)
+  chrome.alarms.create('cdp-monitor', { periodInMinutes: 0.5 });
   chrome.alarms.onAlarm.addListener((alarm) => {
     if (alarm.name === 'delegation-check') {
       checkDelegationExpiration().catch(() => { /* ignore */ });
+    }
+    if (alarm.name === 'cdp-monitor') {
+      runCdpDebuggerCheck().catch(() => { /* ignore */ });
     }
     // keepalive-ping requires no action — the alarm firing is sufficient to keep the SW alive
     if (alarm.name === 'contribute-flush') {
@@ -105,7 +115,9 @@ function initialize(): void {
     handleAllowOnce(notificationId).catch(() => { /* ignore */ });
   });
 
-  // CDP debugger attachment monitor — detects Playwright, Puppeteer, etc.
+  // CDP debugger attachment monitor — fast in-session polling for low-latency
+  // detection while the worker is alive. The 'cdp-monitor' alarm above is the
+  // self-wake safety net for the idle windows when this interval is gone.
   monitorDebuggerAttachment((result) => {
     handleCdpDebuggerDetection(result).catch((err) => {
       console.error('[AI Browser Guard] CDP detection handler error:', err);
@@ -113,6 +125,18 @@ function initialize(): void {
   }, 3000);
 
   console.debug('[AI Browser Guard] Background service worker initialized');
+}
+
+/**
+ * Run a single CDP attachment check and route any detection through the normal
+ * handler. Invoked from the 'cdp-monitor' alarm so the check survives
+ * service-worker teardown (the in-session setInterval poll does not).
+ */
+async function runCdpDebuggerCheck(): Promise<void> {
+  const result = await detectDebuggerAttachment();
+  if (result.detected) {
+    await handleCdpDebuggerDetection(result);
+  }
 }
 
 async function loadPersistedState(): Promise<void> {
