@@ -356,12 +356,22 @@ function handleIsolatedMessage(e: MessageEvent): void {
 /**
  * Bootstrap listener — captures `port2` transferred by ISOLATED, then detaches.
  *
- * Defense: the listener runs synchronously at MAIN script load (before any
- * page inline script can register a competing `'message'` listener), and uses
- * `{ capture: true }`. The listener detaches itself only after successfully
- * capturing the port — a port-less or malformed envelope is ignored without
- * burning the listener (which would otherwise be a trivial DoS against the
- * bridge by any page that posts a bootstrap-shaped message first).
+ * TRUST BOUNDARY (audit #32): this listener does NOT authenticate its peer.
+ * `e.source === window` is true for ANY page-originated `postMessage`, so the
+ * only thing that distinguishes the real ISOLATED bootstrap from a forged one
+ * is arrival order — the first valid envelope wins and locks out the rest. The
+ * sole defense is Chrome's content-script `document_start` ordering: ISOLATED
+ * (declared first) posts the real envelope before the page has parsed any
+ * script that could post a competing one. If that ordering were ever lost a
+ * hostile first-party page could win the bootstrap and own this channel (see
+ * the repro in bridge.test.ts, "bootstrap race ownership"). Because MAIN shares
+ * the page's realm, MAIN-world enforcement is therefore best-effort, not a hard
+ * boundary; the trusted path is the ISOLATED world plus browser-level (CDP)
+ * detection. See docs/architecture.md, "MAIN-world trust boundary".
+ *
+ * The listener uses `{ capture: true }` and detaches itself only after a
+ * SUCCESSFUL port capture — a port-less or malformed envelope is ignored
+ * without burning the listener (which would otherwise be a trivial DoS).
  */
 function bootstrapListener(e: MessageEvent): void {
   if (e.source !== window) return;

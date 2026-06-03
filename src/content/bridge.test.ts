@@ -482,3 +482,91 @@ describe('MAIN-world interceptor — P1-2 kill-switch hard-block sentinel', () =
     expect(handlerSlice).toMatch(/killSwitchActive:\s*state\.killSwitch\.isActive/);
   });
 });
+
+/**
+ * Audit #32 repro — MAIN-world trust boundary.
+ *
+ * The bootstrap listener authenticates NO peer: `e.source === window` is true
+ * for any page-originated postMessage, and the first valid envelope to arrive
+ * wins and locks out all others (interceptor.ts:366-385). The ONLY thing that
+ * stops a hostile first-party page from posting that envelope first is Chrome's
+ * content-script `document_start` ordering — a runtime guarantee, not something
+ * the code verifies. These tests demonstrate the consequence if that ordering
+ * were ever lost: whoever wins the bootstrap owns the MAIN channel, and the
+ * real ISOLATED world is locked out. The conclusion is documented in
+ * docs/architecture.md ("MAIN-world trust boundary"): MAIN-world reports are
+ * untrusted hints; the trusted path is the ISOLATED world plus browser-level
+ * (CDP) detection.
+ */
+describe('MAIN-world interceptor — bootstrap race ownership (audit #32 repro)', () => {
+  const permissiveRule = {
+    isActive: true,
+    expiresAt: null,
+    actionRestrictions: [{ capability: 'open-tab', action: 'allow' }],
+    sitePatterns: [],
+  };
+
+  it('whoever posts the first valid bootstrap owns the MAIN channel; the legitimate peer is locked out', async () => {
+    const mod = (await import('./interceptor')) as unknown as InterceptorModule;
+
+    // An attacker envelope arrives FIRST (this is exactly what document_start
+    // ordering is relied upon to prevent — here we simulate the race being lost).
+    const attacker = new MessageChannel();
+    window.dispatchEvent(new MessageEvent('message', {
+      data: { type: BRIDGE_BOOTSTRAP },
+      source: window,
+      ports: [attacker.port2],
+    }));
+    // The real ISOLATED bootstrap arrives second and is locked out.
+    const legit = new MessageChannel();
+    window.dispatchEvent(new MessageEvent('message', {
+      data: { type: BRIDGE_BOOTSTRAP },
+      source: window,
+      ports: [legit.port2],
+    }));
+    attacker.port1.start();
+    legit.port1.start();
+
+    // Baseline: open-tab is allowed under the permissive rule.
+    expect(mod.isActionAllowed('open-tab', 'https://example.com', permissiveRule).allowed).toBe(true);
+
+    // The ATTACKER controls the channel: it can drive the kill-switch sentinel.
+    attacker.port1.postMessage({ type: KILL_SWITCH, active: true });
+    await flushMicrotasks();
+    expect(mod.isActionAllowed('open-tab', 'https://example.com', permissiveRule).allowed).toBe(false);
+
+    // The LEGITIMATE peer is locked out: its messages do not reach MAIN, so it
+    // cannot clear the attacker's sentinel.
+    legit.port1.postMessage({ type: KILL_SWITCH, active: false });
+    await flushMicrotasks();
+    expect(mod.isActionAllowed('open-tab', 'https://example.com', permissiveRule).allowed).toBe(false);
+
+    // ...but the attacker can clear it again — confirming sole ownership.
+    attacker.port1.postMessage({ type: KILL_SWITCH, active: false });
+    await flushMicrotasks();
+    expect(mod.isActionAllowed('open-tab', 'https://example.com', permissiveRule).allowed).toBe(true);
+  });
+
+  it('the real ISOLATED bootstrap, arriving second, can never drive MAIN state', async () => {
+    const mod = (await import('./interceptor')) as unknown as InterceptorModule;
+
+    const attacker = new MessageChannel();
+    window.dispatchEvent(new MessageEvent('message', {
+      data: { type: BRIDGE_BOOTSTRAP },
+      source: window,
+      ports: [attacker.port2],
+    }));
+    const legit = new MessageChannel();
+    window.dispatchEvent(new MessageEvent('message', {
+      data: { type: BRIDGE_BOOTSTRAP },
+      source: window,
+      ports: [legit.port2],
+    }));
+    legit.port1.start();
+
+    // A kill switch broadcast over the legitimate (locked-out) port has no effect.
+    legit.port1.postMessage({ type: KILL_SWITCH, active: true });
+    await flushMicrotasks();
+    expect(mod.isActionAllowed('open-tab', 'https://example.com', permissiveRule).allowed).toBe(true);
+  });
+});
