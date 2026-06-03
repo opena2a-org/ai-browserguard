@@ -97,6 +97,14 @@ describe('saveSession / getSessions', () => {
     const sessions = await getSessions();
     expect(sessions.length).toBeLessThanOrEqual(5);
   });
+
+  it('does not lose concurrent saves within the limit (race)', async () => {
+    const sessions = Array.from({ length: 5 }, (_, i) => makeSession(`p${i}`));
+    await Promise.all(sessions.map((s) => saveSession(s)));
+    const stored = await getSessions();
+    expect(stored).toHaveLength(5);
+    expect(new Set(stored.map((s) => s.id)).size).toBe(5);
+  });
 });
 
 describe('updateSession', () => {
@@ -148,6 +156,19 @@ describe('appendDetectionLog', () => {
     }
     const state = await getStorageState();
     expect(state.detectionLog.length).toBeLessThanOrEqual(3);
+  });
+
+  it('does not lose entries under concurrent appends (read-modify-write race)', async () => {
+    // Fire many appends without awaiting between them. Each does a full
+    // read-modify-write; without serialization, later writes clobber earlier
+    // ones and entries vanish. The storage mutex must preserve all of them.
+    const events = Array.from({ length: 25 }, (_, i) => makeDetectionEvent(`c${i}`));
+    await Promise.all(events.map((e) => appendDetectionLog(e)));
+
+    const state = await getStorageState();
+    expect(state.detectionLog).toHaveLength(25);
+    const ids = new Set(state.detectionLog.map((e) => e.id));
+    expect(ids.size).toBe(25);
   });
 });
 
