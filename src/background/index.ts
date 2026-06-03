@@ -33,6 +33,7 @@ import { getAIMAuthState } from '../aim/auth';
 import type { SessionReport } from '../session/report';
 import type { NetworkEvent } from '../content/network-interceptor';
 import { buildReportDownloadArgs } from './report-download';
+import { endStoredSessionsForKillSwitch } from './kill-switch-sessions';
 
 interface BackgroundState {
   activeAgents: Map<number, AgentIdentity>;
@@ -781,16 +782,11 @@ async function executeKillSwitch(
   }
   await saveDelegationRules(state.delegationRules);
 
-  // End all active sessions and generate reports
-  for (const [tabId, sessionId] of state.activeSessions.entries()) {
-    await updateSession(sessionId, (session) => ({
-      ...session,
-      endedAt: new Date().toISOString(),
-      endReason: 'kill-switch' as const,
-    }));
-    await generateAndStoreReport(sessionId);
-    state.activeSessions.delete(tabId);
-  }
+  // End all sessions and generate reports. Driven off STORED sessions, not the
+  // in-memory `state.activeSessions` map, which is empty after a service-worker
+  // restart — sessions that survived in storage must still be ended and reported.
+  await endStoredSessionsForKillSwitch(generateAndStoreReport);
+  state.activeSessions.clear();
 
   await clearAllNotifications();
   updateBadge();
