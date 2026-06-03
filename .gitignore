@@ -38,3 +38,6 @@ coverage/
 # Logs
 *.log
 npm-debug.log*
+
+# Local build archive (previous dist/ + packaged zips)
+dist-archive/

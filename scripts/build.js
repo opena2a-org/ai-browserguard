@@ -8,7 +8,7 @@
  */
 
 import { execSync } from 'child_process';
-import { rmSync, existsSync, mkdirSync, copyFileSync, readFileSync, writeFileSync } from 'fs';
+import { rmSync, existsSync, mkdirSync, copyFileSync, readFileSync, writeFileSync, renameSync } from 'fs';
 import { resolve, dirname } from 'path';
 import { fileURLToPath } from 'url';
 
@@ -29,6 +29,31 @@ if (manifestData.version !== packageData.version) {
   process.exit(1);
 }
 console.log(`Building AI Browser Guard v${manifestData.version}\n`);
+
+// Archive the previous build before wiping it. We keep every prior dist/ (and
+// any prior packaged dist.zip) under dist-archive/ rather than deleting, so a
+// rejected/older build can always be re-inspected or re-loaded. dist-archive/
+// is gitignored.
+const archiveDir = resolve(root, 'dist-archive');
+const stamp = new Date().toISOString().replace(/[-:]/g, '').replace(/\..+/, '').replace('T', '-');
+mkdirSync(archiveDir, { recursive: true });
+
+const prevManifestPath = resolve(root, 'dist', 'manifest.json');
+if (existsSync(prevManifestPath)) {
+  try {
+    const prevVer = JSON.parse(readFileSync(prevManifestPath, 'utf-8')).version ?? 'unknown';
+    const zipPath = resolve(archiveDir, `dist-v${prevVer}-${stamp}.zip`);
+    execSync(`zip -qr "${zipPath}" .`, { cwd: resolve(root, 'dist') });
+    console.log(`Archived previous build -> dist-archive/dist-v${prevVer}-${stamp}.zip`);
+  } catch (err) {
+    console.warn(`Could not archive previous dist/: ${err.message}`);
+  }
+}
+// Move any existing packaged dist.zip into the archive too.
+if (existsSync(resolve(root, 'dist.zip'))) {
+  renameSync(resolve(root, 'dist.zip'), resolve(archiveDir, `dist-package-${stamp}.zip`));
+  console.log(`Archived previous dist.zip -> dist-archive/dist-package-${stamp}.zip`);
+}
 
 // Clean dist
 if (existsSync('dist')) {
@@ -65,6 +90,15 @@ const popupHtmlPath = resolve(root, 'dist', 'popup', 'index.html');
 if (existsSync(popupHtmlPath)) {
   const html = readFileSync(popupHtmlPath, 'utf-8');
   writeFileSync(popupHtmlPath, html.replace(/__VERSION__/g, manifestData.version));
+}
+
+// Package the fresh build into dist.zip for Web Store upload. The previous
+// dist.zip (if any) was already moved into dist-archive/ above.
+try {
+  execSync(`zip -qr "${resolve(root, 'dist.zip')}" .`, { cwd: resolve(root, 'dist') });
+  console.log('Packaged dist/ -> dist.zip');
+} catch (err) {
+  console.warn(`Could not package dist.zip: ${err.message}`);
 }
 
 console.log('\nBuild complete. Load dist/ in chrome://extensions');
