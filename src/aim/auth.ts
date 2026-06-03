@@ -1,6 +1,11 @@
 /**
- * AIM OAuth authentication for Chrome extension.
- * Uses chrome.identity.launchWebAuthFlow() for browser-native OAuth.
+ * AIM auth state persistence for the extension.
+ *
+ * Stores a read-only AIM auth state in chrome.storage.local. The interactive
+ * OAuth login (chrome.identity.launchWebAuthFlow) was removed: the extension
+ * declares no `identity` permission and ships no login UI, so requesting it
+ * would be an unused permission (the v0.3.0 Web Store rejection). Contribution
+ * flush degrades to anonymous when no token is present.
  */
 
 export interface AIMAuthState {
@@ -35,52 +40,6 @@ export async function getAIMAuthState(): Promise<AIMAuthState> {
  */
 export async function saveAIMAuthState(state: AIMAuthState): Promise<void> {
   await chrome.storage.local.set({ [AUTH_STORAGE_KEY]: state });
-}
-
-/**
- * Initiate AIM OAuth login via chrome.identity.launchWebAuthFlow.
- * Returns the auth state on success.
- */
-export async function loginToAIM(aimBaseUrl: string): Promise<AIMAuthState> {
-  const redirectUrl = chrome.identity.getRedirectURL('callback');
-  const authUrl = new URL('/api/v1/oauth/authorize', aimBaseUrl);
-  authUrl.searchParams.set('response_type', 'token');
-  authUrl.searchParams.set('redirect_uri', redirectUrl);
-  authUrl.searchParams.set('client_id', 'browserguard');
-
-  const responseUrl = await chrome.identity.launchWebAuthFlow({
-    url: authUrl.toString(),
-    interactive: true,
-  });
-
-  if (!responseUrl) {
-    throw new Error('OAuth flow was cancelled');
-  }
-
-  // Parse the token from the redirect URL hash fragment
-  const url = new URL(responseUrl);
-  const params = new URLSearchParams(url.hash.substring(1));
-  const accessToken = params.get('access_token');
-  const email = params.get('email');
-  const expiresIn = params.get('expires_in');
-
-  if (!accessToken) {
-    throw new Error('No access token received from AIM');
-  }
-
-  const expiresAt = expiresIn
-    ? new Date(Date.now() + parseInt(expiresIn, 10) * 1000).toISOString()
-    : null;
-
-  const authState: AIMAuthState = {
-    isLoggedIn: true,
-    accessToken,
-    userEmail: email,
-    expiresAt,
-  };
-
-  await saveAIMAuthState(authState);
-  return authState;
 }
 
 /**
