@@ -2,11 +2,13 @@
 
 [![Status: beta](https://img.shields.io/badge/status-beta-yellow)](./STATUS.md)
 [![Build](https://github.com/opena2a-org/AI-BrowserGuard/actions/workflows/ci.yml/badge.svg)](https://github.com/opena2a-org/AI-BrowserGuard/actions/workflows/ci.yml)
-[![Tests](https://img.shields.io/badge/tests-513%20passing-brightgreen)](https://github.com/opena2a-org/AI-BrowserGuard)
+[![Tests](https://img.shields.io/badge/tests-516%20passing-brightgreen)](https://github.com/opena2a-org/AI-BrowserGuard)
 [![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
 [![Chrome MV3](https://img.shields.io/badge/Chrome-Manifest%20V3-4285F4)](https://developer.chrome.com/docs/extensions/mv3/)
 
 Chrome extension that detects, monitors, and controls AI agents operating in your browser. Identifies Playwright, Puppeteer, Selenium, Anthropic Computer Use, and OpenAI Operator -- without requiring the agent to identify itself.
+
+**v0.4.2** -- Privacy disclosure rewritten to accurately describe the network posture: zero network requests by default, with three optional community-intelligence features (trust lookups and anonymized contribution) that are off by default and opt-in. Removed the dead `chrome.identity` login code so the bundle declares no `identity` permission.
 
 **v0.4.1** -- Report export download now works reliably from the popup (hardened anchor plus a service-worker `chrome.downloads` fallback that survives the popup closing). Replaced the toast and settings-button emoji with inline SVG icons. Adds the `downloads` permission.
 
@@ -72,7 +74,14 @@ Site allowlists and blocklists support glob patterns (e.g., `*.bank.com`).
 
 ## Privacy
 
-All detection, delegation, and session tracking runs locally in the browser. No analytics, no tracking. Optional opt-in: anonymized detection patterns can be shared with the OpenA2A trust registry to improve community threat intelligence. Disabled by default, prompted after 5 detections. Full policy: [opena2a.org/aibrowserguard/privacy](https://opena2a.org/aibrowserguard/privacy).
+By default the extension makes zero network requests. All detection, delegation, and session tracking runs locally in the browser, and there is no analytics or telemetry.
+
+Three optional community-intelligence features are **off by default** and only send data after you explicitly enable them:
+
+- **AIM identity lookup** (`aim.opena2a.org`) and **registry trust lookup** (`api.oa2a.org`): when an agent is detected, look up a trust score for that agent type. Only the detected agent type (for example `playwright`) is sent; never your URLs or page content.
+- **Anonymized contribution** (`api.oa2a.org`): share anonymized detection and behavior summaries to improve community threat intelligence. Prompted once after 5 detections; dismissible. Sends an anonymous token plus framework name and summary counts -- never URLs, page content, keystrokes, or identity.
+
+One-click opt out for each. See [ADR-006](docs/adr/006-opt-in-network-features.md) and the full policy: [opena2a.org/aibrowserguard/privacy](https://opena2a.org/aibrowserguard/privacy).
 
 ## Development
 
@@ -80,7 +89,7 @@ All detection, delegation, and session tracking runs locally in the browser. No 
 npm install          # Install dependencies
 npm run build        # Build to dist/
 npm run dev          # Watch mode
-npm run test         # 326 tests
+npm run test         # 516 tests
 npm run lint         # TypeScript strict checking
 ```
 
