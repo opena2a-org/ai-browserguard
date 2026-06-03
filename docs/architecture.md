@@ -8,7 +8,7 @@ All file paths are relative to the repository root unless stated otherwise.
 
 ## 1. System Overview
 
-AI Browser Guard is a Manifest V3 Chrome extension that detects, monitors, and controls AI agents operating in browser sessions. It runs entirely locally with zero external network calls and zero runtime dependencies beyond Chrome APIs.
+AI Browser Guard is a Manifest V3 Chrome extension that detects and monitors AI agents operating in browser sessions and blocks their scripted navigations, form submissions, synthetic input, new-tab opens, and downloads. (DOM reads/writes, injected scripts, screenshots, and network egress are observed and logged but not yet blocked — see "Enforcement scope" under the Delegation Engine.) It runs entirely locally with zero external network calls and zero runtime dependencies beyond Chrome APIs.
 
 The extension consists of three isolated execution contexts that communicate exclusively via `chrome.runtime.sendMessage`:
 
@@ -229,9 +229,13 @@ Three built-in presets map to capability sets defined in `src/delegation/rules.t
 |--------|-------------|--------------|------------|
 | `readOnly` | `navigate`, `read-dom` | Allow all | None |
 | `limited` | `navigate`, `read-dom`, `click`, `type-text` | Block all (allowlist required) | Required (15m / 1hr / 4hr) |
-| `fullAccess` | All 11 capabilities | Allow all | None |
+| `fullAccess` | All 11 capabilities | Allow all | Required (capped at 60m) |
 
 The full capability set (`ALL_CAPABILITIES`): `navigate`, `read-dom`, `click`, `type-text`, `submit-form`, `download-file`, `open-tab`, `close-tab`, `screenshot`, `execute-script`, `modify-dom`.
+
+### Enforcement scope
+
+A rule's capability set is the *authorization* model; it is broader than what the current build can physically *enforce*. As of v0.4.x, blocking is enforced for scripted navigations, form submissions, synthetic clicks and typing, new-tab opens, and downloads (`download-file`, under an active delegation). The remaining capabilities — `read-dom`, `modify-dom`, `execute-script`, `screenshot`, and all network egress — are observed and logged but **not blocked**: a detected agent can still read the DOM and send network requests. Page-realm interception also cannot guarantee capture of every CDP-driven input. Moving enforcement of the remaining capabilities to the browser (CDP/debugger) layer is planned; the kill switch is the hard stop in the interim. This gap is why user-facing copy says "detect, monitor, and block scripted actions" rather than "control".
 
 ### Evaluation Flow
 

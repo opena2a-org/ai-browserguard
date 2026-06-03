@@ -1,7 +1,7 @@
 {
   "name": "@opena2a/aibrowserguard",
   "version": "0.4.2",
-  "description": "AI Browser Guard - Detect, monitor, and control AI agents operating in your browser",
+  "description": "AI Browser Guard - Detect and monitor AI agents in your browser and block their scripted navigations, form submissions, and downloads",
   "type": "module",
   "scripts": {
     "dev": "vite build --watch --mode development",

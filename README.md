@@ -6,7 +6,7 @@
 [![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
 [![Chrome MV3](https://img.shields.io/badge/Chrome-Manifest%20V3-4285F4)](https://developer.chrome.com/docs/extensions/mv3/)
 
-Chrome extension that detects, monitors, and controls AI agents operating in your browser. Identifies Playwright, Puppeteer, Selenium, Anthropic Computer Use, and OpenAI Operator -- without requiring the agent to identify itself.
+Chrome extension that detects and monitors AI agents operating in your browser, and blocks their scripted navigations, form submissions, new-tab opens, and downloads. Identifies Playwright, Puppeteer, Selenium, Anthropic Computer Use, and OpenAI Operator -- without requiring the agent to identify itself.
 
 **v0.4.2** -- Privacy disclosure rewritten to accurately describe the network posture: zero network requests by default, with three optional community-intelligence features (trust lookups and anonymized contribution) that are off by default and opt-in. Removed the dead `chrome.identity` login code so the bundle declares no `identity` permission.
 
@@ -27,11 +27,13 @@ An AI agent takes over a tab. AI Browser Guard detects it without the agent iden
 ## What It Protects Against
 
 - **Agent takeover without notice** -- Browser-based AI agents can control your session via CDP, WebDriver, or behavioral automation. AI Browser Guard detects their presence using three independent detection layers: CDP debugger monitoring, V8 stack trace analysis, and environment fingerprinting.
-- **Unauthorized actions** -- Delegation rules define what an agent can and cannot do. Actions outside the boundary are blocked before execution, with a notification for each violation.
+- **Unauthorized actions** -- Delegation rules define what an agent can and cannot do. Scripted navigations, form submissions, synthetic clicks and typing, new-tab opens, and (under an active delegation) downloads are blocked before execution, with a notification for each violation.
 - **Unmonitored sessions** -- Every agent action is logged to a session timeline with timestamps, target URLs, elements, and outcomes (allowed/blocked). The last 5 sessions are retained.
 - **No kill switch** -- One-click termination of all agent connections. Revokes permissions, clears automation flags, and terminates CDP sessions. Keyboard shortcut: Ctrl+Shift+K / Cmd+Shift+K.
 
 [See demos](https://opena2a.org/demos) (select More Tools tab)
+
+> **Scope of enforcement (v0.4.x).** Blocking applies to scripted navigations, form submissions, synthetic clicks and typing, new-tab opens, and downloads (under an active delegation). DOM reads/writes, injected scripts, screenshots, and network egress are currently **observed and logged, not blocked** — a detected agent's network requests still go out. Page-realm enforcement also cannot intercept every CDP-driven input. Browser-level (CDP/debugger) enforcement of the remaining capabilities is planned; until then, treat the kill switch as the hard stop.
 
 ## Detected Frameworks
 

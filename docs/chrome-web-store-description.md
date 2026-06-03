@@ -13,7 +13,7 @@ opt-in" story as the privacy policy, README, and ADR-006.
 AI Browser Guard
 
 ## Short description (132 chars max)
-[BETA] Detect and control AI agents in your browser. Kill switch, delegation rules, boundary alerts. Local-first, no tracking.
+[BETA] Detect, monitor, and block scripted AI-agent actions in your browser. Kill switch, delegation rules, alerts. Local-first.
 
 ## Category
 Developer Tools
@@ -45,7 +45,7 @@ FIVE CORE FEATURES
 
 3. Delegation Wizard — define what agents can and cannot do before they connect: Read-Only (navigate and read, no clicking or typing), Limited (specific sites you choose, with time limits 15min / 1hr / 4hr), or Full Access (everything allowed, with logging and alerts).
 
-4. Boundary Violation Alerts — when an agent attempts an action outside its delegation scope, the action is blocked and you receive a notification showing what was attempted, which rule blocked it, and the option to allow it once.
+4. Boundary Violation Alerts — when an agent attempts a scripted navigation, form submission, click, keystroke, new-tab open, or download outside its delegation scope, the action is blocked and you receive a notification showing what was attempted, which rule blocked it, and the option to allow it once. (DOM reads, injected scripts, screenshots, and network requests are currently logged but not blocked; use the kill switch to fully cut off an agent.)
 
 5. Session Timeline — chronological log of all agent actions: timestamps, action types, target URLs, element selectors, and whether each action was allowed or blocked. Last 5 sessions retained.
 
