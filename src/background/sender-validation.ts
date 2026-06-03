@@ -2,10 +2,11 @@
  * Background message-sender validation.
  *
  * chrome.runtime.onMessage only fires for messages from this extension's own
- * scripts when externally_connectable is closed (which the manifest enforces).
- * This module is defense in depth: every message handled by the background
- * must come from the expected sender class (content script vs popup), and the
- * sender's extension id must match ours.
+ * scripts when externally_connectable is absent (the manifest omits it, which
+ * is Chrome's default-closed posture: no external web page or extension can
+ * connect). This module is defense in depth: every message handled by the
+ * background must come from the expected sender class (content script vs
+ * popup), and the sender's extension id must match ours.
  *
  * If a future manifest change adds externally_connectable matches, this gate
  * still rejects messages whose origin is not our own popup or content scripts.
