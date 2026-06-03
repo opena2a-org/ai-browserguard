@@ -11,6 +11,8 @@
     "lint": "tsc --noEmit --strict",
     "watch": "vite build --watch",
     "smoke:export": "node scripts/smoke-export.mjs",
+    "smoke:load": "node scripts/smoke-load.mjs",
+    "smoke:scenarios": "node scripts/smoke-scenarios.mjs",
     "bump": "node scripts/bump-version.js"
   },
   "devDependencies": {
