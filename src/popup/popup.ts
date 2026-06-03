@@ -16,6 +16,7 @@ import type { WizardState } from '../delegation/wizard';
 import { createRuleFromPreset } from '../delegation/rules';
 import type { AIMAuthState } from '../aim/auth';
 import { getAIMAuthState, loginToAIM, logoutFromAIM, isTokenExpired } from '../aim/auth';
+import { triggerJsonDownload } from './download';
 
 interface PopupState {
   detectedAgents: AgentIdentity[];
@@ -1037,17 +1038,40 @@ function renderReportsPanel(): void {
     exportBtn.className = 'btn btn-secondary btn-sm';
     exportBtn.textContent = 'Export JSON';
     exportBtn.style.cssText = 'margin-top: 8px;';
+
+    // Inline status line so an export failure is never silent. A silent
+    // "nothing downloaded" is the exact failure this feature was reported for.
+    const exportStatus = document.createElement('div');
+    exportStatus.className = 'export-status';
+    exportStatus.style.cssText = 'margin-top: 6px; font-size: 12px; display: none;';
+
     exportBtn.addEventListener('click', () => {
       const json = JSON.stringify(report, null, 2);
-      const blob = new Blob([json], { type: 'application/json' });
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement('a');
-      a.href = url;
-      a.download = `report-${report.sessionId.substring(0, 8)}.json`;
-      a.click();
-      URL.revokeObjectURL(url);
+      const filename = `report-${report.sessionId.substring(0, 8)}.json`;
+      exportStatus.style.display = 'none';
+      // Hardened anchor download with a service-worker fallback. The popup is a
+      // transient window, so the worker (non-transient) downloads via
+      // chrome.downloads if the in-popup anchor path throws. See ./download.ts.
+      void triggerJsonDownload(filename, json, {
+        fallback: async (name, body) => {
+          const res = (await sendToBackground('REPORT_DOWNLOAD', { filename: name, json: body })) as
+            | { ok?: boolean; error?: string }
+            | undefined;
+          // The worker resolves with {ok:false} on failure; surface it as a
+          // rejection so the caller's catch can show the error.
+          if (!res?.ok) {
+            throw new Error(res?.error ?? 'service worker download failed');
+          }
+        },
+      }).catch((err) => {
+        console.error('[ABG] report export failed', err);
+        exportStatus.textContent = 'Export failed. Check that downloads are allowed, then try again.';
+        exportStatus.style.color = 'var(--color-danger, #d33)';
+        exportStatus.style.display = 'block';
+      });
     });
     container.appendChild(exportBtn);
+    container.appendChild(exportStatus);
 
     return;
   }

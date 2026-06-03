@@ -64,3 +64,32 @@ describe('popup.ts HTML-injection sink lock-in (P1-1)', () => {
     expect(source).toContain('.replaceChildren()');
   });
 });
+
+/**
+ * The same no-sink rule for the content-script toast. The toast injects DOM
+ * into pages the extension does not control, so an innerHTML regression here is
+ * strictly worse than in the popup. The shield icon is built via
+ * createElementNS, never an HTML string.
+ */
+describe('toast.ts HTML-injection sink lock-in', () => {
+  const source = readFileSync(resolve(__dirname, '../content/toast.ts'), 'utf-8');
+
+  it('contains no innerHTML / outerHTML / insertAdjacentHTML / setHTMLUnsafe / document.write', () => {
+    const lines = source.split('\n');
+    const offenders: { line: number; text: string }[] = [];
+    for (let i = 0; i < lines.length; i++) {
+      const stripped = lines[i].replace(/\/\/.*$/, '').replace(/\/\*[\s\S]*?\*\//g, '');
+      if (BANNED_SINK_PATTERN.test(stripped)) {
+        offenders.push({ line: i + 1, text: lines[i].trim() });
+      }
+    }
+    expect(
+      offenders,
+      `toast.ts must build DOM via createElement / createElementNS / textContent — not HTML-string sinks.\nOffenders:\n${offenders.map((o) => `  ${o.line}: ${o.text}`).join('\n')}`
+    ).toEqual([]);
+  });
+
+  it('builds the shield icon via createElementNS (not an HTML string)', () => {
+    expect(source).toContain("createElementNS");
+  });
+});

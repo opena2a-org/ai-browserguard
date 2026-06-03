@@ -30,6 +30,7 @@ import { anonymizeDetection, anonymizeSession } from '../contribute/anonymize';
 import { getAIMAuthState } from '../aim/auth';
 import type { SessionReport } from '../session/report';
 import type { NetworkEvent } from '../content/network-interceptor';
+import { buildReportDownloadArgs } from './report-download';
 
 interface BackgroundState {
   activeAgents: Map<number, AgentIdentity>;
@@ -298,6 +299,30 @@ function handleMessage(
         }
       })().catch(() => {
         sendResponse({ json: null });
+      });
+      return true;
+    }
+
+    case 'REPORT_DOWNLOAD': {
+      // Fallback path for the popup export: the popup hands us the bytes and we
+      // download from the (non-transient) service worker via chrome.downloads,
+      // so the download survives the popup window being torn down. Service
+      // workers have no URL.createObjectURL, so we use a base64 data: URL.
+      const { filename, json } = message.data as { filename?: string; json?: string };
+      (async () => {
+        if (typeof json !== 'string' || !chrome.downloads?.download) {
+          sendResponse({ ok: false, error: 'unavailable' });
+          return;
+        }
+        const { url, filename: safeName } = buildReportDownloadArgs(filename ?? '', json);
+        try {
+          const id = await chrome.downloads.download({ url, filename: safeName, saveAs: false });
+          sendResponse({ ok: true, downloadId: id });
+        } catch (err) {
+          sendResponse({ ok: false, error: err instanceof Error ? err.message : String(err) });
+        }
+      })().catch((err) => {
+        sendResponse({ ok: false, error: err instanceof Error ? err.message : String(err) });
       });
       return true;
     }
