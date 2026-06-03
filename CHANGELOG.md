@@ -23,7 +23,15 @@ All notable changes to AI Browser Guard are documented here.
   Web Store Developer Dashboard (description, permission justifications, support
   URL, data-use disclosures).
 - Fresh-install zero-network regression test asserting the default settings and
-  consent gates keep all three network paths off until the user opts in.
+  consent gates keep all three network paths off until the user opts in, plus
+  both-directions gate tests (sends when opted in; clears the queue and sends
+  nothing on opt-out) and a release-metadata test pinning the manifest/package/
+  changelog version match and the homepage_url domain.
+
+### Security
+- `scripts/build.js` now invokes `zip` via `spawnSync` with array arguments
+  instead of `execSync` with an interpolated shell string, so build paths can
+  never be interpreted as shell tokens.
 
 ### Fixed
 - Resolves the v0.3.0 Web Store rejection follow-through: removed the dead

@@ -7,7 +7,7 @@
  * Copies manifest.json (with corrected paths) and icons into dist/.
  */
 
-import { execSync } from 'child_process';
+import { execSync, spawnSync } from 'child_process';
 import { rmSync, existsSync, mkdirSync, copyFileSync, readFileSync, writeFileSync, renameSync } from 'fs';
 import { resolve, dirname } from 'path';
 import { fileURLToPath } from 'url';
@@ -38,12 +38,25 @@ const archiveDir = resolve(root, 'dist-archive');
 const stamp = new Date().toISOString().replace(/[-:]/g, '').replace(/\..+/, '').replace('T', '-');
 mkdirSync(archiveDir, { recursive: true });
 
+// Run `zip` via spawnSync with array args (never a shell string), so paths and
+// version strings can never be interpreted as shell tokens. Returns true on
+// success. The inputs here are repo-controlled, but array args keep this
+// injection-proof regardless of how the paths are derived.
+function zipDir(cwd, outFile) {
+  const result = spawnSync('zip', ['-qr', outFile, '.'], { cwd });
+  if (result.error) throw result.error;
+  if (result.status !== 0) {
+    throw new Error(`zip exited ${result.status}: ${result.stderr?.toString() ?? ''}`);
+  }
+  return true;
+}
+
 const prevManifestPath = resolve(root, 'dist', 'manifest.json');
 if (existsSync(prevManifestPath)) {
   try {
     const prevVer = JSON.parse(readFileSync(prevManifestPath, 'utf-8')).version ?? 'unknown';
     const zipPath = resolve(archiveDir, `dist-v${prevVer}-${stamp}.zip`);
-    execSync(`zip -qr "${zipPath}" .`, { cwd: resolve(root, 'dist') });
+    zipDir(resolve(root, 'dist'), zipPath);
     console.log(`Archived previous build -> dist-archive/dist-v${prevVer}-${stamp}.zip`);
   } catch (err) {
     console.warn(`Could not archive previous dist/: ${err.message}`);
@@ -95,7 +108,7 @@ if (existsSync(popupHtmlPath)) {
 // Package the fresh build into dist.zip for Web Store upload. The previous
 // dist.zip (if any) was already moved into dist-archive/ above.
 try {
-  execSync(`zip -qr "${resolve(root, 'dist.zip')}" .`, { cwd: resolve(root, 'dist') });
+  zipDir(resolve(root, 'dist'), resolve(root, 'dist.zip'));
   console.log('Packaged dist/ -> dist.zip');
 } catch (err) {
   console.warn(`Could not package dist.zip: ${err.message}`);
