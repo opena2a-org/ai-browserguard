@@ -14,8 +14,9 @@ import { DEFAULT_LIFETIME_STATS } from '../session/types';
 import { createTimelineEvent, appendEventToSession } from '../session/timeline';
 import { executeBackgroundKillSwitch, createInitialKillSwitchState } from '../killswitch/index';
 import type { KillSwitchState } from '../killswitch/index';
-import { isTimeBoundExpired } from '../delegation/rules';
+import { isTimeBoundExpired, evaluateRule } from '../delegation/rules';
 import { selectEffectiveRule, applyDelegationUpdate } from '../delegation/effective';
+import { shouldIgnoreDownload, attributeDownload, describeDownload } from './download-monitor';
 import { setupNotificationHandlers, clearAllNotifications } from '../alerts/notification';
 import type { BoundaryAlert } from '../alerts/boundary';
 import { processBoundaryViolation, handleAllowOnce } from './handlers';
@@ -115,6 +116,19 @@ function initialize(): void {
   setupNotificationHandlers((notificationId) => {
     handleAllowOnce(notificationId).catch(() => { /* ignore */ });
   });
+
+  // Monitor agent-initiated downloads (exfiltration / drive-by vector). Only
+  // downloads that occur while an agent is active are treated as agent
+  // activity; the user's own downloads are never flagged.
+  try {
+    chrome.downloads.onCreated.addListener((item) => {
+      handleDownloadCreated(item).catch((err) => {
+        console.error('[AI Browser Guard] Download monitor error:', err);
+      });
+    });
+  } catch {
+    // downloads API may be unavailable in some contexts
+  }
 
   // CDP debugger attachment monitor — fast in-session polling for low-latency
   // detection while the worker is alive. The 'cdp-monitor' alarm above is the
@@ -844,6 +858,95 @@ async function handleCdpDebuggerDetection(result: DebuggerDetectionResult): Prom
 
     await handleDetection(tabId, event);
   }
+}
+
+/**
+ * Record (and, under a blocking delegation, cancel) an agent-initiated
+ * download.
+ *
+ * A download is agent activity only when an agent is active. If none is yet
+ * registered we run a fresh CDP check: a live debugger attachment means the
+ * browser is being driven, so we register those tabs (creating sessions) before
+ * attributing. With no active agent and no live attachment, the download is the
+ * user's own action and is ignored — normal browsing is never flagged.
+ */
+async function handleDownloadCreated(item: chrome.downloads.DownloadItem): Promise<void> {
+  const info = {
+    id: item.id,
+    url: item.url,
+    finalUrl: item.finalUrl,
+    filename: item.filename,
+    referrer: item.referrer,
+    byExtensionId: item.byExtensionId,
+  };
+  const ownId = typeof chrome.runtime?.id === 'string' ? chrome.runtime.id : undefined;
+
+  // Our own report-export download is never agent activity.
+  if (ownId && info.byExtensionId === ownId) return;
+
+  // If no agent is registered yet, probe for a live CDP attachment and register
+  // any attached tabs (which also creates their sessions) before attributing.
+  if (state.activeAgents.size === 0) {
+    const cdp = await detectDebuggerAttachment();
+    if (cdp.detected) {
+      await handleCdpDebuggerDetection(cdp);
+    }
+  }
+
+  const activeTabs = Array.from(state.activeAgents.entries()).map(([tabId, agent]) => ({
+    tabId,
+    originUrl: agent.originUrl,
+  }));
+
+  if (shouldIgnoreDownload(info, activeTabs, ownId)) return;
+
+  const { tabId, matchedByReferrer } = attributeDownload(info, activeTabs);
+  const downloadUrl = info.finalUrl ?? info.url;
+  const label = describeDownload(info);
+  const rule = getEffectiveRuleForTab(tabId);
+
+  // Under a delegation that does not permit download-file, cancel the download.
+  let blocked = false;
+  if (rule && !evaluateRule(rule, 'download-file', downloadUrl).allowed) {
+    blocked = true;
+    try {
+      chrome.downloads.cancel(item.id, () => {
+        // Swallow lastError — the download may have already completed.
+        void chrome.runtime.lastError;
+      });
+    } catch {
+      // cancel may fail if the download already finished
+    }
+  }
+
+  const uncertain = matchedByReferrer ? '' : ' (attribution uncertain)';
+  const event = createTimelineEvent(
+    'download',
+    downloadUrl,
+    blocked ? `Blocked agent download: ${label}${uncertain}` : `Agent download: ${label}${uncertain}`,
+    {
+      attemptedAction: 'download-file',
+      outcome: blocked ? 'blocked' : 'informational',
+      ruleId: rule?.id,
+    },
+  );
+
+  const sessionId = state.activeSessions.get(tabId);
+  if (sessionId) {
+    await updateSession(sessionId, (session) => appendEventToSession(session, event)).catch(() => {
+      /* storage best-effort */
+    });
+  }
+
+  if (blocked) {
+    state.lastBlockAt = Date.now();
+    state.lifetimeStats = {
+      ...state.lifetimeStats,
+      totalActionsBlocked: state.lifetimeStats.totalActionsBlocked + 1,
+    };
+    updateLifetimeStats(() => state.lifetimeStats).catch(() => { /* non-critical */ });
+  }
+  updateBadge();
 }
 
 async function handleTabRemoved(tabId: number): Promise<void> {

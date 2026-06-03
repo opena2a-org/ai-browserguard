@@ -19,6 +19,7 @@ export type AgentEventType =
   | 'delegation-granted'
   | 'delegation-revoked'
   | 'kill-switch-activated'
+  | 'download'
   | 'session-start'
   | 'session-end';
 
