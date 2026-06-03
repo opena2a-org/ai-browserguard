@@ -8,7 +8,7 @@ import type { MessagePayload, DetectionEvent, KillSwitchEvent, AgentEvent, Bound
 import type { AgentIdentity } from '../types/agent';
 import type { DelegationRule } from '../types/delegation';
 import type { AgentSession } from '../session/types';
-import { getStorageState, saveSession, updateSession, saveDelegationRules, appendDetectionLog, updateSettings, getLifetimeStats, updateLifetimeStats } from '../session/storage';
+import { getStorageState, saveSession, updateSession, saveDelegationRules, appendDetectionLog, updateSettings, getLifetimeStats, updateLifetimeStats, getKillSwitchState, saveKillSwitchState } from '../session/storage';
 import type { LifetimeStats } from '../session/types';
 import { DEFAULT_LIFETIME_STATS } from '../session/types';
 import { createTimelineEvent, appendEventToSession } from '../session/timeline';
@@ -116,6 +116,9 @@ async function loadPersistedState(): Promise<void> {
   const stored = await getStorageState();
   state.delegationRules = stored.delegationRules;
   state.lifetimeStats = await getLifetimeStats();
+  // Rehydrate the latched kill switch. Without this, an MV3 idle-timeout would
+  // reconstruct it as inactive and silently lift the block (fail-open).
+  state.killSwitch = await getKillSwitchState();
 
   // Check for active sessions that may have survived a restart
   for (const session of stored.sessions) {
@@ -188,6 +191,9 @@ function handleMessage(
       state.killSwitch.isActive = false;
       state.killSwitch.lastEvent = null;
       state.killSwitch.lastActivatedAt = null;
+      // Persist the cleared state so a later SW restart does not re-arm a
+      // kill switch the user has already reset.
+      saveKillSwitchState(state.killSwitch).catch(() => { /* best effort */ });
       updateBadge();
       // P1-2: broadcast the reset to every tab so each content script can
       // lift the MAIN-world hard-block sentinel. Without this, MAIN-world
@@ -701,6 +707,8 @@ async function executeKillSwitch(
   state.killSwitch.isActive = true;
   state.killSwitch.lastEvent = event;
   state.killSwitch.lastActivatedAt = event.timestamp;
+  // Persist immediately so the latched block survives a service-worker restart.
+  await saveKillSwitchState(state.killSwitch);
 
   // Clear active agents
   state.activeAgents.clear();

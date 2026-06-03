@@ -9,6 +9,13 @@ import type { AgentSession, StorageSchema, UserSettings, LifetimeStats } from '.
 import { DEFAULT_SETTINGS, DEFAULT_LIFETIME_STATS, CURRENT_STORAGE_SCHEMA_VERSION } from './types';
 import type { DelegationRule } from '../types/delegation';
 import type { DetectionEvent } from '../types/events';
+import type { KillSwitchState } from '../killswitch/index';
+
+const DEFAULT_KILL_SWITCH_STATE: KillSwitchState = {
+  isActive: false,
+  lastEvent: null,
+  lastActivatedAt: null,
+};
 
 const DEFAULT_STORAGE: StorageSchema = {
   storageSchemaVersion: CURRENT_STORAGE_SCHEMA_VERSION,
@@ -393,6 +400,40 @@ export async function updateLifetimeStats(
     await chrome.storage.local.set({ lifetimeStats: updated });
   } catch {
     // Best effort — stats are non-critical
+  }
+}
+
+/**
+ * Retrieve persisted kill-switch state. The kill switch is a latched safety
+ * control: it must survive a service-worker restart until the user explicitly
+ * resets it. Without persistence, an MV3 idle-timeout would reconstruct the
+ * state as inactive and silently disarm the block (fail-open).
+ */
+export async function getKillSwitchState(): Promise<KillSwitchState> {
+  try {
+    const result = await chrome.storage.local.get('killSwitchState');
+    const stored = result.killSwitchState as Partial<KillSwitchState> | undefined;
+    if (!stored || typeof stored.isActive !== 'boolean') {
+      return { ...DEFAULT_KILL_SWITCH_STATE };
+    }
+    return {
+      isActive: stored.isActive,
+      lastEvent: stored.lastEvent ?? null,
+      lastActivatedAt: stored.lastActivatedAt ?? null,
+    };
+  } catch {
+    return { ...DEFAULT_KILL_SWITCH_STATE };
+  }
+}
+
+/**
+ * Persist kill-switch state so it survives service-worker termination.
+ */
+export async function saveKillSwitchState(killSwitch: KillSwitchState): Promise<void> {
+  try {
+    await chrome.storage.local.set({ killSwitchState: killSwitch });
+  } catch {
+    // Best effort; the in-memory state remains authoritative for this SW lifetime.
   }
 }
 
