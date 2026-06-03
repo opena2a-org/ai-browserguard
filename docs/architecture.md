@@ -526,7 +526,20 @@ Content scripts execute in a Chrome-managed isolated world:
 
 - Page scripts cannot access content script variables or functions.
 - The content script can read page-level `window` properties (for detection) but cannot be tampered with by page JavaScript.
-- `e.isTrusted` is a read-only property set by the browser engine, not spoofable by page scripts. The boundary monitor relies on this to distinguish human vs. synthetic events.
+- `e.isTrusted` is a read-only property set by the browser engine, not spoofable by ordinary page scripts. The boundary monitor uses it to distinguish human gestures from page-dispatched synthetic events. **Caveat:** a CDP client (Playwright/Puppeteer/Selenium) dispatches input with `isTrusted === true`, so `isTrusted` separates human-vs-synthetic, not human-vs-agent; CDP-driven input is the trusted path's job to flag, not this gate's.
+
+### MAIN-world trust boundary
+
+The detection/enforcement code runs in two realms: the **ISOLATED** content-script world (a separate JS context Chrome protects from the page) and a **MAIN**-world interceptor that wraps page globals (`window.open`, `HTMLFormElement.prototype.submit`, `history.pushState`, `fetch`/`XHR`, an `Error.prepareStackTrace` trap). The two communicate over a `MessageChannel` whose port is transferred once at startup (`src/content/interceptor.ts`, `src/content/index.ts`).
+
+**The MAIN world shares the page's realm and is therefore not a trust boundary against a hostile first-party page.** Two consequences (audit #32):
+
+1. **The bootstrap handshake authenticates no peer.** The MAIN-side listener accepts the first envelope where `e.source === window`, the type matches, and exactly one port is transferred — and `e.source === window` is true for *any* page-originated `postMessage`. The first valid envelope wins and permanently locks out the rest. The sole defense is Chrome's content-script `document_start` ordering: ISOLATED (declared first in `manifest.json`) posts the real envelope before the page has parsed any script that could post a competing one. This is a runtime ordering guarantee, not something the code verifies. The repro in `src/content/bridge.test.ts` ("bootstrap race ownership") shows that if a forged envelope arrives first, the page owns the channel and the real ISOLATED world is locked out.
+2. **Even after a correct bootstrap, a hostile page can neutralize MAIN-world enforcement** by re-patching the same globals the interceptor wrapped, since both live in the page realm.
+
+**Design stance.** MAIN-world reports (stack-trace CDP hints, network events, action reports) are treated as **untrusted hints**, and MAIN-world action blocking is **best-effort**. The trusted path is the ISOLATED world plus browser-level (CDP/`chrome.debugger`) detection, which the page cannot reach. The ISOLATED side validates every field of every MAIN→ISOLATED message before forwarding it to the background (`handleMainWorldMessage` in `src/content/index.ts`), so a hijacked port cannot push arbitrary payloads downstream. The kill switch and CDP-layer detection do not depend on MAIN-world integrity.
+
+**Recommended hardening (tracked, not yet implemented):** add runtime schema validation (enum-constrain `agent.type`, bound string lengths) at the top of each background message handler so a forged-but-well-formed event cannot poison sessions, lifetime stats, or the opt-in contribute queue; and migrate action enforcement to the CDP/debugger layer so it no longer depends on page-realm globals.
 
 ### Storage Security
 
