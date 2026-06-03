@@ -11,6 +11,7 @@ beforeEach(() => {
     },
     runtime: {
       lastError: null,
+      id: 'self-extension-id',
     },
   });
 });
@@ -40,7 +41,7 @@ describe('detectDebuggerAttachment', () => {
     expect(result.targets).toHaveLength(0);
   });
 
-  it('detects when a target has an attached debugger', async () => {
+  it('detects a page-level attachment at high (not confirmed) confidence', async () => {
     mockGetTargets.mockImplementation((cb: (targets: unknown[]) => void) => {
       cb([
         { id: 'target-1', type: 'page', title: 'BofA', url: 'https://bankofamerica.com', attached: true, tabId: 42 },
@@ -50,13 +51,15 @@ describe('detectDebuggerAttachment', () => {
 
     const result = await detectDebuggerAttachment();
     expect(result.detected).toBe(true);
-    expect(result.confidence).toBe('confirmed');
+    // Page-level attachment with no browser target, no vendor signature, and no
+    // DevTools front end open: a real but not "confirmed" CDP signal.
+    expect(result.confidence).toBe('high');
     expect(result.targets).toHaveLength(1);
     expect(result.targets[0].tabId).toBe(42);
     expect(result.targets[0].url).toBe('https://bankofamerica.com');
   });
 
-  it('infers Playwright when only page targets are attached', async () => {
+  it('reports cdp-generic for page-only attachment without a vendor signature', async () => {
     mockGetTargets.mockImplementation((cb: (targets: unknown[]) => void) => {
       cb([
         { id: 't1', type: 'page', title: 'Test', url: 'https://test.com', attached: true, tabId: 1 },
@@ -65,10 +68,10 @@ describe('detectDebuggerAttachment', () => {
 
     const result = await detectDebuggerAttachment();
     expect(result.detected).toBe(true);
-    expect(result.inferredFramework).toBe('playwright');
+    expect(result.inferredFramework).toBe('cdp-generic');
   });
 
-  it('infers Puppeteer when browser target is attached', async () => {
+  it('reserves confirmed for a browser-target attachment but still labels cdp-generic', async () => {
     mockGetTargets.mockImplementation((cb: (targets: unknown[]) => void) => {
       cb([
         { id: 't1', type: 'browser', title: 'Chrome', url: '', attached: true },
@@ -78,7 +81,66 @@ describe('detectDebuggerAttachment', () => {
 
     const result = await detectDebuggerAttachment();
     expect(result.detected).toBe(true);
-    expect(result.inferredFramework).toBe('puppeteer');
+    // Browser-target attachment is exclusive to external CDP clients -> confirmed.
+    expect(result.confidence).toBe('confirmed');
+    // But topology alone does not name a vendor.
+    expect(result.inferredFramework).toBe('cdp-generic');
+  });
+
+  it('names a vendor only on a stack signature, at confirmed confidence', async () => {
+    mockGetTargets.mockImplementation((cb: (targets: unknown[]) => void) => {
+      cb([
+        { id: 't1', type: 'page', title: 'Playwright runner', url: 'https://test.com', attached: true, tabId: 1 },
+      ]);
+    });
+
+    const result = await detectDebuggerAttachment();
+    expect(result.detected).toBe(true);
+    expect(result.inferredFramework).toBe('playwright');
+    expect(result.confidence).toBe('confirmed');
+  });
+
+  it('ignores attachments on chrome:// browser-chrome pages (false positive)', async () => {
+    mockGetTargets.mockImplementation((cb: (targets: unknown[]) => void) => {
+      cb([
+        { id: 't1', type: 'page', title: 'Extensions', url: 'chrome://extensions/', attached: true, tabId: 5 },
+      ]);
+    });
+
+    const result = await detectDebuggerAttachment();
+    expect(result.detected).toBe(false);
+    expect(result.targets).toHaveLength(0);
+  });
+
+  it("ignores attachments on this extension's own pages (false positive)", async () => {
+    mockGetTargets.mockImplementation((cb: (targets: unknown[]) => void) => {
+      cb([
+        { id: 't1', type: 'page', title: 'Popup', url: 'chrome-extension://self-extension-id/popup.html', attached: true, tabId: 6 },
+      ]);
+    });
+
+    const result = await detectDebuggerAttachment();
+    expect(result.detected).toBe(false);
+  });
+
+  it('ignores devtools:// front-end targets and caps an inspected page at medium', async () => {
+    mockGetTargets.mockImplementation((cb: (targets: unknown[]) => void) => {
+      cb([
+        // The built-in DevTools front end appears as its own target...
+        { id: 't1', type: 'other', title: 'DevTools', url: 'devtools://devtools/bundled/devtools_app.html', attached: true },
+        // ...and the inspected page reports attached === true as a side effect of F12.
+        { id: 't2', type: 'page', title: 'Inspected', url: 'https://example.com', attached: true, tabId: 9 },
+      ]);
+    });
+
+    const result = await detectDebuggerAttachment();
+    expect(result.detected).toBe(true);
+    // Only the real page survives the internal-URL filter...
+    expect(result.targets).toHaveLength(1);
+    expect(result.targets[0].url).toBe('https://example.com');
+    // ...and the open DevTools front end means we do not claim "confirmed".
+    expect(result.confidence).toBe('medium');
+    expect(result.detail).toContain('DevTools');
   });
 
   it('detects multiple attached targets', async () => {

@@ -36,6 +36,48 @@ export interface DebuggerTarget {
 }
 
 /**
+ * Return true for targets that belong to the browser itself or to this
+ * extension, rather than to navigable web content an external agent would
+ * drive. These must never raise an agent verdict:
+ *   - chrome:// / chrome-untrusted:// — browser UI (chrome://extensions, etc.)
+ *   - devtools:// — the built-in DevTools front end
+ *   - chrome-extension://<own-id>/ — this extension's own popup / pages / SW
+ */
+function isInternalUrl(url: string, ownExtensionId: string | undefined): boolean {
+  if (!url) return false;
+  // Note: about:blank is intentionally NOT excluded — automation frameworks
+  // (Playwright/Puppeteer) routinely start on and drive about:blank, so it is
+  // navigable content, not browser chrome.
+  if (
+    url.startsWith('chrome://') ||
+    url.startsWith('chrome-untrusted://') ||
+    url.startsWith('devtools://')
+  ) {
+    return true;
+  }
+  if (ownExtensionId && url.startsWith(`chrome-extension://${ownExtensionId}/`)) {
+    return true;
+  }
+  return false;
+}
+
+/**
+ * Detect whether the built-in DevTools front end is open anywhere in the
+ * browser. When a user presses F12, the inspected page target reports
+ * `attached === true` exactly as it would under an external CDP client, but a
+ * devtools:// front-end target also appears in the target list. Its presence
+ * means a page-level attachment is most likely the user's own DevTools, not an
+ * automation framework, so such attachments are capped below `confirmed`.
+ */
+function builtInDevToolsPresent(allTargets: chrome.debugger.TargetInfo[]): boolean {
+  return allTargets.some(
+    (t) =>
+      t.url?.startsWith('devtools://') ||
+      (t.type === 'other' && (t.url?.includes('devtools') ?? false)),
+  );
+}
+
+/**
  * Check all browser targets for attached debuggers.
  *
  * When a CDP client (Playwright, Puppeteer, etc.) connects to Chrome,
@@ -74,8 +116,15 @@ export async function detectDebuggerAttachment(): Promise<DebuggerDetectionResul
       });
     });
 
-    // Find targets with an attached debugger
-    const attachedTargets = targets.filter((t) => t.attached);
+    const ownExtensionId = typeof chrome.runtime?.id === 'string' ? chrome.runtime.id : undefined;
+
+    // Find targets with an attached debugger, excluding browser-chrome,
+    // DevTools, and this extension's own pages. Attachments on those are not
+    // agents — they are the user's own browser surfaces (the source of the
+    // observed false positives at chrome://extensions/ and the popup URL).
+    const attachedTargets = targets.filter(
+      (t) => t.attached && !isInternalUrl(t.url, ownExtensionId),
+    );
 
     if (attachedTargets.length === 0) {
       return noDetection;
@@ -92,13 +141,39 @@ export async function detectDebuggerAttachment(): Promise<DebuggerDetectionResul
     }));
 
     // Infer framework from target characteristics
-    const framework = inferFrameworkFromTargets(targets, attachedTargets);
+    const framework = inferFrameworkFromTargets(attachedTargets);
+
+    // Confidence is reserved for signals that an external CDP client — not the
+    // user — is driving the browser:
+    //   - browser-target attachment is exclusive to external clients
+    //     (Puppeteer/Selenium connect to it); the built-in DevTools never does.
+    //   - a vendor-specific stack signature (playwright/puppeteer in the
+    //     target URL or title) is high-specificity.
+    // A bare page-level attachment with the built-in DevTools front end open is
+    // most likely F12, so it is capped at `medium`.
+    const browserTargetAttached = attachedTargets.some((t) => t.type === 'browser');
+    const hasVendorSignature = framework === 'playwright' || framework === 'puppeteer';
+    const devToolsOpen = builtInDevToolsPresent(targets);
+
+    let confidence: DetectionConfidence;
+    if (browserTargetAttached || hasVendorSignature) {
+      confidence = 'confirmed';
+    } else if (devToolsOpen) {
+      confidence = 'medium';
+    } else {
+      confidence = 'high';
+    }
+
+    const devToolsNote =
+      confidence === 'medium'
+        ? ' Built-in DevTools is open; this may be a manual inspection rather than an automation framework.'
+        : '';
 
     return {
       detected: true,
       method: 'cdp-connection',
-      confidence: 'confirmed',
-      detail: `External debugger attached to ${attachedTargets.length} target(s). Framework: ${framework}.`,
+      confidence,
+      detail: `External debugger attached to ${attachedTargets.length} target(s). Framework: ${framework}.${devToolsNote}`,
       targets: detectedTargets,
       inferredFramework: framework,
     };
@@ -111,41 +186,25 @@ export async function detectDebuggerAttachment(): Promise<DebuggerDetectionResul
 }
 
 /**
- * Infer which automation framework is connected based on target patterns.
+ * Infer which automation framework is connected.
  *
- * Different frameworks have different connection patterns:
- * - Playwright: typically attaches to specific page targets
- * - Puppeteer: attaches to the browser target first
- * - Selenium 4+: uses CDP via BiDi, attaches to browser target
+ * Connection topology (page-only vs. browser-target) is NOT a reliable framework
+ * fingerprint — Playwright, Puppeteer, Selenium, and hand-rolled CDP clients all
+ * vary their attachment pattern by version and launch mode. Reporting a specific
+ * vendor from topology alone produces confident-but-wrong labels (e.g. raw CDP
+ * mislabeled "Playwright"). We therefore only name a vendor when a high-specificity
+ * signature is present in a target URL or title, and otherwise report `cdp-generic`.
  */
-function inferFrameworkFromTargets(
-  allTargets: chrome.debugger.TargetInfo[],
-  attachedTargets: chrome.debugger.TargetInfo[],
-): AgentType {
-  // Check if the browser target itself is attached (Puppeteer pattern)
-  const browserTargetAttached = attachedTargets.some((t) => t.type === 'browser');
+function inferFrameworkFromTargets(attachedTargets: chrome.debugger.TargetInfo[]): AgentType {
+  const haystack = attachedTargets
+    .map((t) => `${t.url ?? ''} ${t.title ?? ''}`)
+    .join(' ')
+    .toLowerCase();
 
-  // Check for page-only attachment (Playwright pattern)
-  const onlyPageTargets = attachedTargets.every((t) => t.type === 'page');
-
-  // Check target URLs for framework hints
-  const allUrls = attachedTargets.map((t) => t.url).join(' ');
-  const allTitles = attachedTargets.map((t) => t.title).join(' ');
-
-  if (allUrls.includes('playwright') || allTitles.includes('playwright')) {
+  if (haystack.includes('playwright')) {
     return 'playwright';
   }
-  if (allUrls.includes('puppeteer') || allTitles.includes('puppeteer')) {
-    return 'puppeteer';
-  }
-
-  // Playwright typically attaches per-page without the browser target
-  if (onlyPageTargets && !browserTargetAttached) {
-    return 'playwright';
-  }
-
-  // Puppeteer typically attaches to the browser target
-  if (browserTargetAttached) {
+  if (haystack.includes('puppeteer')) {
     return 'puppeteer';
   }
 
