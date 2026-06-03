@@ -207,7 +207,12 @@ export function startBoundaryMonitor(
     } else {
       monitorState.blockedCount++;
       e.preventDefault();
-      e.stopPropagation();
+      // stopImmediatePropagation (not stopPropagation): we run in the capture
+      // phase on `document`, and stopPropagation alone still lets the page's own
+      // listeners on the SAME node at the SAME phase run — a blocked agent action
+      // would reach the page's submit/click handlers anyway. stopImmediatePropagation
+      // also halts the remaining same-node listeners, so the action is truly blocked.
+      e.stopImmediatePropagation();
 
       const violation: BoundaryViolation = {
         id: crypto.randomUUID(),
