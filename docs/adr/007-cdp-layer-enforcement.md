@@ -86,11 +86,24 @@ the page cannot re-patch, with **per-request, agent-attributable** decisions.
 
 - **`Fetch.enable` → `Fetch.requestPaused` → `continueRequest` / `failRequest`.**
   Mediates the full network stack (including the WebSocket/EventSource/element-src/
-  Worker vectors #50 left open) below the page realm. Agent attribution is
-  preserved because we only attach **under an active delegation for that tab**,
-  and the delegation rule already encodes the `network-request` capability and
-  site patterns shipped in #50; the same `matchUrlPattern` + capability check is
-  reused to decide `continue` vs `fail`.
+  Worker vectors #50 left open) below the page realm.
+
+  **Correction (post-implementation, supersedes the original attribution claim
+  in this section):** the CDP `Fetch` domain pauses EVERY request on the tab and
+  carries NO agent-vs-user attribution — that signal exists only in the page
+  realm (call-stack heuristics). So the CDP layer **cannot** honor the
+  `network-request` *capability* withhold: doing so would fail the page's own
+  resources and the human's navigation, bricking the tab (the very DNR failure
+  mode rejected below). The capability-level network block therefore stays in
+  the page realm (best-effort, but attributed). What the CDP layer enforces
+  repatch-immune is an explicit **site `block` pattern** — a coarse, tab-wide
+  domain block the user deliberately set, applied regardless of initiator (the
+  tab-wide scope is intended and documented). The decision reuses
+  `matchUrlPattern` over the rule's block patterns only; everything else
+  continues. This narrows the first increment to off-realm enforcement of site
+  block patterns (effectively the coarse-domain blocklist the "Deferred"
+  section anticipated, delivered via CDP rather than DNR), which still closes the
+  #32 re-patch bypass and the #50 unwrapped vectors for blocked domains.
 
 **`declarativeNetRequest` rejected as the primary mechanism:**
 - DNR rules apply to *all* requests on a host by URL/resource-type. They cannot
@@ -152,6 +165,10 @@ when CDP is off or attach is unavailable. DNR left open as a future complement.
 - **Restricted targets** (`chrome://`, Web Store, `devtools://`) — not
   attachable and not agent-navigable content; skipped, consistent with
   `isInternalUrl` in detection.
+- **Stale-attach window.** If a delegation lapses between reconciles, a tab can
+  stay attached (banner showing) until the next `cdp-monitor` alarm reconcile
+  (≤~30s). No traffic is wrongly blocked during the window — `decideFetchRequest`
+  fail-opens for the lapsed rule — so the only effect is a briefly stale banner.
 
 This is **fail-safe (degrade to today's behavior)**, deliberately distinct from
 ADR-005's fail-*closed* *delegation* default. The delegation engine still denies
@@ -160,13 +177,18 @@ back to the page-realm best-effort that ships today.
 
 ### 5. Scope of the first PR
 
-**Network egress via the CDP `Fetch` domain only**, opt-in, attach-under-active-
-delegation-only. Chosen because it (a) directly closes the #32 page-realm
-re-patch bypass for the network capability, (b) closes the concrete
-WebSocket/EventSource/element-src/Worker vectors #50 left open, and (c) reuses
-the `network-request` capability, site patterns, and `matchUrlPattern` shipped
-in #50 — no new policy surface, just a repatch-immune enforcement point for an
-existing contract.
+**Off-realm enforcement of site `block` patterns for network egress**, via the
+CDP `Fetch` domain, opt-in, and attached only when an active delegation governs
+the tab AND that rule carries at least one block pattern (no block pattern =
+nothing to enforce off-realm = no attach, no banner). Per the Correction in
+section 1, the first increment enforces site block patterns — not the
+`network-request` capability withhold, which the CDP layer cannot attribute and
+which stays page-realm. Chosen because it (a) closes the #32 page-realm re-patch
+bypass for explicitly-blocked domains, (b) closes the concrete
+WebSocket/EventSource/element-src/Worker vectors #50 left open *for those
+domains*, and (c) reuses the site patterns and `matchUrlPattern` shipped in #50 —
+no new policy surface. The page-realm interceptor remains the enforcement point
+for the `network-request` capability.
 
 ### Deferred (separate ADRs, not this line of work)
 

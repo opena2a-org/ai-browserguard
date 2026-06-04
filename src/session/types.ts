@@ -127,6 +127,15 @@ export interface UserSettings {
 
   /** Whether to auto-block agents with trust score below 0.3. Default: false. */
   autoBlockUntrustedAgents: boolean;
+
+  /**
+   * Whether to enforce network egress at the browser (CDP/debugger) layer for
+   * delegated tabs, in addition to the page-realm interceptor (ADR-007).
+   * Opt-in. When on, a per-tab `chrome.debugger` session attaches only while a
+   * tab is under an active delegation to a detected agent, which surfaces
+   * Chrome's "is debugging this browser" banner for that tab. Default: false.
+   */
+  cdpEnforcementEnabled: boolean;
 }
 
 /**
@@ -170,4 +179,5 @@ export const DEFAULT_SETTINGS: UserSettings = {
   registryLookupEnabled: false,
   registryBaseUrl: 'https://api.oa2a.org',
   autoBlockUntrustedAgents: false,
+  cdpEnforcementEnabled: false,
 };

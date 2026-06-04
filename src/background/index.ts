@@ -24,6 +24,12 @@ import { isValidSender } from './sender-validation';
 import { computeBadge, BLOCK_BADGE_TTL_MS } from './badge';
 import { monitorDebuggerAttachment, detectDebuggerAttachment } from '../detection/cdp-debugger';
 import type { DebuggerDetectionResult } from '../detection/cdp-debugger';
+import {
+  initCdpEnforcement,
+  reconcileTabs,
+  detachTab,
+  shouldEnforceTab,
+} from './cdp-enforcement';
 import { lookupAgentIdentity } from '../aim/client';
 import { lookupRegistryTrust } from '../registry/client';
 import { generateSessionReport, storeReport, getReports } from '../session/report';
@@ -44,6 +50,8 @@ interface BackgroundState {
   lifetimeStats: LifetimeStats;
   /** Cached copy of settings.notificationsEnabled (refreshed on SETTINGS_UPDATE). */
   notificationsEnabled: boolean;
+  /** Cached copy of settings.cdpEnforcementEnabled (refreshed on SETTINGS_UPDATE). */
+  cdpEnforcementEnabled: boolean;
   /**
    * Epoch ms of the most recent block. Drives the transient "!" icon badge
    * that surfaces a block to the user even if they missed the toast. Cleared
@@ -60,8 +68,33 @@ const state: BackgroundState = {
   recentAlerts: [],
   lifetimeStats: { ...DEFAULT_LIFETIME_STATS },
   notificationsEnabled: true,
+  cdpEnforcementEnabled: false,
   lastBlockAt: null,
 };
+
+/**
+ * Recompute which tabs warrant CDP-layer network enforcement and converge the
+ * attached debugger sessions to match. The desired set is empty whenever the
+ * feature is off, so toggling it off (or a kill switch clearing agents) detaches
+ * everything. Safe to call often; reconcileTabs no-ops when already converged.
+ */
+async function reconcileCdpEnforcement(): Promise<void> {
+  const desired = new Set<number>();
+  if (state.cdpEnforcementEnabled) {
+    for (const tabId of state.activeAgents.keys()) {
+      if (
+        shouldEnforceTab({
+          settingEnabled: true,
+          hasAgent: true,
+          rule: getEffectiveRuleForTab(tabId),
+        })
+      ) {
+        desired.add(tabId);
+      }
+    }
+  }
+  await reconcileTabs(desired);
+}
 
 function initialize(): void {
   loadPersistedState().then(() => {
@@ -97,6 +130,10 @@ function initialize(): void {
     }
     if (alarm.name === 'cdp-monitor') {
       runCdpDebuggerCheck().catch(() => { /* ignore */ });
+      // Self-heal CDP enforcement after a service-worker teardown dropped the
+      // debugger sessions: re-attach tabs still under active delegation, detach
+      // any that no longer qualify.
+      reconcileCdpEnforcement().catch(() => { /* ignore */ });
     }
     // keepalive-ping requires no action — the alarm firing is sufficient to keep the SW alive
     if (alarm.name === 'contribute-flush') {
@@ -140,6 +177,11 @@ function initialize(): void {
     });
   }, 3000);
 
+  // CDP-layer network egress enforcement (ADR-007). Opt-in; attaches only under
+  // an active delegation. Registering listeners here is a no-op when the
+  // debugger API is unavailable.
+  initCdpEnforcement({ getRuleForTab: getEffectiveRuleForTab, onBlock: reportCdpBlock });
+
   console.debug('[AI Browser Guard] Background service worker initialized');
 }
 
@@ -163,6 +205,7 @@ async function loadPersistedState(): Promise<void> {
   // reconstruct it as inactive and silently lift the block (fail-open).
   state.killSwitch = await getKillSwitchState();
   state.notificationsEnabled = stored.settings.notificationsEnabled;
+  state.cdpEnforcementEnabled = stored.settings.cdpEnforcementEnabled;
 
   // Check for active sessions that may have survived a restart
   for (const session of stored.sessions) {
@@ -305,6 +348,13 @@ function handleMessage(
         // Keep the hot-path cache in sync so the Notifications toggle takes
         // effect immediately without a service-worker restart.
         state.notificationsEnabled = settings.notificationsEnabled;
+        // Apply the CDP-enforcement toggle immediately: turning it on attaches
+        // currently-delegated tabs; turning it off detaches everything.
+        const cdpChanged = state.cdpEnforcementEnabled !== settings.cdpEnforcementEnabled;
+        state.cdpEnforcementEnabled = settings.cdpEnforcementEnabled;
+        if (cdpChanged) {
+          reconcileCdpEnforcement().catch(() => { /* non-critical */ });
+        }
         sendResponse({ success: true });
       }).catch(() => {
         sendResponse({ success: false });
@@ -578,6 +628,10 @@ async function handleDetection(tabId: number, event: DetectionEvent): Promise<vo
   }
 
   updateBadge();
+
+  // Attach CDP enforcement if this tab is now an agent tab under active
+  // delegation (opt-in; no-op when the feature is off).
+  reconcileCdpEnforcement().catch(() => { /* non-critical */ });
 }
 
 /**
@@ -684,6 +738,29 @@ function handleBoundaryViolation(tabId: number | undefined, violation: BoundaryV
 }
 
 /**
+ * Surface a CDP-layer (browser network) block through the same path as a
+ * page-realm boundary violation, so it lands in recent alerts, the timeline,
+ * the badge, and lifetime stats. The request was already failed at the network
+ * layer; this is reporting only. `network-request` is high-severity, so no
+ * one-time override is offered (handleBoundaryViolation/classifyViolationSeverity).
+ */
+function reportCdpBlock(tabId: number, url: string, reason: string): void {
+  const agent = state.activeAgents.get(tabId);
+  const rule = getEffectiveRuleForTab(tabId);
+  const violation: BoundaryViolation = {
+    id: crypto.randomUUID(),
+    timestamp: new Date().toISOString(),
+    agentId: agent?.id ?? 'unknown',
+    attemptedAction: 'network-request',
+    url,
+    blockingRuleId: rule?.id ?? '',
+    reason,
+    userOverride: false,
+  };
+  handleBoundaryViolation(tabId, violation);
+}
+
+/**
  * Resolve the delegation rule in effect for a given tab: the rule bound to the
  * agent detected in this tab, else the session-wide rule, else none.
  */
@@ -732,6 +809,9 @@ async function handleDelegationUpdate(rule: DelegationRule): Promise<void> {
   await broadcastEffectiveRules();
 
   updateBadge();
+
+  // A grant/scope change can flip which tabs warrant browser-layer enforcement.
+  await reconcileCdpEnforcement();
 }
 
 /**
@@ -790,6 +870,10 @@ async function executeKillSwitch(
 
   await clearAllNotifications();
   updateBadge();
+
+  // Detach all CDP enforcement sessions — activeAgents is now empty, so the
+  // desired set is empty and every attached tab is released.
+  await reconcileCdpEnforcement();
 
   return event;
 }
@@ -958,6 +1042,8 @@ async function handleTabRemoved(tabId: number): Promise<void> {
     state.activeSessions.delete(tabId);
   }
   state.activeAgents.delete(tabId);
+  // Release any CDP enforcement session for the closed tab.
+  detachTab(tabId).catch(() => { /* tab already gone */ });
   updateBadge();
 }
 
@@ -1001,6 +1087,8 @@ async function checkDelegationExpiration(): Promise<void> {
     // not just on grant.
     await broadcastEffectiveRules();
     updateBadge();
+    // Expiry must also tear down browser-layer enforcement for the lapsed tabs.
+    await reconcileCdpEnforcement();
   }
 }
 

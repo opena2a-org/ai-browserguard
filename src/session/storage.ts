@@ -151,6 +151,7 @@ function validateSettingsFields(raw: Partial<UserSettings>): { clean: UserSettin
   takeBoolean('registryLookupEnabled', raw.registryLookupEnabled);
   takeHttpsUrl('registryBaseUrl', raw.registryBaseUrl);
   takeBoolean('autoBlockUntrustedAgents', raw.autoBlockUntrustedAgents);
+  takeBoolean('cdpEnforcementEnabled', raw.cdpEnforcementEnabled);
 
   return { clean, rewrittenKeys: rewritten };
 }

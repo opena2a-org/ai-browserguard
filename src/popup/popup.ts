@@ -1440,6 +1440,12 @@ function renderSettingsPanel(): void {
       label: 'Notifications',
       description: 'Show Chrome notifications for violations',
     },
+    {
+      key: 'cdpEnforcementEnabled',
+      label: 'Browser-layer blocking (advanced)',
+      description:
+        'Enforce your site block rules at the browser layer for delegated tabs. Shows Chrome\'s "debugging this browser" banner while a delegated tab is active; removed when the session ends.',
+    },
   ];
 
   for (const toggle of toggles) {
