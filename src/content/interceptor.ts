@@ -180,6 +180,44 @@ export function isActionAllowed(
   };
 }
 
+/**
+ * Whether the `modify-dom` sink wrappers should probe + enforce on this write.
+ *
+ * Perf gate: the DOM-write sinks (`innerHTML`, `setAttribute`, …) are hot paths
+ * a page touches constantly. When there is no active delegation and no kill
+ * switch, the wrappers must be a zero-cost pass-through — they must NOT call
+ * `probeCallStack()` (which allocates an `Error` and walks the stack) on every
+ * page write. This flag is `true` only while an enforcement context exists, so
+ * the probe runs solely during a governed agent session. Recomputed whenever
+ * the active rule or the kill-switch sentinel changes.
+ */
+let modifyDomGuardArmed = false;
+
+/**
+ * Decide whether the `modify-dom` sink wrappers are armed for a given rule and
+ * kill-switch state. Pure so it can be unit-tested without module side effects.
+ *
+ * Armed when the kill switch is active OR any delegation rule is active. The
+ * per-write `isActionAllowed('modify-dom', url)` call still makes the precise
+ * allow/block decision (capability, site patterns, expiry); this only decides
+ * whether to PROBE at all. Arming on "any active rule" — rather than "modify-dom
+ * specifically blocked" — keeps the gate simple and correct across expiry and
+ * site-pattern rules, at the cost of probing during the rare full-access session
+ * that permits modify-dom (time-bounded, agent-attributed writes only).
+ */
+export function isModifyDomGuardArmed(
+  rule: InterceptorRule | null,
+  killSwitch: boolean
+): boolean {
+  if (killSwitch) return true;
+  return !!(rule && rule.isActive);
+}
+
+/** Recompute the armed flag from current module state. */
+function recomputeModifyDomGuard(): void {
+  modifyDomGuardArmed = isModifyDomGuardArmed(activeRule, killSwitchActive);
+}
+
 /** Report an intercepted action back to the isolated world via the bridge port. */
 function reportAction(
   capability: string,
@@ -311,6 +349,7 @@ function handleIsolatedMessage(e: MessageEvent): void {
 
   if (data.type === MSG_RULE_UPDATE) {
     activeRule = (data.rule as InterceptorRule | null) ?? null;
+    recomputeModifyDomGuard();
     return;
   }
 
@@ -331,6 +370,7 @@ function handleIsolatedMessage(e: MessageEvent): void {
     // the existing activeRule.
     if (typeof data.active === 'boolean') {
       killSwitchActive = data.active;
+      recomputeModifyDomGuard();
       // On activation, also purge any pending allow-once entries — they
       // were granted by the user before the emergency, but the emergency
       // is the higher-priority signal.
@@ -475,6 +515,92 @@ if (nav) {
       try { e.preventDefault(); } catch { /* some navigate events are not cancellable */ }
     }
   });
+}
+
+// ── modify-dom enforcement (principal DOM-write sinks) ──────────────────────
+// Agents that drive the page via CDP `Runtime.evaluate` modify the DOM through
+// the same APIs page scripts use. We wrap the principal DOM-write sinks and gate
+// each on the SAME agent-attribution probe the navigation/form sinks use
+// (`probeCallStack`), so only agent-attributed writes are mediated — the user's
+// own page scripts always pass through. When the active delegation denies
+// `modify-dom`, the agent-attributed write is dropped (no-op) and reported as a
+// boundary violation.
+//
+// Wrapped sinks fall in two groups:
+//   • HTML-string injection: `innerHTML`/`outerHTML` setters, `insertAdjacentHTML`,
+//     `setHTMLUnsafe` (sanitizer-bypassing), `document.write`/`writeln`.
+//   • Attribute writes: `setAttribute`, `setAttributeNS` (e.g. `href=javascript:`,
+//     `formaction`, `srcdoc`, event-handler attributes).
+//
+// SCOPE (honest, per the #29 enforcement-scope narrowing): the wrap covers the
+// sinks above, NOT every DOM-mutation path. Still reachable by an agent and NOT
+// blocked: node-insertion APIs (`appendChild`, `insertBefore`, `append`/`prepend`/
+// `before`/`after`/`replaceChild`/`replaceChildren`, `insertAdjacentElement`),
+// the `textContent`/`innerText` setters, the reflected-attribute property setters
+// (`el.href`, `el.src`, `el.className`, `el.style.cssText`), `toggleAttribute`/
+// `removeAttribute`, and `Range`/`DocumentFragment`/`DOMParser` insertion. Like
+// the rest of the MAIN-world interceptor, this is best-effort within the page
+// realm (a hostile first-party page can re-patch these globals); the trusted path
+// is the planned CDP/debugger-layer enforcement. See docs/architecture.md.
+
+/**
+ * Gate a DOM-write sink. Returns `{ blocked: true }` only for an agent-attributed
+ * write that the active `modify-dom` policy denies; in every other case the write
+ * proceeds. The user's own page scripts are never blocked (they carry no CDP
+ * stack signature), so enforcing this capability cannot break the page.
+ */
+function guardModifyDom(): { blocked: boolean; reason: string } {
+  // Fast path: no enforcement context → never probe, never block.
+  if (!modifyDomGuardArmed) return { blocked: false, reason: '' };
+  // Only agent-attributed writes are subject to enforcement.
+  if (!probeCallStack()) return { blocked: false, reason: '' };
+  const url = window.location.href;
+  // One-shot user override, same mechanism as the navigation/form sinks.
+  if (consumeAllowedOnce('modify-dom', url)) return { blocked: false, reason: '' };
+  const { allowed, reason } = isActionAllowed('modify-dom', url);
+  if (allowed) return { blocked: false, reason: '' };
+  // Report only blocks: modify-dom is high-volume, and allowed agent writes
+  // would flood the bridge/timeline (allowed MSG_ACTION is dropped downstream).
+  reportAction('modify-dom', url, true, reason);
+  return { blocked: true, reason };
+}
+
+/** Wrap an accessor-property setter (e.g. `innerHTML`) on a prototype. */
+function wrapModifyDomSetter(proto: object, prop: string): void {
+  const desc = Object.getOwnPropertyDescriptor(proto, prop);
+  if (!desc || typeof desc.set !== 'function' || !desc.configurable) return;
+  const originalSet = desc.set;
+  Object.defineProperty(proto, prop, {
+    ...desc,
+    set(this: unknown, value: unknown) {
+      if (guardModifyDom().blocked) return; // drop the agent-attributed write
+      originalSet.call(this, value);
+    },
+  });
+}
+
+/** Wrap a mutating method (e.g. `insertAdjacentHTML`) on a prototype. */
+function wrapModifyDomMethod(proto: Record<string, unknown>, name: string): void {
+  const original = proto[name];
+  if (typeof original !== 'function') return;
+  proto[name] = function (this: unknown, ...args: unknown[]): unknown {
+    if (guardModifyDom().blocked) return undefined; // drop the agent-attributed write
+    return (original as (...a: unknown[]) => unknown).apply(this, args);
+  };
+}
+
+if (typeof Element !== 'undefined') {
+  const elementProto = Element.prototype as unknown as Record<string, unknown>;
+  wrapModifyDomSetter(Element.prototype, 'innerHTML');
+  wrapModifyDomSetter(Element.prototype, 'outerHTML');
+  wrapModifyDomMethod(elementProto, 'insertAdjacentHTML');
+  wrapModifyDomMethod(elementProto, 'setHTMLUnsafe'); // sanitizer-bypassing HTML sink (no-op if unsupported)
+  wrapModifyDomMethod(elementProto, 'setAttribute');
+  wrapModifyDomMethod(elementProto, 'setAttributeNS'); // sibling of setAttribute — close the obvious bypass
+}
+if (typeof Document !== 'undefined') {
+  wrapModifyDomMethod(Document.prototype as unknown as Record<string, unknown>, 'write');
+  wrapModifyDomMethod(Document.prototype as unknown as Record<string, unknown>, 'writeln');
 }
 
 // ── Network activity interception ──────────────────────────────────────────
