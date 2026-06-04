@@ -58,7 +58,8 @@ export type AgentCapability =
   | 'close-tab'
   | 'screenshot'
   | 'execute-script'
-  | 'modify-dom';
+  | 'modify-dom'
+  | 'network-request';
 
 /**
  * Represents a detected AI agent operating in the browser.
