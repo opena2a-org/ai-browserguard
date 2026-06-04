@@ -187,9 +187,12 @@ export function installNetworkInterceptor(
         decision = { blocked: false, reason: '' };
       }
       if (decision.blocked) {
-        return Promise.reject(
-          new TypeError(decision.reason || 'Network request blocked by AI Browser Guard')
-        );
+        // Reject with a GENERIC message — do not echo `decision.reason` into the
+        // page realm. The reason can name the user's delegation internals (e.g.
+        // "Site blocked by pattern: <glob>"); page JS can read a rejected fetch's
+        // error. The detailed reason is reported separately over the isolated
+        // bridge (see decideNetwork → reportAction), which the page cannot see.
+        return Promise.reject(new TypeError('Network request blocked by AI Browser Guard'));
       }
     }
 
