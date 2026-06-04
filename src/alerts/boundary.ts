@@ -63,6 +63,7 @@ export function classifyViolationSeverity(
     'execute-script': 'critical',
     'download-file': 'high',
     'modify-dom': 'high',
+    'network-request': 'high',
     click: 'high',
     'type-text': 'medium',
     navigate: 'medium',
@@ -105,6 +106,7 @@ export function generateAlertTitle(capability: AgentCapability): string {
     screenshot: 'Screenshot blocked',
     'execute-script': 'Script execution blocked',
     'modify-dom': 'DOM modification blocked',
+    'network-request': 'Network request blocked',
   };
   return titles[capability] || 'Action blocked';
 }

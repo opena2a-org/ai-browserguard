@@ -27,6 +27,7 @@ const CAPABILITY_LABELS: Record<string, string> = {
   'read-dom': 'page reading',
   'screenshot': 'screenshot',
   'close-tab': 'tab close',
+  'network-request': 'network request',
 };
 
 /** Severity for determining toast persistence. */

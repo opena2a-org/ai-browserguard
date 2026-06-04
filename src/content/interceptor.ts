@@ -235,6 +235,26 @@ function reportAction(
   });
 }
 
+/**
+ * Deny decider for network egress (`network-request` capability), passed to the
+ * network interceptor. Only AGENT-attributed requests are ever denied — the
+ * user's and the page's own requests always pass, so enforcement cannot break
+ * the page. With no active delegation the capability check is pass-through, so
+ * normal automation is unaffected until the user sets a rule that withholds
+ * `network-request` (readOnly / limited) or the kill switch fires.
+ */
+function decideNetwork(
+  meta: { url: string; method: string; initiator: 'agent' | 'user' | 'unknown' }
+): { blocked: boolean; reason: string } {
+  if (meta.initiator !== 'agent') return { blocked: false, reason: '' };
+  // One-shot user override, same mechanism as the other sinks.
+  if (consumeAllowedOnce('network-request', meta.url)) return { blocked: false, reason: '' };
+  const { allowed, reason } = isActionAllowed('network-request', meta.url);
+  if (allowed) return { blocked: false, reason: '' };
+  reportAction('network-request', meta.url, true, reason);
+  return { blocked: true, reason };
+}
+
 // ── Secure-context guard ─────────────────────────────────────────────────────
 // This script runs in the MAIN world (page JS context). Only install API
 // intercepts on secure origins — http: pages do not support Web Crypto APIs
@@ -612,9 +632,12 @@ if (typeof Document !== 'undefined') {
 // them to the background service worker for the Network Activity panel.
 // Guard: only install when fetch and XMLHttpRequest are available (browser context).
 if (typeof window.fetch === 'function' && typeof XMLHttpRequest !== 'undefined') {
-  installNetworkInterceptor((event) => {
-    sendToIsolated({ type: MSG_NETWORK_EVENT, event });
-  });
+  installNetworkInterceptor(
+    (event) => {
+      sendToIsolated({ type: MSG_NETWORK_EVENT, event });
+    },
+    decideNetwork,
+  );
 }
 
 } // end secure-context guard

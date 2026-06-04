@@ -36,7 +36,7 @@ const LIMITED_CAPABILITIES: AgentCapability[] = ['navigate', 'read-dom', 'click'
 const ALL_CAPABILITIES: AgentCapability[] = [
   'navigate', 'read-dom', 'click', 'type-text', 'submit-form',
   'download-file', 'open-tab', 'close-tab', 'screenshot',
-  'execute-script', 'modify-dom',
+  'execute-script', 'modify-dom', 'network-request',
 ];
 
 function buildActionRestrictions(allowed: AgentCapability[]): ActionRestriction[] {

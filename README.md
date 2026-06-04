@@ -2,7 +2,7 @@
 
 [![Status: beta](https://img.shields.io/badge/status-beta-yellow)](./STATUS.md)
 [![Build](https://github.com/opena2a-org/AI-BrowserGuard/actions/workflows/ci.yml/badge.svg)](https://github.com/opena2a-org/AI-BrowserGuard/actions/workflows/ci.yml)
-[![Tests](https://img.shields.io/badge/tests-520%20passing-brightgreen)](https://github.com/opena2a-org/AI-BrowserGuard)
+[![Tests](https://img.shields.io/badge/tests-614%20passing-brightgreen)](https://github.com/opena2a-org/AI-BrowserGuard)
 [![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
 [![Chrome MV3](https://img.shields.io/badge/Chrome-Manifest%20V3-4285F4)](https://developer.chrome.com/docs/extensions/mv3/)
 
@@ -33,7 +33,7 @@ An AI agent takes over a tab. AI Browser Guard detects it without the agent iden
 
 [See demos](https://opena2a.org/demos) (select More Tools tab)
 
-> **Scope of enforcement (v0.4.x).** Blocking applies to scripted navigations, form submissions, synthetic clicks and typing, new-tab opens, and downloads (under an active delegation). Agent DOM writes through the principal DOM-write sinks (`innerHTML`/`outerHTML`, `insertAdjacentHTML`, `setHTMLUnsafe`, `document.write`/`writeln`, `setAttribute`/`setAttributeNS`) are also blocked under delegation, scoped to agent-attributed writes so the page's own scripts are never affected. DOM reads, injected scripts, screenshots, network egress, and the DOM-write paths not yet wrapped (node-insertion APIs like `appendChild`, the `textContent` setter, reflected-attribute property setters like `el.href`) are currently **observed and logged, not blocked** — a detected agent's network requests still go out. Page-realm enforcement also cannot intercept every CDP-driven input. Browser-level (CDP/debugger) enforcement of the remaining capabilities is planned; until then, treat the kill switch as the hard stop.
+> **Scope of enforcement (v0.4.x).** Blocking applies to scripted navigations, form submissions, synthetic clicks and typing, new-tab opens, and downloads (under an active delegation). Agent DOM writes through the principal DOM-write sinks (`innerHTML`/`outerHTML`, `insertAdjacentHTML`, `setHTMLUnsafe`, `document.write`/`writeln`, `setAttribute`/`setAttributeNS`) are also blocked under delegation, scoped to agent-attributed writes so the page's own scripts are never affected. Agent network egress (`fetch`, `XHR`, `sendBeacon`) is blocked too when delegation withholds it (`readOnly`/`limited` withhold it, `fullAccess` allows it), again scoped to agent-attributed requests so a blocked agent cannot POST page data out while the user's own requests still go through. (Not yet covered: `WebSocket`, `EventSource`, element-`src` injection, and Worker/iframe fetch — tracked with the CDP-layer move.) DOM reads, injected scripts, screenshots, and the DOM-write paths not yet wrapped (node-insertion APIs like `appendChild`, the `textContent` setter, reflected-attribute property setters like `el.href`) are currently **observed and logged, not blocked**. Page-realm enforcement also cannot intercept every CDP-driven input. Browser-level (CDP/debugger) enforcement of the remaining capabilities is planned; until then, treat the kill switch as the hard stop.
 
 ## Detected Frameworks
 
