@@ -1,0 +1,208 @@
+# ADR-007: Move Repatch-Immune Enforcement to the CDP/Debugger Layer
+
+**Status:** Accepted
+**Date:** 2026-06-04
+**Relates to:** audit #29 (enforcement scope), audit #32 (MAIN-world trust boundary),
+ADR-001 (MV3), ADR-005 (fail-closed delegation)
+
+## Context
+
+Capability enforcement today runs in two realms (architecture §7, §8):
+
+1. The **ISOLATED** content-script world — Chrome-protected, the page cannot
+   tamper with it. This is where detection, message validation, and the kill
+   switch live. Trusted.
+2. A **MAIN**-world interceptor (`src/content/interceptor.ts`) that wraps page
+   globals (`window.open`, `HTMLFormElement.prototype.submit`, `history.*`, the
+   `modify-dom` DOM-write sinks, `fetch`/`XHR`) to block agent-attributed
+   actions under an active delegation.
+
+The MAIN world shares the page's JS realm. Audit #32 established that this is
+**not a trust boundary against a hostile first-party page**: after the bootstrap
+handshake, a page can re-patch the same globals the interceptor wrapped and
+neutralize enforcement, because both live in the page realm. Architecture §8
+therefore classifies all MAIN-world action blocking as **best-effort** and lists
+as recommended hardening: "migrate action enforcement to the CDP/debugger layer
+so it no longer depends on page-realm globals."
+
+The enforcement gap this leaves, after PRs #47–#50:
+
+- **Page-realm re-patch bypass (the #32 hole).** Every capability enforced in
+  the MAIN world — scripted navigation, form submit, `modify-dom`, the
+  `network-request` deny path (#50) — can be defeated by a page that restores
+  the wrapped global after our `document_start` interceptor runs.
+- **Unwrapped egress vectors.** #50 deny covers `fetch`/`XHR`/`sendBeacon`. It
+  explicitly left **WebSocket, EventSource, element-`src` injection
+  (`new Image().src`, `<script>`/`<link>`), and Worker/iframe fetch** unwrapped.
+  These all transit the browser network stack regardless of how page JS spawned
+  them, so a network-layer mediator catches them where page-realm wrapping
+  cannot practically reach.
+- **Capabilities the page realm cannot guarantee at all** — `read-dom`,
+  `execute-script`, `screenshot` — have no page-realm enforcement and never can.
+
+The extension **already declares the `debugger` permission** and uses it
+read-only (`chrome.debugger.getTargets()` in `src/detection/cdp-debugger.ts`)
+for browser-level CDP-client detection. It has **never called
+`chrome.debugger.attach()`**. So the high-trust install warning is already paid,
+but the runtime "AI Browser Guard started debugging this browser" banner is not
+currently shown.
+
+### Adversarial framing — what CDP enforcement can and cannot do
+
+A single tab admits **only one debugger client at a time**. This bounds the
+threat model precisely, and the decision below is built on it:
+
+- **In-page / injected agents** (malicious or compromised first-party page
+  script, an injected content-script agent, a same-realm automation shim) —
+  these are exactly the actors that defeat MAIN-world enforcement by re-patching
+  globals (#32). They do **not** hold a CDP session. We can attach and mediate
+  their network/DOM operations at a layer they cannot re-patch. **This is the
+  population CDP enforcement is for, and it directly closes the #32 hole.**
+- **External CDP frameworks** (Playwright, Puppeteer, Selenium 4+, Computer-Use
+  drivers) hold the tab's sole debugger session themselves. Our `attach()` will
+  **fail** against them — and that is acceptable, because for this population the
+  trusted defenses are detection (`getTargets`, already shipping) plus the
+  ISOLATED-world `isTrusted`/CDP gates, not page-action interception. CDP
+  enforcement is **not** claimed to stop an external framework that owns the
+  debugger slot.
+
+Stating this plainly prevents the overclaim the #29 narrowing (PR #44) was
+written to avoid: "browser-layer enforcement" must not be read as "we can stop
+Playwright." We cannot, by construction, and we will not say we can.
+
+## Decision
+
+Add an **opt-in, delegation-scoped, per-tab CDP enforcement layer** that mediates
+the capabilities the page realm cannot guarantee, while keeping the page-realm
+interceptor as the **no-attach default**. The first increment enforces **network
+egress** via the CDP `Fetch` domain. `read-dom` / `execute-script` /
+`screenshot` enforcement is deferred to follow-up ADRs (each needs its own
+design; see "Deferred").
+
+### 1. Mechanism: `chrome.debugger` (CDP `Fetch` domain), not declarativeNetRequest
+
+`chrome.debugger` is the only mechanism that mediates page operations at a layer
+the page cannot re-patch, with **per-request, agent-attributable** decisions.
+
+- **`Fetch.enable` → `Fetch.requestPaused` → `continueRequest` / `failRequest`.**
+  Mediates the full network stack (including the WebSocket/EventSource/element-src/
+  Worker vectors #50 left open) below the page realm. Agent attribution is
+  preserved because we only attach **under an active delegation for that tab**,
+  and the delegation rule already encodes the `network-request` capability and
+  site patterns shipped in #50; the same `matchUrlPattern` + capability check is
+  reused to decide `continue` vs `fail`.
+
+**`declarativeNetRequest` rejected as the primary mechanism:**
+- DNR rules apply to *all* requests on a host by URL/resource-type. They cannot
+  distinguish agent-initiated from user-initiated requests — that attribution is
+  the entire basis of the delegation model. A DNR rule that blocks a domain
+  blocks it for the human too.
+- DNR cannot enforce `read-dom`, `execute-script`, or `screenshot`.
+- DNR may have a role later as a coarse, zero-banner *domain* blocklist
+  complement (no yellow bar), but it cannot carry the per-agent contract.
+
+**Hybrid stance:** CDP for attributed, capability-level, repatch-immune
+enforcement under active delegation; page-realm interceptor remains the default
+when CDP is off or attach is unavailable. DNR left open as a future complement.
+
+### 2. Permission cost
+
+- **Install warning: already paid.** `debugger` is declared and shipping. This
+  ADR adds **no new install-time permission** and no new CWS permission warning.
+- **Runtime banner: new, and gated.** `attach()` triggers the "started debugging
+  this browser" info bar. We accept this cost **only** while a user has actively
+  delegated a tab to an agent, and we make the whole layer **opt-in** so the
+  zero-runtime-banner posture is preserved by default.
+
+### 3. Opt-in, attach lifecycle, and UX (empower-never-shame)
+
+- **New setting `cdpEnforcementEnabled`, default `false`** (joins the ADR-006
+  opt-in family; fresh install attaches no debugger and shows no banner).
+- **Attach only when ALL hold:** the setting is on; an agent is detected on the
+  tab; and an **active delegation rule** applies to that tab (the user has
+  explicitly handed the session to an agent). Never attach during normal
+  browsing.
+- **Per-tab and time-bounded.** Detach on: delegation expiry (reuse
+  `FULL_ACCESS_MAX_MINUTES` / `isTimeBoundExpired`), delegation revoke, kill
+  switch, tab close, agent-session end, and setting toggled off.
+- **Honest surfacing.** The banner is *truthful* here — the user delegated this
+  tab to an agent and we are enforcing their rules at the browser layer. The
+  popup explains *why* the banner is showing ("Enforcing your delegation rules
+  for `<agent>` at the browser layer — removed when the session ends") and
+  enforcement is torn down promptly on every end path. No shaming, no FUD: the
+  banner means protection is active, and we say so.
+
+### 4. Failure modes
+
+- **SW death mid-session (MV3).** The debugger session drops when the service
+  worker is evicted. Reuse the existing `cdp-monitor` alarm self-wake (0.5 min):
+  on wake, **reconcile** — for each tab, if delegation is active but no debuggee
+  is attached, re-attach; if attached with no active delegation, detach. No new
+  lifecycle primitive.
+- **One-client-per-tab conflict** (DevTools open, an external CDP framework, or
+  another extension holds the slot). `attach()` fails. We **fail-safe to the
+  page-realm interceptor** (the current shipping default — so this is *not* a
+  regression) and surface a clear, non-alarming notice ("Browser-layer
+  enforcement unavailable — likely DevTools is open; using page-layer
+  enforcement"). We do **not** hard-block all agent actions on attach failure:
+  that would punish legitimate delegated workflows for having DevTools open. The
+  **kill switch remains absolute** regardless of attach state (it does not
+  depend on the debugger session). `chrome.debugger.onDetach` triggers the same
+  fail-safe fallback + notice.
+- **Restricted targets** (`chrome://`, Web Store, `devtools://`) — not
+  attachable and not agent-navigable content; skipped, consistent with
+  `isInternalUrl` in detection.
+
+This is **fail-safe (degrade to today's behavior)**, deliberately distinct from
+ADR-005's fail-*closed* *delegation* default. The delegation engine still denies
+by default; what degrades on attach failure is only the *enforcement layer*,
+back to the page-realm best-effort that ships today.
+
+### 5. Scope of the first PR
+
+**Network egress via the CDP `Fetch` domain only**, opt-in, attach-under-active-
+delegation-only. Chosen because it (a) directly closes the #32 page-realm
+re-patch bypass for the network capability, (b) closes the concrete
+WebSocket/EventSource/element-src/Worker vectors #50 left open, and (c) reuses
+the `network-request` capability, site patterns, and `matchUrlPattern` shipped
+in #50 — no new policy surface, just a repatch-immune enforcement point for an
+existing contract.
+
+### Deferred (separate ADRs, not this line of work)
+
+- `read-dom` / `screenshot` / `execute-script` CDP enforcement. `read-dom` in
+  particular has an unresolved design question: an external framework reads DOM
+  through **its own** CDP session, which our session cannot intercept — so CDP
+  `read-dom` enforcement helps only against in-page readers and needs its own
+  threat-model write-up before any code.
+- DNR coarse-domain blocklist complement (zero-banner).
+
+## Consequences
+
+### Positive
+- Closes the #32 page-realm re-patch bypass for network egress against the
+  in-page/injected-agent population it actually applies to, at a layer the page
+  cannot restore.
+- Closes the WebSocket/EventSource/element-src/Worker egress vectors #50 left
+  open, via one network-layer mediator instead of wrapping each global.
+- No new install-time permission or CWS warning (already paid).
+- Default behavior unchanged: opt-in, fresh install attaches nothing, shows no
+  banner.
+
+### Negative
+- A runtime "is debugging this browser" banner appears while enforcement is
+  active for a delegated tab. Mitigated by opt-in + honest popup explanation +
+  prompt teardown, but it is a visible change from today's zero-banner runtime.
+- Reconciliation logic (attach/detach across SW death, tab lifecycle, delegation
+  changes) is genuinely stateful and must be covered by tests, including the
+  detach-race and SW-restart paths.
+- A fourth enforcement surface to keep honest in docs/listing alongside the
+  ADR-006 disclosure family.
+
+### Neutral
+- Against external CDP frameworks that own the debugger slot, this layer adds no
+  enforcement (attach fails) — detection + the ISOLATED `isTrusted`/CDP gates
+  remain their line of defense, exactly as today. This is a documented boundary,
+  not a regression.
+- The page-realm interceptor stays in place as the default and the fail-safe
+  fallback; nothing shipped in #47–#50 is removed.
