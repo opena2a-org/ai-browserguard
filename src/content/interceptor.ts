@@ -570,6 +570,9 @@ function wrapModifyDomSetter(proto: object, prop: string): void {
   const desc = Object.getOwnPropertyDescriptor(proto, prop);
   if (!desc || typeof desc.set !== 'function' || !desc.configurable) return;
   const originalSet = desc.set;
+  // Spread `...desc` first so the original `get`, `enumerable`, and `configurable`
+  // flags are preserved exactly; only the setter is replaced. Page code that
+  // reflects on the descriptor sees the same shape (minus the swapped setter).
   Object.defineProperty(proto, prop, {
     ...desc,
     set(this: unknown, value: unknown) {

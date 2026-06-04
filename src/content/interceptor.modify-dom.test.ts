@@ -156,6 +156,31 @@ describe('modify-dom enforcement (DOM)', () => {
     expect(el.querySelector('#free')).not.toBeNull();
   });
 
+  it('drops an agent-attributed outerHTML write under a blocking rule', async () => {
+    await setRule(blockingRule());
+    const el = document.createElement('div');
+    el.id = 'host';
+    document.body.appendChild(el);
+
+    asAgent(() => { el.outerHTML = '<section id="replaced"></section>'; });
+
+    expect(document.getElementById('replaced')).toBeNull();
+    expect(document.getElementById('host')).not.toBeNull(); // original element untouched
+  });
+
+  it('drops an agent-attributed document.write under a blocking rule', async () => {
+    await setRule(blockingRule());
+    const marker = document.createElement('div');
+    marker.id = 'preserved';
+    document.body.appendChild(marker);
+
+    // A real document.write here would clear the document; the block must no-op it.
+    asAgent(() => { document.write('<p id="written">x</p>'); });
+
+    expect(document.getElementById('written')).toBeNull();
+    expect(document.getElementById('preserved')).not.toBeNull(); // document not wiped
+  });
+
   it('drops an agent-attributed insertAdjacentHTML under a blocking rule', async () => {
     await setRule(blockingRule());
     const el = document.createElement('div');
