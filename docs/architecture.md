@@ -8,7 +8,7 @@ All file paths are relative to the repository root unless stated otherwise.
 
 ## 1. System Overview
 
-AI Browser Guard is a Manifest V3 Chrome extension that detects and monitors AI agents operating in browser sessions and blocks their scripted navigations, form submissions, synthetic input, new-tab opens, and downloads. (DOM reads/writes, injected scripts, screenshots, and network egress are observed and logged but not yet blocked — see "Enforcement scope" under the Delegation Engine.) It runs entirely locally with zero external network calls and zero runtime dependencies beyond Chrome APIs.
+AI Browser Guard is a Manifest V3 Chrome extension that detects and monitors AI agents operating in browser sessions and blocks their scripted navigations, form submissions, synthetic input, new-tab opens, downloads, and DOM writes through the principal DOM-write sinks. (DOM reads, injected scripts, screenshots, network egress, and the DOM-write paths not yet wrapped are observed and logged but not yet blocked — see "Enforcement scope" under the Delegation Engine.) It runs entirely locally with zero external network calls and zero runtime dependencies beyond Chrome APIs.
 
 The extension consists of three isolated execution contexts that communicate exclusively via `chrome.runtime.sendMessage`:
 
@@ -235,7 +235,7 @@ The full capability set (`ALL_CAPABILITIES`): `navigate`, `read-dom`, `click`, `
 
 ### Enforcement scope
 
-A rule's capability set is the *authorization* model; it is broader than what the current build can physically *enforce*. As of v0.4.x, blocking is enforced for scripted navigations, form submissions, synthetic clicks and typing, new-tab opens, and downloads (`download-file`, under an active delegation). The remaining capabilities — `read-dom`, `modify-dom`, `execute-script`, `screenshot`, and all network egress — are observed and logged but **not blocked**: a detected agent can still read the DOM and send network requests. Page-realm interception also cannot guarantee capture of every CDP-driven input. Moving enforcement of the remaining capabilities to the browser (CDP/debugger) layer is planned; the kill switch is the hard stop in the interim. This gap is why user-facing copy says "detect, monitor, and block scripted actions" rather than "control".
+A rule's capability set is the *authorization* model; it is broader than what the current build can physically *enforce*. As of v0.4.x, blocking is enforced for scripted navigations, form submissions, synthetic clicks and typing, new-tab opens, and downloads (`download-file`, under an active delegation). `modify-dom` is partially enforced: the MAIN-world interceptor wraps the principal DOM-write sinks — HTML-string injection (`innerHTML`/`outerHTML` setters, `insertAdjacentHTML`, `setHTMLUnsafe`, `document.write`/`writeln`) and attribute writes (`setAttribute`/`setAttributeNS`) — and drops agent-attributed writes when delegation denies the capability. Other DOM-mutation paths are not yet wrapped — node-insertion APIs (`appendChild`, `insertBefore`, `append`/`prepend`/`replaceChildren`, `insertAdjacentElement`), the `textContent`/`innerText` setters, reflected-attribute property setters (`el.href`, `el.src`, `el.className`, `el.style.cssText`), `toggleAttribute`/`removeAttribute`, and `Range`/`DocumentFragment` insertion — so an agent restricted to those can still mutate the DOM. The remaining capabilities — `read-dom`, `execute-script`, `screenshot`, and all network egress — are observed and logged but **not blocked**: a detected agent can still read the DOM and send network requests. Like the rest of the MAIN-world interceptor, `modify-dom` enforcement is best-effort within the page realm (a hostile first-party page can re-patch the wrapped globals) and depends on the agent-attribution probe. Moving enforcement of the remaining capabilities to the browser (CDP/debugger) layer is planned; the kill switch is the hard stop in the interim. This gap is why user-facing copy says "detect, monitor, and block scripted actions" rather than "control".
 
 ### Evaluation Flow
 
@@ -353,7 +353,7 @@ sequenceDiagram
 
 `executeContentKillSwitch()` performs three operations:
 
-1. **Registered cleanups**: Calls every function added via `registerCleanup()`. The detection monitor and boundary monitor both register their teardown logic (clearing intervals, removing event listeners, disconnecting MutationObservers).
+1. **Registered cleanups**: Calls every function added via `registerCleanup()`. The detection monitor and boundary monitor both register their teardown logic (clearing intervals, removing event listeners).
 
 2. **Automation flag clearing** (`clearAutomationFlags()`):
    - Overrides `navigator.webdriver` getter to return `false`
@@ -473,8 +473,8 @@ The content script is injected at `document_start`, before the DOM is constructe
    - Starts WebDriver flag monitoring (polls `navigator.webdriver` every 3 seconds)
 4. Start `startBoundaryMonitor()` from `src/content/monitor.ts` with `rule: null` (fail-closed until delegation is received):
    - Registers capturing-phase listeners on `click`, `input`, `submit`, `keydown`
-   - Creates a `MutationObserver` on `document.body` for DOM modifications
    - Only intercepts synthetic events (`e.isTrusted === false`); trusted (human) events pass through
+   - `modify-dom` is enforced separately in the MAIN-world interceptor (`src/content/interceptor.ts`), which wraps the principal DOM-write sinks (`innerHTML`/`outerHTML`, `insertAdjacentHTML`, `setHTMLUnsafe`, `setAttribute`/`setAttributeNS`, `document.write`/`writeln`) and drops agent-attributed writes denied by the active rule
 5. Register both monitor cleanup functions with `registerCleanup()` for kill switch teardown.
 6. Send `STATUS_QUERY` to background to retrieve any active delegation rule.
 
@@ -530,7 +530,7 @@ Content scripts execute in a Chrome-managed isolated world:
 
 ### MAIN-world trust boundary
 
-The detection/enforcement code runs in two realms: the **ISOLATED** content-script world (a separate JS context Chrome protects from the page) and a **MAIN**-world interceptor that wraps page globals (`window.open`, `HTMLFormElement.prototype.submit`, `history.pushState`, `fetch`/`XHR`, an `Error.prepareStackTrace` trap). The two communicate over a `MessageChannel` whose port is transferred once at startup (`src/content/interceptor.ts`, `src/content/index.ts`).
+The detection/enforcement code runs in two realms: the **ISOLATED** content-script world (a separate JS context Chrome protects from the page) and a **MAIN**-world interceptor that wraps page globals (`window.open`, `HTMLFormElement.prototype.submit`, `history.pushState`, the `modify-dom` DOM-write sinks (`innerHTML`/`outerHTML`, `insertAdjacentHTML`, `setHTMLUnsafe`, `setAttribute`/`setAttributeNS`, `document.write`/`writeln`), `fetch`/`XHR`, an `Error.prepareStackTrace` trap). The two communicate over a `MessageChannel` whose port is transferred once at startup (`src/content/interceptor.ts`, `src/content/index.ts`).
 
 **The MAIN world shares the page's realm and is therefore not a trust boundary against a hostile first-party page.** Two consequences (audit #32):
 

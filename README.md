@@ -33,7 +33,7 @@ An AI agent takes over a tab. AI Browser Guard detects it without the agent iden
 
 [See demos](https://opena2a.org/demos) (select More Tools tab)
 
-> **Scope of enforcement (v0.4.x).** Blocking applies to scripted navigations, form submissions, synthetic clicks and typing, new-tab opens, and downloads (under an active delegation). DOM reads/writes, injected scripts, screenshots, and network egress are currently **observed and logged, not blocked** — a detected agent's network requests still go out. Page-realm enforcement also cannot intercept every CDP-driven input. Browser-level (CDP/debugger) enforcement of the remaining capabilities is planned; until then, treat the kill switch as the hard stop.
+> **Scope of enforcement (v0.4.x).** Blocking applies to scripted navigations, form submissions, synthetic clicks and typing, new-tab opens, and downloads (under an active delegation). Agent DOM writes through the principal DOM-write sinks (`innerHTML`/`outerHTML`, `insertAdjacentHTML`, `setHTMLUnsafe`, `document.write`/`writeln`, `setAttribute`/`setAttributeNS`) are also blocked under delegation, scoped to agent-attributed writes so the page's own scripts are never affected. DOM reads, injected scripts, screenshots, network egress, and the DOM-write paths not yet wrapped (node-insertion APIs like `appendChild`, the `textContent` setter, reflected-attribute property setters like `el.href`) are currently **observed and logged, not blocked** — a detected agent's network requests still go out. Page-realm enforcement also cannot intercept every CDP-driven input. Browser-level (CDP/debugger) enforcement of the remaining capabilities is planned; until then, treat the kill switch as the hard stop.
 
 ## Detected Frameworks
 
