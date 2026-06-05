@@ -9,8 +9,35 @@ import { DEFAULT_CONSENT, DEFAULT_QUEUE } from './types';
 
 const CONSENT_KEY = 'contributeConsent';
 const QUEUE_KEY = 'contributeQueue';
+const CONTRIBUTOR_ID_KEY = 'contributorId';
 const REGISTRY_CONTRIBUTE_URL = 'https://api.oa2a.org/api/v1/contribute';
 const FLUSH_THRESHOLD = 10; // Flush after 10 events
+
+/**
+ * Get the anonymous contributor token, generating and persisting a random
+ * per-install UUID on first use.
+ *
+ * Previously this derived the token from `chrome.runtime.id`, but the extension
+ * ID is the same for every install of a published extension — so it identified
+ * no one and provided no real dedup value. A random per-install UUID lets the
+ * registry deduplicate submissions from one install without exposing any
+ * stable, externally-derivable identifier.
+ */
+export async function getContributorToken(): Promise<string> {
+  try {
+    const result = await chrome.storage.local.get(CONTRIBUTOR_ID_KEY);
+    const existing = result[CONTRIBUTOR_ID_KEY];
+    if (typeof existing === 'string' && existing.length > 0) {
+      return existing;
+    }
+    const token = `bg-${crypto.randomUUID()}`;
+    await chrome.storage.local.set({ [CONTRIBUTOR_ID_KEY]: token });
+    return token;
+  } catch {
+    // Storage/crypto unavailable in some contexts — fall back to a non-identifying constant.
+    return 'anon-browserguard';
+  }
+}
 
 /** Get the current consent state. */
 export async function getConsent(): Promise<ContributeConsent> {
@@ -42,6 +69,13 @@ export async function disableContributions(): Promise<void> {
   await saveConsent(consent);
   // Clear the queue when disabling
   await saveQueue({ events: [], lastFlushedAt: null, totalFlushes: 0, totalContributed: 0 });
+  // Drop the contributor token so a later opt-in mints a fresh one, preventing
+  // cross-epoch linkage of submissions across an opt-out/opt-in cycle.
+  try {
+    await chrome.storage.local.remove(CONTRIBUTOR_ID_KEY);
+  } catch {
+    // Storage unavailable in some contexts -- non-critical.
+  }
 }
 
 /** Record a detection for consent tip tracking. Returns true if the tip should now be shown. */
@@ -125,7 +159,7 @@ export async function queueEvent(event: ContributeEvent): Promise<void> {
  * Sends batched events and clears the queue on success.
  * Silently fails on network error (events stay queued for retry).
  */
-export async function flushQueue(accessToken?: string | null): Promise<{ sent: number; success: boolean }> {
+export async function flushQueue(): Promise<{ sent: number; success: boolean }> {
   const queue = await getQueue();
   if (queue.events.length === 0) {
     return { sent: 0, success: true };
@@ -134,18 +168,9 @@ export async function flushQueue(accessToken?: string | null): Promise<{ sent: n
   const headers: Record<string, string> = {
     'Content-Type': 'application/json',
   };
-  if (accessToken) {
-    headers['Authorization'] = `Bearer ${accessToken}`;
-  }
 
-  // Generate a stable anonymous contributor token from the extension ID.
-  // This lets the registry deduplicate without identifying the user.
-  let contributorToken = 'anon-browserguard';
-  try {
-    contributorToken = 'bg-' + chrome.runtime.id;
-  } catch {
-    // Extension ID unavailable in some contexts
-  }
+  // Random per-install token: lets the registry deduplicate without identifying the user.
+  const contributorToken = await getContributorToken();
 
   // Map internal events to the registry's expected schema.
   // The registry requires a `package` object with a non-empty `name` for all

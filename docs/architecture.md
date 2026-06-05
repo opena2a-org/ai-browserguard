@@ -415,7 +415,7 @@ AgentSession created (handleDetection)
 - `events`: `AgentEvent[]` (chronological timeline)
 - `startedAt` / `endedAt`: ISO 8601 timestamps
 - `endReason`: One of 4 termination reasons or null
-- `summary`: Pre-computed `SessionSummary` (total/allowed/blocked actions, violations, top URLs, duration)
+- `summary`: Pre-computed `SessionSummary` (total/allowed/blocked actions, violations, top URLs as hostnames only, duration)
 
 **UserSettings** (`src/session/types.ts`):
 
@@ -548,6 +548,8 @@ The detection/enforcement code runs in two realms: the **ISOLATED** content-scri
 - `chrome.storage.local` is scoped to the extension's origin and cannot be read by page scripts or other extensions.
 - Session data, delegation rules, and detection logs never leave the browser.
 - No encryption is applied to stored data (it is protected by Chrome's extension storage isolation).
+- **Data minimization at rest:** the session summary's `topUrls` stores **hostnames only** (`new URL(url).hostname`) rather than full URLs, so path/query material that can carry tokens or usernames is never persisted or surfaced in the JSON export. This mirrors the hostname-only treatment of `networkSummary.uniqueDomains`. Per-event `url` fields in the timeline keep the full URL for the in-extension activity view; they are never transmitted.
+- **Retention TTL:** stored reports are pruned on write once older than 30 days (`MAX_REPORT_AGE_MS` in `src/session/report.ts`), in addition to the 20-report cap, so session history does not accumulate at rest indefinitely.
 
 ### Kill Switch Resilience
 

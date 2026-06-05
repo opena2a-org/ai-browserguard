@@ -57,6 +57,15 @@ const chromeMock = {
         }
         return Promise.resolve();
       }),
+      remove: vi.fn((keys: string | string[], callback?: () => void) => {
+        const keyList = Array.isArray(keys) ? keys : [keys];
+        for (const key of keyList) delete storageData[key];
+        if (callback) {
+          callback();
+          return;
+        }
+        return Promise.resolve();
+      }),
       clear: vi.fn((callback?: () => void) => {
         storageData = {};
         if (callback) {
@@ -194,6 +203,15 @@ beforeEach(() => {
   });
   chromeMock.storage.local.set.mockImplementation((items: Record<string, unknown>, callback?: () => void) => {
     Object.assign(storageData, items);
+    if (callback) {
+      callback();
+      return;
+    }
+    return Promise.resolve();
+  });
+  chromeMock.storage.local.remove.mockImplementation((keys: string | string[], callback?: () => void) => {
+    const keyList = Array.isArray(keys) ? keys : [keys];
+    for (const key of keyList) delete storageData[key];
     if (callback) {
       callback();
       return;

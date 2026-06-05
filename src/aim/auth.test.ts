@@ -13,10 +13,14 @@ describe('AIM Auth', () => {
       const state = await getAIMAuthState();
       expect(state).toEqual({
         isLoggedIn: false,
-        accessToken: null,
         userEmail: null,
         expiresAt: null,
       });
+    });
+
+    it('does not expose an accessToken field (dormant bearer token removed)', async () => {
+      const state = await getAIMAuthState();
+      expect('accessToken' in state).toBe(false);
     });
   });
 
@@ -24,7 +28,6 @@ describe('AIM Auth', () => {
     it('persists and retrieves auth state', async () => {
       const saved: AIMAuthState = {
         isLoggedIn: true,
-        accessToken: 'test-token-123',
         userEmail: 'user@example.com',
         expiresAt: '2099-01-01T00:00:00.000Z',
       };
@@ -40,7 +43,6 @@ describe('AIM Auth', () => {
     it('returns false for future expiry', () => {
       const state: AIMAuthState = {
         isLoggedIn: true,
-        accessToken: 'tok',
         userEmail: null,
         expiresAt: new Date(Date.now() + 3600 * 1000).toISOString(),
       };
@@ -50,7 +52,6 @@ describe('AIM Auth', () => {
     it('returns true for past expiry', () => {
       const state: AIMAuthState = {
         isLoggedIn: true,
-        accessToken: 'tok',
         userEmail: null,
         expiresAt: new Date(Date.now() - 1000).toISOString(),
       };
@@ -60,7 +61,6 @@ describe('AIM Auth', () => {
     it('returns false when expiresAt is null', () => {
       const state: AIMAuthState = {
         isLoggedIn: true,
-        accessToken: 'tok',
         userEmail: null,
         expiresAt: null,
       };
@@ -73,7 +73,6 @@ describe('AIM Auth', () => {
       // First, save a logged-in state
       await saveAIMAuthState({
         isLoggedIn: true,
-        accessToken: 'tok',
         userEmail: 'user@example.com',
         expiresAt: '2099-01-01T00:00:00.000Z',
       });
@@ -89,7 +88,6 @@ describe('AIM Auth', () => {
       state = await getAIMAuthState();
       expect(state).toEqual({
         isLoggedIn: false,
-        accessToken: null,
         userEmail: null,
         expiresAt: null,
       });
