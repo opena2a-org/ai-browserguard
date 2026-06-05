@@ -9,6 +9,8 @@ import {
   queueEvent,
   getQueue,
   getContributeStats,
+  getContributorToken,
+  flushQueue,
 } from './client';
 import { anonymizeDetection, anonymizeSession } from './anonymize';
 import { DEFAULT_CONSENT, DEFAULT_QUEUE } from './types';
@@ -197,6 +199,50 @@ describe('queueEvent', () => {
     const queue = await getQueue();
     expect(queue.events).toHaveLength(1);
     expect(queue.events[0].type).toBe('detection_summary');
+  });
+});
+
+// -- Contributor token --
+
+describe('getContributorToken', () => {
+  it('generates a random per-install token, not derived from the extension ID', async () => {
+    const token = await getContributorToken();
+    expect(token).toMatch(/^bg-/);
+    // Must not be the old extension-ID-derived value.
+    expect(token).not.toBe('bg-test-id');
+  });
+
+  it('persists and reuses the same token across calls', async () => {
+    const first = await getContributorToken();
+    const second = await getContributorToken();
+    expect(second).toBe(first);
+  });
+
+  it('mints a fresh token after opt-out, preventing cross-epoch linkage', async () => {
+    await enableContributions();
+    const before = await getContributorToken();
+    await disableContributions();
+    const after = await getContributorToken();
+    expect(after).not.toBe(before);
+    expect(after).toMatch(/^bg-/);
+  });
+
+  it('sends the persisted token (not chrome.runtime.id) in the flush payload', async () => {
+    const token = await getContributorToken();
+    mockFetch.mockResolvedValueOnce({ ok: true, status: 200, json: () => Promise.resolve({ accepted: 1 }) });
+
+    await enableContributions();
+    await queueEvent({
+      type: 'detection_summary',
+      timestamp: new Date().toISOString(),
+      data: { framework: 'playwright', detectionMethods: [], confidence: 'high', hadDelegation: false },
+    });
+    await flushQueue();
+
+    expect(mockFetch).toHaveBeenCalledTimes(1);
+    const body = JSON.parse((mockFetch.mock.calls[0][1] as { body: string }).body);
+    expect(body.contributorToken).toBe(token);
+    expect(body.contributorToken).not.toBe('bg-test-id');
   });
 });
 

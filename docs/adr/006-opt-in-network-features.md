@@ -55,7 +55,8 @@ Binding constraints on the opt-in features:
   - Trust lookups: the **detected agent type** string (for example
     `playwright`) in the request path/query. Nothing else. The page origin is
     used only as a local cache key and is never sent.
-  - Contribution: an **anonymous contributor token** (`bg-<extensionId>`, for
+  - Contribution: an **anonymous contributor token** (`bg-<random-uuid>`, a
+    per-install random identifier generated once and persisted locally, for
     dedup only, not user-identifying), the detected **framework name**,
     detection summaries (agents found, framework types), behavior summaries
     (interaction count, success rate, anomaly count), tool version, and

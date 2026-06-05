@@ -101,7 +101,7 @@ describe('computeSessionSummary', () => {
     expect(summary.violations).toBe(1);
   });
 
-  it('computes top URLs by frequency', () => {
+  it('computes top URLs by frequency, reduced to hostname only', () => {
     const events = [
       createTimelineEvent('action-allowed', 'https://a.com', 'a', { outcome: 'allowed' }),
       createTimelineEvent('action-allowed', 'https://b.com', 'b', { outcome: 'allowed' }),
@@ -110,8 +110,34 @@ describe('computeSessionSummary', () => {
       createTimelineEvent('action-allowed', 'https://b.com', 'e', { outcome: 'allowed' }),
     ];
     const summary = computeSessionSummary(events, events[0].timestamp);
-    expect(summary.topUrls[0]).toBe('https://a.com');
-    expect(summary.topUrls[1]).toBe('https://b.com');
+    expect(summary.topUrls[0]).toBe('a.com');
+    expect(summary.topUrls[1]).toBe('b.com');
+  });
+
+  it('stores only the hostname in topUrls — no path, query, or credentials', () => {
+    const events = [
+      createTimelineEvent('action-allowed', 'https://app.example.com/account?token=secret123', 'a', { outcome: 'allowed' }),
+      createTimelineEvent('action-allowed', 'https://user:pass@app.example.com/login', 'b', { outcome: 'allowed' }),
+    ];
+    const summary = computeSessionSummary(events, events[0].timestamp);
+    // Both events share the hostname, so it collapses to a single entry.
+    expect(summary.topUrls).toEqual(['app.example.com']);
+    for (const entry of summary.topUrls) {
+      expect(entry).not.toContain('/');
+      expect(entry).not.toContain('?');
+      expect(entry).not.toContain('token');
+      expect(entry).not.toContain('secret');
+      expect(entry).not.toContain('pass');
+    }
+  });
+
+  it('drops malformed URLs rather than storing them verbatim', () => {
+    const events = [
+      createTimelineEvent('action-allowed', 'not a url', 'a', { outcome: 'allowed' }),
+      createTimelineEvent('action-allowed', 'https://valid.example.com/path', 'b', { outcome: 'allowed' }),
+    ];
+    const summary = computeSessionSummary(events, events[0].timestamp);
+    expect(summary.topUrls).toEqual(['valid.example.com']);
   });
 
   it('handles empty events', () => {

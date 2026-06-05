@@ -59,6 +59,8 @@ export interface SessionReport {
 
 const MAX_STORED_REPORTS = 20;
 const REPORTS_STORAGE_KEY = 'reports';
+/** Reports older than this are pruned at write time (privacy retention TTL). */
+const MAX_REPORT_AGE_MS = 30 * 24 * 60 * 60 * 1000; // 30 days
 
 /**
  * Generate a session report from a completed session.
@@ -150,7 +152,15 @@ export function generateSessionReport(session: AgentSession): SessionReport {
 export async function storeReport(report: SessionReport): Promise<void> {
   try {
     const existing = await getReports();
-    const updated = [report, ...existing];
+    // Prune reports past the retention TTL so session data does not sit at rest
+    // indefinitely. A malformed/absent generatedAt is treated as fresh (kept)
+    // rather than dropped, so a parse glitch can never silently wipe history.
+    const cutoff = Date.now() - MAX_REPORT_AGE_MS;
+    const retained = existing.filter((r) => {
+      const generated = Date.parse(r.generatedAt);
+      return Number.isNaN(generated) || generated >= cutoff;
+    });
+    const updated = [report, ...retained];
     if (updated.length > MAX_STORED_REPORTS) {
       updated.length = MAX_STORED_REPORTS;
     }

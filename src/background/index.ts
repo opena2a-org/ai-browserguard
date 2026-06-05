@@ -35,7 +35,6 @@ import { lookupRegistryTrust } from '../registry/client';
 import { generateSessionReport, storeReport, getReports } from '../session/report';
 import { recordDetection, queueEvent, flushQueue, getConsent, getContributeStats } from '../contribute/client';
 import { anonymizeDetection, anonymizeSession } from '../contribute/anonymize';
-import { getAIMAuthState } from '../aim/auth';
 import type { SessionReport } from '../session/report';
 import type { NetworkEvent } from '../content/network-interceptor';
 import { buildReportDownloadArgs } from './report-download';
@@ -140,8 +139,7 @@ function initialize(): void {
       (async () => {
         const consent = await getConsent().catch(() => null);
         if (consent?.enabled) {
-          const auth = await getAIMAuthState().catch(() => null);
-          await flushQueue(auth?.accessToken).catch(() => { /* non-critical */ });
+          await flushQueue().catch(() => { /* non-critical */ });
         }
       })().catch(() => { /* non-critical */ });
     }
@@ -483,8 +481,7 @@ function handleMessage(
 
     case 'CONTRIBUTE_FLUSH': {
       (async () => {
-        const auth = await getAIMAuthState().catch(() => null);
-        const result = await flushQueue(auth?.accessToken);
+        const result = await flushQueue();
         sendResponse(result);
       })().catch(() => {
         sendResponse({ sent: 0, success: false });

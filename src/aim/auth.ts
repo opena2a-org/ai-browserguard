@@ -4,13 +4,13 @@
  * Stores a read-only AIM auth state in chrome.storage.local. The interactive
  * OAuth login (chrome.identity.launchWebAuthFlow) was removed: the extension
  * declares no `identity` permission and ships no login UI, so requesting it
- * would be an unused permission (the v0.3.0 Web Store rejection). Contribution
- * flush degrades to anonymous when no token is present.
+ * would be an unused permission (the v0.3.0 Web Store rejection). With no login
+ * path, no bearer token is ever issued, so the dormant `accessToken` field was
+ * dropped; contributions are always submitted anonymously.
  */
 
 export interface AIMAuthState {
   isLoggedIn: boolean;
-  accessToken: string | null;
   userEmail: string | null;
   expiresAt: string | null;
 }
@@ -18,7 +18,6 @@ export interface AIMAuthState {
 const AUTH_STORAGE_KEY = 'aimAuth';
 const DEFAULT_AUTH_STATE: AIMAuthState = {
   isLoggedIn: false,
-  accessToken: null,
   userEmail: null,
   expiresAt: null,
 };

@@ -81,7 +81,7 @@ describe('generateSessionReport', () => {
         allowedActions: 2,
         blockedActions: 1,
         violations: 0,
-        topUrls: ['https://example.com/page'],
+        topUrls: ['example.com'],
         durationSeconds: 300,
       },
     });
@@ -200,5 +200,57 @@ describe('storeReport / getReports', () => {
 
     const reports = await getReports();
     expect(reports.length).toBeLessThanOrEqual(20);
+  });
+
+  it('prunes reports older than the 30-day retention TTL on write', async () => {
+    // Seed a report that is ~40 days old, then store a fresh one.
+    const oldReport = generateSessionReport(makeSession({ id: 'old' }));
+    oldReport.generatedAt = new Date(Date.now() - 40 * 24 * 60 * 60 * 1000).toISOString();
+    await storeReport(oldReport);
+
+    const freshReport = generateSessionReport(makeSession({ id: 'fresh' }));
+    await storeReport(freshReport);
+
+    const reports = await getReports();
+    const ids = reports.map((r) => r.sessionId);
+    expect(ids).toContain('fresh');
+    expect(ids).not.toContain('old');
+  });
+
+  it('keeps reports with an unparseable generatedAt rather than dropping them', async () => {
+    const weird = generateSessionReport(makeSession({ id: 'weird' }));
+    weird.generatedAt = 'not-a-timestamp';
+    await storeReport(weird);
+
+    // Storing another report runs the prune path over the weird entry.
+    await storeReport(generateSessionReport(makeSession({ id: 'fresh' })));
+
+    const ids = (await getReports()).map((r) => r.sessionId);
+    expect(ids).toContain('weird');
+    expect(ids).toContain('fresh');
+  });
+});
+
+describe('topUrls privacy', () => {
+  it('stores only hostnames in the report (no path or query in the export)', () => {
+    const session = makeSession({
+      summary: {
+        totalActions: 1,
+        allowedActions: 1,
+        blockedActions: 0,
+        violations: 0,
+        topUrls: ['app.example.com', 'cdn.example.org'],
+        durationSeconds: 60,
+      },
+    });
+    const report = generateSessionReport(session);
+    const json = exportReportAsJSON(report);
+    expect(report.topUrls).toEqual(['app.example.com', 'cdn.example.org']);
+    // The serialized export must not leak path or query material.
+    expect(json).not.toContain('https://');
+    expect(json).not.toContain('?');
+    for (const host of report.topUrls) {
+      expect(host).not.toContain('/');
+    }
   });
 });

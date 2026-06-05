@@ -14,6 +14,22 @@ function generateId(): string {
 }
 
 /**
+ * Reduce a URL to its hostname for at-rest storage.
+ *
+ * Full URLs can carry tokens or usernames in the path or query, so the
+ * persisted/exported `topUrls` keeps only the hostname (mirrors the
+ * hostname-only treatment of `networkSummary.uniqueDomains`). Returns null
+ * for malformed URLs so they are dropped rather than stored verbatim.
+ */
+function toHostname(url: string): string | null {
+  try {
+    return new URL(url).hostname;
+  } catch {
+    return null;
+  }
+}
+
+/**
  * Create a new timeline event.
  */
 export function createTimelineEvent(
@@ -77,14 +93,18 @@ export function computeSessionSummary(
       violations++;
     }
     if (event.url) {
-      urlCounts.set(event.url, (urlCounts.get(event.url) ?? 0) + 1);
+      // Count by hostname only — full URLs are never persisted in the summary.
+      const host = toHostname(event.url);
+      if (host) {
+        urlCounts.set(host, (urlCounts.get(host) ?? 0) + 1);
+      }
     }
   }
 
   const topUrls = [...urlCounts.entries()]
     .sort((a, b) => b[1] - a[1])
     .slice(0, 5)
-    .map(([url]) => url);
+    .map(([host]) => host);
 
   let durationSeconds: number | null = null;
   if (events.length > 0) {
