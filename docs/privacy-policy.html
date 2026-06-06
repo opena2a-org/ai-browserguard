@@ -29,7 +29,7 @@
 </head>
 <body>
   <h1>AI Browser Guard - Privacy Policy</h1>
-  <p class="last-updated">Last updated: June 2, 2026</p>
+  <p class="last-updated">Last updated: June 6, 2026</p>
 
   <div class="highlight">
     <p><strong>Summary:</strong> By default, AI Browser Guard processes all data locally on your device and makes zero network requests. There is no analytics, telemetry, or tracking. The extension also offers optional community-intelligence features (trust lookups and anonymized contribution) that are turned <strong>off by default</strong> and send data only after you explicitly opt in. When enabled, they transmit only a detected agent type and anonymized detection summaries -- never your URLs, page content, keystrokes, or identity.</p>
@@ -95,8 +95,8 @@
     <li><strong>storage:</strong> Store session logs, delegation rules, and settings locally on your device.</li>
     <li><strong>alarms:</strong> Schedule periodic checks for delegation rule expiration and detection sweeps.</li>
     <li><strong>notifications:</strong> Display boundary violation alerts when an agent attempts unauthorized actions.</li>
-    <li><strong>debugger:</strong> Detect when an automation framework (Playwright, Puppeteer) attaches a Chrome DevTools Protocol debugger to the browser. This is a core detection signal. The extension does not use the debugger to read page content or inject code.</li>
-    <li><strong>downloads:</strong> Save a session report as a JSON file when you choose to export it.</li>
+    <li><strong>debugger:</strong> Detect when an automation framework (Playwright, Puppeteer) attaches a Chrome DevTools Protocol debugger to the browser -- a core detection signal -- and, for tabs you have delegated to an agent with restricted boundaries, attach a CDP session to block network requests that violate those boundaries. The extension does not use the debugger to read page content or inject code, and detaches when delegation ends.</li>
+    <li><strong>downloads:</strong> Monitor downloads created while an AI agent is active so agent-initiated downloads can be detected and cancelled per your delegation rules (your own downloads are never flagged), and save a session report as a JSON file when you choose to export it.</li>
     <li><strong>host_permissions (&lt;all_urls&gt;):</strong> The content script must run on all pages to detect automation frameworks, since AI agents can operate on any website. Detection cannot be limited to specific domains without losing coverage. Page content is analyzed locally and is never transmitted.</li>
   </ul>
 
