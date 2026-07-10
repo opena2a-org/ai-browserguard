@@ -2,30 +2,32 @@
 
 [![Status: beta](https://img.shields.io/badge/status-beta-yellow)](./STATUS.md)
 [![Build](https://github.com/opena2a-org/AI-BrowserGuard/actions/workflows/ci.yml/badge.svg)](https://github.com/opena2a-org/AI-BrowserGuard/actions/workflows/ci.yml)
-[![Tests](https://img.shields.io/badge/tests-614%20passing-brightgreen)](https://github.com/opena2a-org/AI-BrowserGuard)
+[![Tests](https://img.shields.io/badge/tests-664%20passing-brightgreen)](https://github.com/opena2a-org/AI-BrowserGuard)
 [![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
 [![Chrome MV3](https://img.shields.io/badge/Chrome-Manifest%20V3-4285F4)](https://developer.chrome.com/docs/extensions/mv3/)
 
-Chrome extension that detects and monitors AI agents operating in your browser, and blocks their scripted navigations, form submissions, new-tab opens, and downloads. Identifies Playwright, Puppeteer, Selenium, Anthropic Computer Use, and OpenAI Operator -- without requiring the agent to identify itself.
+Chrome extension that detects and monitors AI agents operating in your browser -- Playwright, Puppeteer, Selenium, Anthropic Computer Use, and OpenAI Operator -- without requiring the agent to identify itself. For in-page and injected automation it can also block scripted navigations, form submissions, new-tab opens, and downloads (best-effort, in the page realm). It **cannot** block external automation frameworks that drive the browser over CDP; against those, AI Browser Guard provides detection, alerting, and a kill switch that closes the tab -- not per-action enforcement. See [Scope of enforcement](#what-it-does).
 
 [![Chrome Web Store](https://img.shields.io/badge/Chrome%20Web%20Store-Install-4285F4?logo=googlechrome&logoColor=white)](https://chromewebstore.google.com/detail/ojphpdmabflmcjhglfogmkdgchkncikf)
 
 [Install from Chrome Web Store](https://chromewebstore.google.com/detail/ojphpdmabflmcjhglfogmkdgchkncikf) | [Website](https://opena2a.org/aibrowserguard) | [Privacy Policy](https://opena2a.org/aibrowserguard/privacy)
 
-![An AI agent takes over a banking tab. AI Browser Guard detects it, blocks the transfer it tries to submit with an in-page notice, and the kill switch ends every connection.](docs/browserguard-demo.gif)
+![An AI agent takes over a banking tab. AI Browser Guard detects it, flags the transfer it tries to submit with an in-page notice, and the kill switch closes the tab.](docs/browserguard-demo.gif)
 
-An AI agent takes over a tab. AI Browser Guard detects it without the agent identifying itself, blocks the transfer it tries to submit, and the kill switch (Ctrl+Shift+K) ends every connection.
+An AI agent takes over a tab. AI Browser Guard detects it without the agent identifying itself, flags the transfer it tries to submit, and the kill switch (Ctrl+Shift+K) closes the tab the agent controls.
 
 ---
 
-## What It Protects Against
+## What It Does
 
-- **Agent takeover without notice** -- Browser-based AI agents can control your session via CDP, WebDriver, or behavioral automation. AI Browser Guard detects their presence using three independent detection layers: CDP debugger monitoring, V8 stack trace analysis, and environment fingerprinting.
-- **Unauthorized actions** -- Delegation rules define what an agent can and cannot do. Scripted navigations, form submissions, synthetic clicks and typing, new-tab opens, and (under an active delegation) downloads are blocked before execution, with a notification for each violation.
-- **Unmonitored sessions** -- Every agent action is logged to a session timeline with timestamps, target URLs, elements, and outcomes (allowed/blocked). The last 5 sessions are retained.
-- **No kill switch** -- One-click termination of all agent connections. Revokes permissions, clears automation flags, and terminates CDP sessions. Keyboard shortcut: Ctrl+Shift+K / Cmd+Shift+K.
+- **Detects agent takeover without notice** -- Browser-based AI agents can control your session via CDP, WebDriver, or behavioral automation. AI Browser Guard detects their presence using three independent detection layers: CDP debugger monitoring, V8 stack trace analysis, and environment fingerprinting. Detection works against external frameworks; enforcement does not (see Scope of enforcement).
+- **Constrains in-page automation** -- Delegation rules define what an in-page/injected agent can do. Scripted navigations, form submissions, synthetic clicks and typing, new-tab opens, and (under an active delegation) downloads are blocked best-effort in the page realm, with a notification for each block. **This does not apply to external CDP frameworks**, which act via native input the page realm cannot intercept.
+- **Logs what it can see** -- Page-realm agent actions are logged to a session timeline with timestamps, target URLs, elements, and outcomes (allowed/blocked). The last 5 sessions are retained. A session driven by an external CDP framework will show few or no actions **because its native input is not observable, not because nothing happened** -- reports state this scope explicitly.
+- **Kill switch** -- One-click stop. Revokes delegations, dispatches a page-realm stop to in-page automation, and **closes the tabs an agent controls** (the real interruption of an in-progress action). It does **not** terminate an external CDP session -- an extension cannot -- and a persistent external driver can reopen a tab. Keyboard shortcut: Ctrl+Shift+K / Cmd+Shift+K.
 
-> **Scope of enforcement (v0.4.x).** Blocking applies to scripted navigations, form submissions, synthetic clicks and typing, new-tab opens, and downloads (under an active delegation). Agent DOM writes through the principal DOM-write sinks (`innerHTML`/`outerHTML`, `insertAdjacentHTML`, `setHTMLUnsafe`, `document.write`/`writeln`, `setAttribute`/`setAttributeNS`) are also blocked under delegation, scoped to agent-attributed writes so the page's own scripts are never affected. Agent network egress (`fetch`, `XHR`, `sendBeacon`) is blocked too when delegation withholds it (`readOnly`/`limited` withhold it, `fullAccess` allows it), again scoped to agent-attributed requests so a blocked agent cannot POST page data out while the user's own requests still go through. (Not yet covered: `WebSocket`, `EventSource`, element-`src` injection, and Worker/iframe fetch — tracked with the CDP-layer move.) DOM reads, injected scripts, screenshots, and the DOM-write paths not yet wrapped (node-insertion APIs like `appendChild`, the `textContent` setter, reflected-attribute property setters like `el.href`) are currently **observed and logged, not blocked**. Page-realm enforcement also cannot intercept every CDP-driven input. Browser-level (CDP/debugger) enforcement of the remaining capabilities is planned; until then, treat the kill switch as the hard stop.
+> **Scope of enforcement (v0.4.x).** External automation frameworks (Playwright, Puppeteer, Selenium, Anthropic Computer Use, OpenAI Operator) drive the browser with native CDP input that the page realm cannot intercept. For those agents, the per-action blocking below does not apply -- AI Browser Guard provides detection, alerting, and the kill switch (which closes the tab), not per-action enforcement. An extension cannot add per-action enforcement against a framework that owns the tab's debugger slot; the only categorical prevention is a managed-Chrome policy, `RemoteDebuggingAllowed=false` (admin-controlled), and modern Chrome (136+) already blocks remote debugging of your default profile by default. Treat the kill switch as the hard stop for an in-progress action.
+>
+> The blocking that follows applies **only to in-page / injected automation** (agents whose actions run through page JavaScript), and is best-effort (a hostile page can re-patch the wrapped globals): scripted navigations, form submissions, synthetic clicks and typing, new-tab opens, and downloads (under an active delegation). Agent DOM writes through the principal DOM-write sinks (`innerHTML`/`outerHTML`, `insertAdjacentHTML`, `setHTMLUnsafe`, `document.write`/`writeln`, `setAttribute`/`setAttributeNS`) are also blocked under delegation, scoped to agent-attributed writes so the page's own scripts are never affected. Agent network egress (`fetch`, `XHR`, `sendBeacon`) is blocked too when delegation withholds it (`readOnly`/`limited` withhold it, `fullAccess` allows it), again scoped to agent-attributed requests. (Not yet covered even in-page: `WebSocket`, `EventSource`, element-`src` injection, and Worker/iframe fetch.) DOM reads, injected scripts, screenshots, and unwrapped DOM-write paths (`appendChild`, the `textContent` setter, reflected-attribute setters like `el.href`) are **not blocked and not observed**.
 
 ## Detected Frameworks
 
@@ -63,6 +65,8 @@ Then open `chrome://extensions`, enable Developer mode, click Load unpacked, and
 | Read-Only | Navigate and read pages. No clicking, typing, or form submission. |
 | Limited | Interact with specific sites (user-defined allowlist), time-bounded (15min/1hr/4hr). |
 | Full Access | Unrestricted, but all actions are logged and boundary alerts remain active. |
+
+> **These presets are enforced best-effort against in-page / injected automation only.** External CDP frameworks (Playwright, Puppeteer, Selenium, Computer Use, Operator) bypass them entirely -- they drive via native input the page realm cannot intercept. For those agents a preset is a recorded intent, not an enforced boundary; the kill switch (close tab) is the hard stop. See [Scope of enforcement](#what-it-does).
 
 Site allowlists and blocklists support glob patterns (e.g., `*.bank.com`).
 

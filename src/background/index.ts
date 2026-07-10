@@ -841,8 +841,10 @@ async function executeKillSwitch(
   trigger: 'button' | 'keyboard-shortcut' | 'api'
 ): Promise<KillSwitchEvent> {
   const agentIds = Array.from(state.activeAgents.values()).map((a) => a.id);
+  // Tabs with an active detected agent — closing these is the real hard stop.
+  const agentTabIds = Array.from(state.activeAgents.keys());
 
-  const event = await executeBackgroundKillSwitch(trigger, agentIds, []);
+  const event = await executeBackgroundKillSwitch(trigger, agentIds, [], agentTabIds);
 
   state.killSwitch.isActive = true;
   state.killSwitch.lastEvent = event;

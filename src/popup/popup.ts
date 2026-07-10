@@ -15,6 +15,7 @@ import { createInitialWizardState, renderWizard } from '../delegation/wizard';
 import type { WizardState } from '../delegation/wizard';
 import { createRuleFromPreset, FULL_ACCESS_MAX_MINUTES } from '../delegation/rules';
 import { selectEffectiveRule } from '../delegation/effective';
+import { presentAgent } from '../delegation/enforceability';
 import type { AIMAuthState } from '../aim/auth';
 import { getAIMAuthState } from '../aim/auth';
 import { triggerJsonDownload } from './download';
@@ -472,17 +473,25 @@ function renderDetectionPanel(): void {
     // Common frameworks (Playwright, Puppeteer, Selenium) get a "Known tool" indicator.
     const KNOWN_TOOLS = new Set(['playwright', 'puppeteer', 'selenium']);
     const isKnownTool = KNOWN_TOOLS.has(agent.type);
-    // Per-agent: this agent is "managed" only if a rule is bound to THIS agent
-    // (or a session-wide rule applies), not because any delegation exists.
+    // Per-agent rule bound to THIS agent (or a session-wide rule applies).
     const agentRule = getActiveRuleForAgent(agent.id);
-    const hasActiveDelegation = agentRule !== null;
+    // ADR-008: one source of truth for what we can state about this agent.
+    // External CDP/WebDriver drivers are detect-only — a rule does NOT make them
+    // "Managed", because we cannot enforce it against them.
+    const presentation = presentAgent(agent, agentRule);
 
     const trustBadge = document.createElement('span');
-    if (hasActiveDelegation && (isKnownTool || (agent.trustScore !== undefined && agent.trustScore < 0.3))) {
-      // User has explicitly set delegation rules — agent is "managed" regardless of registry score
+    if (!presentation.enforceable) {
+      // External driver: monitor-only. Amber (informational), never the teal
+      // "Managed" pill that would imply governance we cannot deliver.
+      trustBadge.style.cssText = 'font-size: 11px; font-weight: 600; padding: 1px 6px; border-radius: 3px; color: white; background: #f59e0b; margin-left: 4px;';
+      trustBadge.textContent = presentation.badge;
+      trustBadge.title = presentation.badgeTitle;
+    } else if (agentRule) {
+      // In-page agent under a rule — page-realm enforcement genuinely applies (best-effort).
       trustBadge.style.cssText = 'font-size: 11px; font-weight: 600; padding: 1px 6px; border-radius: 3px; color: white; background: #06b6d4; margin-left: 4px;';
-      trustBadge.textContent = 'Managed';
-      trustBadge.title = 'You have an active delegation rule for this agent';
+      trustBadge.textContent = presentation.badge;
+      trustBadge.title = presentation.badgeTitle;
     } else if (agent.trustScore !== undefined && agent.trustScore !== null) {
       const score = agent.trustScore;
       let trustColor: string;
@@ -606,6 +615,14 @@ function renderDetectionPanel(): void {
     card.appendChild(metaRow);
     card.appendChild(urlRow);
     card.appendChild(quickAllowRow);
+    // ADR-008: when a policy is set on an agent we cannot enforce against, state
+    // the scope so "Read-Only" is not read as an enforced boundary.
+    if (presentation.ruleCaveat) {
+      const caveat = document.createElement('div');
+      caveat.style.cssText = 'font-size: 11px; color: #b45309; font-weight: 600; margin-top: 6px; line-height: 1.35;';
+      caveat.textContent = presentation.ruleCaveat;
+      card.appendChild(caveat);
+    }
     container.appendChild(card);
   }
 }
@@ -1095,11 +1112,15 @@ function renderReportsPanel(): void {
     const detail = document.createElement('div');
     detail.style.cssText = 'font-size: 12px; line-height: 1.6;';
 
+    // ADR-008: for an external CDP/WebDriver driver the counts are page-level
+    // only. Label them so a 0 is never read as "the agent did nothing".
+    const observable = report.coverage?.nativeCdpInputObservable !== false;
+    const actionsLabel = observable ? 'Actions' : 'Page-level actions';
     const lines = [
       `Agent: ${formatAgentType(report.agentType)}`,
       `Duration: ${report.durationSeconds !== null ? `${report.durationSeconds}s` : 'N/A'}`,
       `End reason: ${report.endReason ?? 'N/A'}`,
-      `Actions: ${report.actionSummary.total} total, ${report.actionSummary.allowed} allowed, ${report.actionSummary.blocked} blocked`,
+      `${actionsLabel}: ${report.actionSummary.total} total, ${report.actionSummary.allowed} allowed, ${report.actionSummary.blocked} blocked`,
       `Events: ${report.totalEvents}`,
     ];
 
@@ -1125,6 +1146,16 @@ function renderReportsPanel(): void {
       detail.appendChild(lineEl);
     }
     container.appendChild(detail);
+
+    // ADR-008: when the agent drove via native CDP input we could not observe,
+    // state the scope. Without this, "0 blocked / 0 violations" reads as an
+    // all-clear for a session we could not see.
+    if (report.coverage && report.coverage.nativeCdpInputObservable === false) {
+      const scope = document.createElement('div');
+      scope.style.cssText = 'margin-top: 8px; padding: 8px; border-left: 3px solid #f59e0b; background: rgba(245,158,11,0.08); font-size: 11px; line-height: 1.4;';
+      scope.textContent = report.coverage.note;
+      container.appendChild(scope);
+    }
 
     const exportBtn = document.createElement('button');
     exportBtn.className = 'btn btn-secondary btn-sm';
@@ -1350,12 +1381,10 @@ function renderMetricsPanel(): void {
   // Sessions monitored
   addMetricCell(grid, String(stats.totalSessions), 'sessions monitored');
 
-  // Actions blocked — show 0 as a positive ("no violations")
-  if (stats.totalActionsBlocked > 0) {
-    addMetricCell(grid, String(stats.totalActionsBlocked), 'actions blocked');
-  } else {
-    addMetricCell(grid, 'None', 'violations detected');
-  }
+  // Page-level blocks. ADR-008: a 0 here is NOT an all-clear — external CDP
+  // agents act via native input we cannot see or block, so we must never frame 0
+  // as "no violations detected". Show the neutral page-level count instead.
+  addMetricCell(grid, String(stats.totalActionsBlocked), 'page-level blocks');
 
   // Top detected agent framework
   const types = Object.entries(stats.agentTypesDetected);

@@ -4,7 +4,7 @@
 AI Browser Guard
 
 ## Short Description (132 chars max)
-[BETA] Detect, monitor, and block scripted AI-agent actions in your browser. Kill switch, delegation rules, alerts. Local-first.
+[BETA] Detects AI agents (Playwright, Puppeteer, Computer Use) driving your browser. Alerts, kill switch, delegation. Local-first.
 
 ## Detailed Description
 
@@ -18,7 +18,11 @@ When an AI agent (Playwright, Puppeteer, Selenium, Anthropic Computer Use, OpenA
 
 - Detects the takeover using multiple signals: WebDriver flags, Chrome DevTools Protocol markers, behavioral analysis of mouse/keyboard patterns, and framework-specific fingerprints
 - Shows detection status in the popup with confidence level and detection method
-- Logs all agent activity in a session timeline
+- Logs the agent activity it can observe in a session timeline
+
+SCOPE AND LIMITATIONS
+
+External automation frameworks (Playwright, Puppeteer, Selenium, Anthropic Computer Use, OpenAI Operator) drive the browser over the Chrome DevTools Protocol with native input. AI Browser Guard detects and alerts on these agents, and its kill switch closes the tab they control, but it does not block their individual actions and cannot see their clicks, typing, or screenshots in the timeline. A browser extension cannot enforce per-action policy against a framework that owns the tab's debugger slot; the only categorical block is a managed-Chrome policy (RemoteDebuggingAllowed=false), and modern Chrome already blocks remote debugging of your default profile by default. The delegation presets and per-action blocking below apply to IN-PAGE / injected automation only, best-effort. If a session report shows few or no actions for an external agent, that means its actions were not observable, not that nothing happened.
 
 FIVE CORE FEATURES
 
@@ -26,7 +30,7 @@ FIVE CORE FEATURES
    Identifies automation frameworks without requiring agents to self-identify. Uses WebDriver flag detection, CDP connection scanning, behavioral heuristics (click precision, typing cadence, synthetic events), and framework fingerprinting.
 
 2. Emergency Kill Switch
-   One-click termination of all agent access. Clears automation flags, revokes delegated permissions, and broadcasts stop commands to all tabs. Keyboard shortcut: Ctrl+Shift+K (Cmd+Shift+K on Mac).
+   One-click stop. Revokes delegated permissions, dispatches a page-realm stop to in-page automation, and closes the tabs an agent controls (the real interruption of an in-progress action). It does not terminate an external CDP session -- an extension cannot -- and a persistent external driver can reopen a tab. Keyboard shortcut: Ctrl+Shift+K (Cmd+Shift+K on Mac).
 
 3. Delegation Wizard
    Define what agents can and cannot do before they connect:
@@ -35,7 +39,7 @@ FIVE CORE FEATURES
    - Full Access: Everything allowed, with logging and alerts
 
 4. Boundary Violation Alerts
-   When an agent attempts a scripted navigation, form submission, click, keystroke, new-tab open, or download outside its delegation scope, the action is blocked and you receive a notification showing what was attempted, which rule blocked it, and the option to allow it once. (DOM reads, injected scripts, screenshots, and network requests are currently logged but not blocked; use the kill switch to fully cut off an agent.)
+   When an IN-PAGE agent attempts a scripted navigation, form submission, click, keystroke, new-tab open, or download outside its delegation scope, the action is blocked (best-effort) and you receive a notification showing what was attempted, which rule blocked it, and the option to allow it once. External CDP frameworks drive via native input these alerts cannot see -- for those, rely on detection and the kill switch. (DOM reads, injected scripts, and screenshots are not blocked; use the kill switch to close the agent's tab.)
 
 5. Session Timeline
    Chronological log of all agent actions: timestamps, action types, target URLs, element selectors, and whether each action was allowed or blocked. Last 5 sessions retained.

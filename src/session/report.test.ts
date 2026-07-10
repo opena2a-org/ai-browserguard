@@ -50,6 +50,24 @@ function makeSession(overrides: Partial<AgentSession> = {}): AgentSession {
   };
 }
 
+describe('generateSessionReport coverage (ADR-008)', () => {
+  it('marks native input NOT observable for an external CDP driver, with a note', () => {
+    const report = generateSessionReport(makeSession({ agent: makeAgent('playwright') }));
+    expect(report.coverage.nativeCdpInputObservable).toBe(false);
+    expect(report.coverage.note).toMatch(/not observable|not included/i);
+  });
+
+  it('marks native input observable (no note) for a page-realm in-page agent', () => {
+    const inPage: AgentIdentity = {
+      ...makeAgent('unknown'),
+      detectionMethods: ['synthetic-event'],
+    };
+    const report = generateSessionReport(makeSession({ agent: inPage }));
+    expect(report.coverage.nativeCdpInputObservable).toBe(true);
+    expect(report.coverage.note).toBe('');
+  });
+});
+
 describe('generateSessionReport', () => {
   it('generates a report from an empty session', () => {
     const session = makeSession();
