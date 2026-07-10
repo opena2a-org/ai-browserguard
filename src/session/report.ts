@@ -8,6 +8,7 @@
 
 import type { AgentSession, SessionSummary } from './types';
 import type { AgentCapability } from '../types/agent';
+import { nativeInputObservable, UNOBSERVABLE_SCOPE_NOTE } from '../delegation/enforceability';
 
 /**
  * A complete post-session report.
@@ -34,6 +35,16 @@ export interface SessionReport {
     total: number;
     allowed: number;
     blocked: number;
+  };
+  /**
+   * Observability scope (ADR-008). For an external CDP/WebDriver driver, native
+   * input (clicks, typing, screenshots) is NOT observable, so `actionSummary` is
+   * a floor ("what we could see"), not a complete record. Consumers MUST surface
+   * `note` so a 0 count is never read as "nothing happened".
+   */
+  coverage: {
+    nativeCdpInputObservable: boolean;
+    note: string;
   };
   /** Violation counts grouped by capability. */
   violationsByCapability: Record<string, number>;
@@ -135,6 +146,10 @@ export function generateSessionReport(session: AgentSession): SessionReport {
       total: session.summary.totalActions,
       allowed: session.summary.allowedActions,
       blocked: session.summary.blockedActions,
+    },
+    coverage: {
+      nativeCdpInputObservable: nativeInputObservable(session.agent),
+      note: nativeInputObservable(session.agent) ? '' : UNOBSERVABLE_SCOPE_NOTE,
     },
     violationsByCapability,
     topUrls: session.summary.topUrls,

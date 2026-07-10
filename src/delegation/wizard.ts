@@ -160,7 +160,7 @@ export function finalizeWizard(state: WizardState): DelegationRule | null {
 const PRESET_DESCRIPTIONS: Record<DelegationPreset, { title: string; description: string }> = {
   readOnly: {
     title: 'Read-Only',
-    description: 'Agent can navigate and read page content. Cannot click, type, or submit forms.',
+    description: 'Blocks clicking, typing, and form submission for in-page automation (best-effort). External CDP agents (Playwright, Computer Use, etc.) bypass this -- use the kill switch to close the tab.',
   },
   limited: {
     title: 'Limited Access',

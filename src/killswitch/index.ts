@@ -62,7 +62,8 @@ export function executeContentKillSwitch(): {
 export async function executeBackgroundKillSwitch(
   trigger: 'button' | 'keyboard-shortcut' | 'api',
   activeAgentIds: string[],
-  activeTokens: DelegationToken[]
+  activeTokens: DelegationToken[],
+  agentTabIds: number[] = []
 ): Promise<KillSwitchEvent> {
   const revokedTokenIds: string[] = [];
 
@@ -72,9 +73,11 @@ export async function executeBackgroundKillSwitch(
     revokedTokenIds.push(token.tokenId);
   }
 
-  // Send kill command to all tabs
-  let cdpTerminated = false;
-  let automationFlagsCleared = false;
+  // (1) Dispatch the page-realm stop signal to every tab. This halts in-page /
+  // injected automation (the population the page realm can actually control) and
+  // scrubs page-realm automation markers. It does NOT terminate an external CDP
+  // session — see the closed-tabs step for the real stop against those.
+  let pageRealmCleanupDispatched = false;
   try {
     const tabs = await chrome.tabs.query({});
     for (const tab of tabs) {
@@ -86,13 +89,30 @@ export async function executeBackgroundKillSwitch(
           sentAt: new Date().toISOString(),
         });
       } catch {
-        // Tab may not have content script
+        // Tab may not have a content script.
       }
     }
-    cdpTerminated = true;
-    automationFlagsCleared = true;
+    pageRealmCleanupDispatched = true;
   } catch {
-    // Best effort
+    // Best effort.
+  }
+
+  // (2) The real hard stop: close every tab that has an active detected agent.
+  // Closing destroys the page target the agent is driving, so its in-progress
+  // action (e.g. a form submission via native CDP input) cannot complete. This
+  // is the one lever that actually interrupts an external CDP framework — unlike
+  // the page-realm signal above, which native trusted input bypasses. A
+  // persistent driver can still reopen a tab at the browser level (ADR-008);
+  // the categorical stop is `RemoteDebuggingAllowed=false`, which needs managed
+  // Chrome and an extension cannot set.
+  const closedTabIds: number[] = [];
+  for (const tabId of agentTabIds) {
+    try {
+      await chrome.tabs.remove(tabId);
+      closedTabIds.push(tabId);
+    } catch {
+      // Tab already gone / not removable — best effort.
+    }
   }
 
   const event: KillSwitchEvent = {
@@ -101,12 +121,12 @@ export async function executeBackgroundKillSwitch(
     trigger,
     terminatedAgentIds: [...activeAgentIds],
     revokedTokenIds,
-    cdpTerminated,
-    automationFlagsCleared,
+    closedTabIds,
+    pageRealmCleanupDispatched,
   };
 
   // Show notification
-  showKillSwitchNotification(activeAgentIds.length);
+  showKillSwitchNotification(closedTabIds.length);
 
   return event;
 }
@@ -187,13 +207,17 @@ export function clearAutomationFlags(): string[] {
 /**
  * Show a Chrome notification confirming kill switch activation.
  */
-export function showKillSwitchNotification(agentCount: number): void {
+export function showKillSwitchNotification(closedTabCount: number): void {
   try {
+    const message =
+      closedTabCount > 0
+        ? `Closed ${closedTabCount} tab(s) an agent was controlling. All delegations revoked.`
+        : 'Agent access revoked and monitoring stopped. All delegations revoked.';
     chrome.notifications.create(`abg-killswitch-${Date.now()}`, {
       type: 'basic',
       iconUrl: chrome.runtime.getURL('icons/icon128.png'),
       title: 'AI Browser Guard - Kill Switch Activated',
-      message: `Terminated ${agentCount} agent session(s). All delegations revoked.`,
+      message,
       priority: 2,
     });
 

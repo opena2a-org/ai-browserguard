@@ -301,7 +301,7 @@ describe('KILL_SWITCH_RESET state reset', () => {
     // We use explicit nullable types to match KillSwitchState.
     const killSwitch: {
       isActive: boolean;
-      lastEvent: { id: string; timestamp: string; trigger: 'button'; terminatedAgentIds: string[]; revokedTokenIds: string[]; cdpTerminated: boolean; automationFlagsCleared: boolean } | null;
+      lastEvent: { id: string; timestamp: string; trigger: 'button'; terminatedAgentIds: string[]; revokedTokenIds: string[]; closedTabIds: number[]; pageRealmCleanupDispatched: boolean } | null;
       lastActivatedAt: string | null;
     } = {
       isActive: true,
@@ -311,8 +311,8 @@ describe('KILL_SWITCH_RESET state reset', () => {
         trigger: 'button' as const,
         terminatedAgentIds: [],
         revokedTokenIds: [],
-        cdpTerminated: true,
-        automationFlagsCleared: true,
+        closedTabIds: [],
+        pageRealmCleanupDispatched: true,
       },
       lastActivatedAt: new Date().toISOString(),
     };

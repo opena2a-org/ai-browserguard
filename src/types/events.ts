@@ -109,11 +109,22 @@ export interface KillSwitchEvent {
   /** IDs of delegation tokens that were revoked. */
   revokedTokenIds: string[];
 
-  /** Whether CDP connections were successfully terminated. */
-  cdpTerminated: boolean;
+  /**
+   * Tab IDs actually closed by the kill switch — the real hard stop. Closing an
+   * agent-controlled tab destroys the page target the agent was acting on. Note
+   * (ADR-008): a persistent external CDP driver can reconnect at the browser
+   * level and open a new tab; the categorical stop is a managed-Chrome policy
+   * (`RemoteDebuggingAllowed=false`), which an extension cannot set.
+   */
+  closedTabIds: number[];
 
-  /** Whether automation flags were successfully cleared. */
-  automationFlagsCleared: boolean;
+  /**
+   * Whether the page-realm stop signal was dispatched to content scripts (which
+   * halts in-page/injected automation and scrubs page-realm automation markers).
+   * This is NOT a claim that an external CDP/WebDriver session was terminated —
+   * an extension cannot terminate a debugger session it does not own.
+   */
+  pageRealmCleanupDispatched: boolean;
 }
 
 /**
