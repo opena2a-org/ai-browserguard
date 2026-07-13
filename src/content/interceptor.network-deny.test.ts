@@ -34,7 +34,20 @@ function asAgent<T>(fn: () => T): T {
 }
 
 function flush(): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, 0));
+  // Wait for a MessagePort message posted just before this call to be delivered
+  // AND its handler to run. A single setTimeout(0) is not enough under CI's
+  // MessageChannel scheduling: the MSG_RULE_UPDATE can still be in flight when the
+  // assertion runs, which made the network-deny tests flaky (an agent XHR saw
+  // readyState 1 because the block rule had not applied yet). Draining several
+  // macrotask cycles closes that window; microtasks drain between each tick.
+  return new Promise((resolve) => {
+    let ticks = 5;
+    const tick = (): void => {
+      if (--ticks <= 0) resolve();
+      else setTimeout(tick, 0);
+    };
+    setTimeout(tick, 0);
+  });
 }
 
 async function setRule(rule: TestRule | null): Promise<void> {
