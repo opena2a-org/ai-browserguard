@@ -1,7 +1,7 @@
-# Chrome Web Store resubmission — copy/paste fields (v0.4.2)
+# Chrome Web Store resubmission — copy/paste fields (v0.5.0)
 
 This file is the exact text to paste into the Chrome Web Store Developer
-Dashboard for the v0.4.2 resubmission. It supersedes the live listing's
+Dashboard for the v0.5.0 resubmission. It supersedes the live listing's
 "Zero network requests. No analytics, no tracking, no data collection."
 claim, which is inaccurate now that opt-in community features exist (they are
 off by default). Everything below tells the same "off by default, optional
