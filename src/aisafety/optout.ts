@@ -13,6 +13,8 @@
  * Both mutations above now fail a test.
  */
 
+import { getStoredEntryCount, clearAiSafetyCache } from './cache';
+
 export interface OptOutResponse {
   /** Whether the settings write itself landed. */
   success: true;
@@ -88,8 +90,15 @@ export async function performOptOutClear(clear: () => Promise<void>): Promise<Op
 export async function reconcileOptOut(deps: {
   /** Whether the user currently has the feature enabled. */
   enabled: boolean;
-  /** How many declarations are stored. */
-  cacheSize: () => Promise<number>;
+  /**
+   * How many declarations are STORED — expired ones included.
+   *
+   * Must not be a live/unexpired count. Expired entries are still bytes on disk,
+   * and while the user is opted out nothing ever purges them, so a live count
+   * reports "nothing outstanding" as soon as the TTL lapses while the data is
+   * still there. See `getStoredEntryCount`.
+   */
+  storedCount: () => Promise<number>;
   clear: () => Promise<void>;
 }): Promise<boolean> {
   // The user has opted back in, so there is no deletion obligation. This is also
@@ -99,10 +108,55 @@ export async function reconcileOptOut(deps: {
   if (deps.enabled) return true;
 
   try {
-    if ((await deps.cacheSize()) === 0) return true; // Nothing outstanding.
+    if ((await deps.storedCount()) === 0) return true; // Nothing outstanding.
     await deps.clear();
     return true;
   } catch {
     return false;
   }
+}
+
+/**
+ * The full reconcile, including reading the settings — the part that used to
+ * live in the service worker and therefore had no test at all.
+ *
+ * Extracted because "extract the decision so it can be tested" does not help if
+ * the extraction merely MOVES the untested code. `reconcileOptOut` was covered
+ * by outcome while the wiring that gave it meaning was not, and three mutations
+ * of that wiring survived the whole suite: inverting the enabled flag (deleting
+ * the cache when ENABLED and never when opted out), failing open on an
+ * unreadable settings read, and deleting the reconcile call outright.
+ *
+ * Every dependency is injected, so all three are now assertable by outcome.
+ */
+export async function reconcileFromSettings(deps: {
+  getSettings: () => Promise<{ aiSafetyTxtEnabled: boolean } | null>;
+  /** Drop anything currently on screen. Only called when opted out. */
+  clearInMemory: () => void;
+}): Promise<boolean> {
+  const settings = await deps.getSettings().catch(() => null);
+  // Cannot read the setting: do nothing rather than delete data on a guess, and
+  // report not-settled so the obligation is retried.
+  if (!settings) return false;
+
+  // Opted out, so nothing should be on screen either. Scoped to this branch on
+  // purpose: clearing unconditionally would let a stale retry click — the button
+  // can outlive its warning by one render — blank the declarations of a feature
+  // the user has just re-enabled.
+  if (!settings.aiSafetyTxtEnabled) {
+    deps.clearInMemory();
+  }
+
+  return reconcileOptOut({
+    enabled: settings.aiSafetyTxtEnabled,
+    // Imported, NOT injected. These two were parameters, and the caller lived in
+    // the service worker — a module no test can import — so "pass the live count
+    // instead of the stored count" was a one-word miswiring that no test could
+    // catch, and it is exactly the bug that shipped. Binding them here means the
+    // wrong counter cannot be supplied: there is nothing to supply. Tests
+    // exercise the real cache against the chrome.storage mock, which is closer
+    // to production than a hand-written fake anyway.
+    storedCount: getStoredEntryCount,
+    clear: clearAiSafetyCache,
+  });
 }

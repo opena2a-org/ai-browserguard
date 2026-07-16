@@ -33,10 +33,11 @@ import {
 import { lookupAgentIdentity } from '../aim/client';
 import { lookupRegistryTrust } from '../registry/client';
 import { lookupAiSafetyDeclaration, declarationOriginFor } from '../aisafety/client';
-import { clearAiSafetyCache, getAiSafetyCacheSize } from '../aisafety/cache';
+import { clearAiSafetyCache } from '../aisafety/cache';
 import { collectAiSafetyDeclarations } from '../aisafety/attribution';
 import type { StoredDeclaration } from '../aisafety/attribution';
-import { shouldClearDeclarations, performOptOutClear, reconcileOptOut } from '../aisafety/optout';
+import { shouldClearDeclarations, performOptOutClear, reconcileFromSettings } from '../aisafety/optout';
+import type { OptOutResponse } from '../aisafety/optout';
 import { generateSessionReport, storeReport, getReports } from '../session/report';
 import { recordDetection, queueEvent, flushQueue, getConsent, getContributeStats } from '../contribute/client';
 import { anonymizeDetection, anonymizeSession } from '../contribute/anonymize';
@@ -126,9 +127,12 @@ function initialize(): void {
   // Settle any outstanding ai-safety.txt deletion: opted out, but declarations
   // still on disk because a previous delete failed. The obligation is durable
   // and the popup that discovered it is not — its warning dies when the popup
-  // closes — so the check runs on every worker start and the failure self-heals.
-  // A no-op in every normal case.
-  reconcileAiSafetyStorage().catch(() => { /* retried on the next start */ });
+  // closes — so the check does not depend on the popup. A no-op in every normal
+  // case. Also re-run on the contribute-flush tick below: the keepalive alarm
+  // deliberately stops this worker from being torn down, so a start is rarer
+  // than MV3's ~30s idle implies and could otherwise be the next browser
+  // restart.
+  reconcileAiSafetyStorage().catch(() => { /* retried on the next tick */ });
 
   // Message routing
   chrome.runtime.onMessage.addListener(handleMessage);
@@ -170,6 +174,13 @@ function initialize(): void {
           await flushQueue().catch(() => { /* non-critical */ });
         }
       })().catch(() => { /* non-critical */ });
+      // Piggy-backed on the existing housekeeping tick rather than a new alarm.
+      // Bounds the opt-out self-heal to ~5 minutes: relying on worker start alone
+      // is weaker than it sounds, because the keepalive-ping alarm exists
+      // precisely to stop this worker being torn down, so the next start could be
+      // the next browser restart. Two storage reads, and a no-op unless a delete
+      // actually failed.
+      reconcileAiSafetyStorage().catch(() => { /* retried on the next tick */ });
     }
   });
 
@@ -428,7 +439,11 @@ function handleMessage(
       // which case calling sendResponse a second time would throw again into an
       // unhandled rejection.
       reconcileAiSafetyStorage().then((settled) => {
-        sendResponse({ success: true, declarationsCleared: settled });
+        // Typed, so the shape cannot drift from what the popup reads. `settled`
+        // is "nothing is outstanding" — true when opted out with an empty cache,
+        // having deleted nothing — which is what the popup needs to know.
+        const response: OptOutResponse = { success: true, declarationsCleared: settled };
+        sendResponse(response);
       });
       return true; // async response
     }
@@ -721,22 +736,11 @@ async function handleDetection(tabId: number, event: DetectionEvent): Promise<vo
  * Cheap: one storage read, and a no-op in the overwhelmingly common case.
  */
 async function reconcileAiSafetyStorage(): Promise<boolean> {
-  const settings = await getSettings().catch(() => null);
-  // Cannot read the setting: do nothing rather than delete data on a guess.
-  if (!settings) return false;
-
-  // Opted out, so nothing should be on screen either. Scoped to this branch on
-  // purpose: clearing unconditionally would let a stale retry click — the button
-  // can outlive its warning by one render — blank the declarations of a feature
-  // the user has just re-enabled.
-  if (!settings.aiSafetyTxtEnabled) {
-    state.aiSafetyDeclarations.clear();
-  }
-
-  return reconcileOptOut({
-    enabled: settings.aiSafetyTxtEnabled,
-    cacheSize: getAiSafetyCacheSize,
-    clear: clearAiSafetyCache,
+  // Dependency injection only — every decision lives in reconcileFromSettings,
+  // which is tested by outcome. Nothing here should grow an `if`.
+  return reconcileFromSettings({
+    getSettings,
+    clearInMemory: () => state.aiSafetyDeclarations.clear(),
   });
 }
 

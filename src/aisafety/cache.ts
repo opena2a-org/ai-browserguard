@@ -232,9 +232,47 @@ export async function clearAiSafetyCache(): Promise<void> {
   });
 }
 
-/** Number of live (unexpired) cached entries. Test/diagnostic helper. */
+/**
+ * Number of live (unexpired) cached entries. Test/diagnostic helper.
+ *
+ * Answers "what would a reader serve?", NOT "what is on disk?" — expired entries
+ * are invisible here but still stored. Do not use this to decide whether data
+ * needs deleting; use `getStoredEntryCount`.
+ */
 export async function getAiSafetyCacheSize(): Promise<number> {
   const cache = await readCache();
   const now = Date.now();
   return Object.values(cache).filter((entry) => entry.expiresAt > now).length;
+}
+
+/**
+ * Number of entries physically present in storage, expired or not, valid or not.
+ *
+ * This is the predicate for "is there anything to delete?", and it is emphatically
+ * NOT `getAiSafetyCacheSize`. That one counts what a reader would serve, and the
+ * gap between the two is permanent:
+ *
+ *   - `readCache` never writes back, so reading does not purge anything.
+ *   - `evict` only runs inside `writeCachedLookup`, which is gated OFF while the
+ *     user is opted out.
+ *
+ * So once a user opts out, expired entries are immortal. Deciding on the live
+ * count meant a failed opt-out delete resolved itself into "nothing outstanding"
+ * the moment the TTL lapsed — five minutes, for an `unreachable` entry — while
+ * the origins stayed on disk, and the popup then told the user the deletion had
+ * succeeded. The privacy promise is about bytes on disk, so this counts bytes on
+ * disk: raw keys, before any validity or expiry filter.
+ */
+export async function getStoredEntryCount(): Promise<number> {
+  let raw: unknown;
+  try {
+    const stored = await chrome.storage.local.get(CACHE_KEY);
+    raw = stored[CACHE_KEY];
+  } catch {
+    // Cannot tell. Report a non-zero count so the caller attempts the delete
+    // rather than concluding there is nothing to delete.
+    return 1;
+  }
+  if (typeof raw !== 'object' || raw === null) return 0;
+  return Object.keys(raw as Record<string, unknown>).length;
 }
