@@ -36,6 +36,7 @@ import { lookupAiSafetyDeclaration, declarationOriginFor } from '../aisafety/cli
 import { clearAiSafetyCache } from '../aisafety/cache';
 import { collectAiSafetyDeclarations } from '../aisafety/attribution';
 import type { StoredDeclaration } from '../aisafety/attribution';
+import { shouldClearDeclarations, performOptOutClear } from '../aisafety/optout';
 import { generateSessionReport, storeReport, getReports } from '../session/report';
 import { recordDetection, queueEvent, flushQueue, getConsent, getContributeStats } from '../contribute/client';
 import { anonymizeDetection, anonymizeSession } from '../contribute/anonymize';
@@ -382,32 +383,17 @@ function handleMessage(
         // immediately; queued events are cleared"). Leaving stale declarations
         // on disk and on screen after opt-out would contradict it.
         //
-        // Gated on this update actually TOUCHING the flag, not merely on the
-        // flag being off. It is off by default, so keying on its value alone
-        // would fire a storage delete on every unrelated toggle (Notifications,
-        // CDP), and — since the clear can now fail loudly — let an unrelated
-        // toggle report a failure for a settings write that in fact landed.
-        // Reading the payload needs no cached state, so unlike an edge check
-        // against a remembered value it cannot be wrong after a worker restart.
-        const touchedAiSafetyFlag = Object.prototype.hasOwnProperty.call(
-          updates,
-          'aiSafetyTxtEnabled',
-        );
-        if (touchedAiSafetyFlag && !settings.aiSafetyTxtEnabled) {
+        // The decision and the outcome-reporting are in aisafety/optout.ts, pure
+        // and tested by outcome. They are not inlined here because this module
+        // is a side-effect service worker no test can import, and the only guard
+        // available then is a regex over this source — which cannot tell a
+        // correct rule from a broken one.
+        if (shouldClearDeclarations(updates, settings)) {
           // In-memory first: even if the storage delete fails, the declarations
           // leave the screen and no further requests can happen (the gate is
           // already off in settings).
           state.aiSafetyDeclarations.clear();
-          return clearAiSafetyCache().then(
-            () => sendResponse({ success: true, declarationsCleared: true }),
-            // The setting itself SAVED; only the delete failed. Reporting
-            // `success: false` would claim the opt-out did not happen — it did.
-            // Reporting a flat `success: true` would claim the privacy policy's
-            // promise ("turning the setting off deletes every stored
-            // declaration") was kept when it was not. So the two outcomes are
-            // reported separately and the popup tells the user.
-            () => sendResponse({ success: true, declarationsCleared: false }),
-          );
+          return performOptOutClear(clearAiSafetyCache).then(sendResponse);
         }
         sendResponse({ success: true });
         return undefined;
@@ -415,6 +401,22 @@ function handleMessage(
         sendResponse({ success: false });
       });
       return true;
+    }
+
+    case 'AI_SAFETY_CLEAR': {
+      // Retry the opt-out delete on demand.
+      //
+      // Exists because the failure has to leave the user somewhere to go. The
+      // delete only fails while the setting is already OFF, so "toggle it off
+      // again" is not an available action — the only toggle on screen turns the
+      // feature back ON, which would re-enable the network requests the user
+      // just revoked. That is a dead end, and worse, one that pushes the user
+      // to re-consent. This gives the retry its own button.
+      state.aiSafetyDeclarations.clear();
+      performOptOutClear(clearAiSafetyCache).then(sendResponse).catch(() => {
+        sendResponse({ success: true, declarationsCleared: false });
+      });
+      return true; // async response
     }
 
     case 'NETWORK_EVENT': {

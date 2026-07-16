@@ -119,12 +119,15 @@ function parseUri(value: string): string | undefined {
 
   // Reject embedded credentials. `https://google.com@evil.com` has username
   // "google.com" and host "evil.com": it points at the attacker while reading as
-  // a link to Google. That is dangerous specifically because of how the popup
-  // renders these — one line, `white-space: nowrap`, `text-overflow: ellipsis` —
-  // so a long value truncates to `https://google.com@evil.co…`, hiding the only
-  // part that decides where it actually points. A Contact or Attestation URI has
-  // no legitimate use for userinfo. (Empty for mailto:/tel:, which are not
-  // hierarchical, so this does not touch them.)
+  // a link to Google. A Contact or Attestation URI has no legitimate use for
+  // userinfo. (Empty for mailto:/tel:, which are not hierarchical, so this does
+  // not touch them.)
+  //
+  // This is hardening, NOT the defence against display spoofing. Padding a
+  // subdomain — `https://google.com.<pad>.evil.com/` — reads the same way and
+  // needs no credentials, so no parser rule closes that class. The renderer does,
+  // by never truncating a value (`ai-safety-row.ts`). Do not read this line as
+  // making the display safe on its own.
   if (parsed.username !== '' || parsed.password !== '') return undefined;
 
   // Return the PARSED form, not the raw input. `new URL()` normalises what the

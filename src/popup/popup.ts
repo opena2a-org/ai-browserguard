@@ -55,6 +55,18 @@ interface PopupState {
   settingsPanelOpen: boolean;
   contributeStats: { totalContributed: number; queuedCount: number; lastFlushedAt: string | null; enabled: boolean } | null;
   showContributeTip: boolean;
+  /**
+   * Per-setting warning text, keyed by setting name.
+   *
+   * In popupState, not a local DOM node, because `renderSettingsPanel` rebuilds
+   * the panel with `replaceChildren()` and a re-render is not rare: any
+   * DETECTION_RESULT from any tab reaches the open popup and triggers
+   * `renderAll()`, as does toggling the Community Trust Data switch directly
+   * below. A bare node would be silently destroyed, so a user whose opt-out
+   * delete failed would see the warning vanish and conclude their declarations
+   * were deleted while they are still on disk.
+   */
+  settingWarnings: Record<string, string>;
 }
 
 let popupState: PopupState = {
@@ -78,6 +90,7 @@ let popupState: PopupState = {
   settingsPanelOpen: false,
   contributeStats: null,
   showContributeTip: false,
+  settingWarnings: {},
 };
 
 // Holds the interval ID for the delegation countdown timer.
@@ -1525,14 +1538,6 @@ function renderSettingsPanel(): void {
     switchLabel.className = 'toggle-switch';
 
     const input = document.createElement('input');
-    // Warning line for a setting that saved but could not fully take effect.
-    // Only ai-safety.txt uses it today (its opt-out also has to delete stored
-    // declarations, and that delete can fail).
-    const settingWarning = document.createElement('div');
-    settingWarning.style.cssText =
-      'font-size: 11px; color: #b45309; font-weight: 600; margin-top: 4px; line-height: 1.35;';
-    settingWarning.hidden = true;
-
     input.type = 'checkbox';
     input.checked = Boolean(popupState.settings[toggle.key]);
     input.addEventListener('change', () => {
@@ -1540,34 +1545,32 @@ function renderSettingsPanel(): void {
         ...popupState.settings,
         [toggle.key]: input.checked,
       };
-      settingWarning.hidden = true;
+      delete popupState.settingWarnings[toggle.key];
       sendToBackground('SETTINGS_UPDATE', {
         [toggle.key]: input.checked,
       })
         .then((response) => {
           // The response is READ, not discarded. sendToBackground RESOLVES with
           // {success:false} rather than rejecting, so a `.catch()` alone never
-          // sees a failure — the error would be silently dropped and the user
-          // told nothing.
+          // observes a failure — an earlier version "surfaced" the error into a
+          // catch that could never fire, which moved the swallow rather than
+          // removing it.
           const result = (response ?? {}) as { success?: boolean; declarationsCleared?: boolean };
           if (result.success === false) {
-            settingWarning.textContent = 'Could not save this setting. Try again.';
-            settingWarning.hidden = false;
-            return;
-          }
-          if (result.declarationsCleared === false) {
+            popupState.settingWarnings[toggle.key] = 'Could not save this setting. Try again.';
+          } else if (result.declarationsCleared === false) {
             // The setting saved and no further requests will be made, but the
             // stored declarations are still on disk — and the privacy policy
             // says turning this off deletes them. Saying nothing here would
             // report that promise as kept when it was not.
-            settingWarning.textContent =
-              'Setting saved, and no further requests will be made. Stored site declarations could not be deleted from this device — toggle this off again to retry.';
-            settingWarning.hidden = false;
+            popupState.settingWarnings[toggle.key] =
+              'Setting saved, and no further requests will be made. Stored site declarations could not be deleted from this device.';
           }
+          renderSettingsPanel();
         })
         .catch(() => {
-          settingWarning.textContent = 'Could not save this setting. Try again.';
-          settingWarning.hidden = false;
+          popupState.settingWarnings[toggle.key] = 'Could not save this setting. Try again.';
+          renderSettingsPanel();
         });
     });
 
@@ -1580,7 +1583,50 @@ function renderSettingsPanel(): void {
     row.appendChild(labelWrap);
     row.appendChild(switchLabel);
     container.appendChild(row);
-    container.appendChild(settingWarning);
+
+    // Rendered from popupState, so it survives the re-render that any tab's
+    // DETECTION_RESULT triggers.
+    const warningText = popupState.settingWarnings[toggle.key];
+    if (warningText) {
+      const warning = document.createElement('div');
+      warning.style.cssText =
+        'font-size: 11px; color: #b45309; font-weight: 600; margin-top: 4px; line-height: 1.35;';
+      warning.textContent = warningText;
+
+      // Every warning ends in an action the user can actually take. The delete
+      // only fails while the setting is already OFF, so "toggle it off again"
+      // is not available — the only toggle on screen turns the feature back ON,
+      // re-enabling the requests they just revoked. This retries the delete
+      // directly instead.
+      if (toggle.key === 'aiSafetyTxtEnabled') {
+        const retry = document.createElement('button');
+        retry.type = 'button';
+        retry.className = 'btn btn-secondary btn-sm';
+        retry.style.marginTop = '4px';
+        retry.textContent = 'Delete stored declarations';
+        retry.addEventListener('click', () => {
+          retry.disabled = true;
+          sendToBackground('AI_SAFETY_CLEAR', {})
+            .then((response) => {
+              const result = (response ?? {}) as { declarationsCleared?: boolean };
+              if (result.declarationsCleared) {
+                delete popupState.settingWarnings[toggle.key];
+              } else {
+                popupState.settingWarnings[toggle.key] =
+                  'Still could not delete the stored declarations. They stay on this device only; nothing is sent anywhere. Restarting the browser usually clears the storage error.';
+              }
+              renderSettingsPanel();
+            })
+            .catch(() => {
+              retry.disabled = false;
+            });
+        });
+        warning.appendChild(document.createElement('br'));
+        warning.appendChild(retry);
+      }
+
+      container.appendChild(warning);
+    }
   }
 
   // Community Trust Data section

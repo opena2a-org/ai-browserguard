@@ -1,28 +1,20 @@
 /**
- * The opt-out contract: a failed delete is never reported as a kept promise.
+ * The opt-out contract, tested by OUTCOME.
  *
- * The privacy policy states that turning "Read site safety declarations" off
- * deletes every stored declaration. Three things have to hold for that sentence
- * to be true, and each was broken at some point in this feature's history:
+ * An earlier version of this file asserted that background/index.ts *contained*
+ * certain strings. That guard was worthless and this is the third round of the
+ * same mistake in this feature: flipping the gate's `&&` to `||` (restoring the
+ * bug where every unrelated toggle wiped the cache) and swapping the two
+ * response branches (so a FAILED delete reports `declarationsCleared: true` —
+ * exactly the "privacy promise reported as kept when it wasn't" bug the code
+ * exists to prevent) both left the entire suite green, because the strings the
+ * regexes matched were still there.
  *
- *   1. `clearAiSafetyCache` must REJECT on failure rather than swallow it.
- *      It used to catch internally, so the caller could not tell.
- *   2. The background must report the delete's outcome separately from the
- *      setting's, since the setting saving and the delete failing are different
- *      events and `success:false` would misreport the first.
- *   3. The popup must READ that response. `sendToBackground` RESOLVES with
- *      `{success:false}` rather than rejecting, so a lone `.catch()` sees
- *      nothing — an earlier version "surfaced" the failure into a `.catch()`
- *      that could never fire, which moved the swallow rather than removing it.
- *
- * (1) is pinned here. (2) and (3) live in the service worker and popup, both
- * side-effect modules a test cannot import; they are pinned at source level
- * below, which is the same approach popup.dom.test.ts takes and is what this
- * repo's test env allows.
+ * A test that asserts code contains a rule cannot tell you the rule is correct.
+ * The decision now lives in a pure module and is asserted by what it returns.
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { readFileSync } from 'fs';
-import { resolve } from 'path';
+import { shouldClearDeclarations, performOptOutClear } from './optout';
 import { clearAiSafetyCache, writeCachedLookup, getAiSafetyCacheSize } from './cache';
 import type { AiSafetyLookupResult } from './types';
 
@@ -32,64 +24,102 @@ beforeEach(async () => {
   await clearAiSafetyCache();
 });
 
-describe('clearAiSafetyCache is not best-effort', () => {
-  it('deletes every stored declaration', async () => {
+describe('shouldClearDeclarations', () => {
+  it('clears when the user turns the flag OFF', () => {
+    expect(
+      shouldClearDeclarations({ aiSafetyTxtEnabled: false }, { aiSafetyTxtEnabled: false }),
+    ).toBe(true);
+  });
+
+  it('does NOT clear when the user turns the flag ON', () => {
+    // Kills the `||` mutation: with `touched || !enabled`, turning the feature
+    // on would wipe the cache.
+    expect(
+      shouldClearDeclarations({ aiSafetyTxtEnabled: true }, { aiSafetyTxtEnabled: true }),
+    ).toBe(false);
+  });
+
+  it.each([
+    ['notifications', { notificationsEnabled: true }],
+    ['cdp enforcement', { cdpEnforcementEnabled: true }],
+    ['an empty payload', {}],
+  ])('does NOT clear when the update only touched %s', (_label, updates) => {
+    // The flag is OFF by default, so an unrelated toggle arrives with
+    // `aiSafetyTxtEnabled: false` in the RESULTING settings. Gating on that
+    // value alone fires a storage delete on every toggle in the panel — and,
+    // now that the delete can fail loudly, lets an unrelated toggle report a
+    // failure for a settings write that landed. This is the case the `||`
+    // mutation breaks.
+    expect(shouldClearDeclarations(updates, { aiSafetyTxtEnabled: false })).toBe(false);
+  });
+
+  it('is not fooled by an inherited property', () => {
+    const updates = Object.create({ aiSafetyTxtEnabled: false }) as Record<string, unknown>;
+    expect(shouldClearDeclarations(updates, { aiSafetyTxtEnabled: false })).toBe(false);
+  });
+});
+
+describe('performOptOutClear', () => {
+  it('reports declarationsCleared TRUE when the delete succeeds', async () => {
+    expect(await performOptOutClear(async () => { /* ok */ })).toEqual({
+      success: true,
+      declarationsCleared: true,
+    });
+  });
+
+  it('reports declarationsCleared FALSE when the delete fails', async () => {
+    // Kills the swapped-branch mutation. Reporting `true` here would tell the
+    // user their declarations were deleted while they are still on disk —
+    // the privacy promise reported as kept when it was not.
+    expect(
+      await performOptOutClear(async () => {
+        throw new Error('storage unavailable');
+      }),
+    ).toEqual({ success: true, declarationsCleared: false });
+  });
+
+  it('never reports the settings write as failed', async () => {
+    // The setting has already saved by the time this runs. A delete failure
+    // must not be reported as "could not save this setting".
+    const result = await performOptOutClear(async () => {
+      throw new Error('storage unavailable');
+    });
+    expect(result.success).toBe(true);
+  });
+
+  it('does not throw when the delete fails', async () => {
+    await expect(
+      performOptOutClear(async () => {
+        throw new Error('boom');
+      }),
+    ).resolves.toBeDefined();
+  });
+
+  it('really does empty the cache when wired to the real clear', async () => {
     await writeCachedLookup('https://a.example', OK, 60_000);
     await writeCachedLookup('https://b.example', OK, 60_000);
-    await clearAiSafetyCache();
+
+    expect(await performOptOutClear(clearAiSafetyCache)).toEqual({
+      success: true,
+      declarationsCleared: true,
+    });
     expect(await getAiSafetyCacheSize()).toBe(0);
   });
 
-  it('rejects when the delete fails', async () => {
-    // A failed WRITE is best-effort: it costs a refetch. A failed CLEAR leaves
-    // third-party data on disk after the user revoked consent. The caller must
-    // be able to tell the difference.
+  it('reports FALSE when the real clear hits a storage failure', async () => {
+    // End-to-end against the real clear: proves clearAiSafetyCache genuinely
+    // rejects (it used to swallow, so the caller could never tell) AND that
+    // performOptOutClear turns that into an honest report.
     const remove = chrome.storage.local.remove as unknown as ReturnType<typeof vi.fn>;
     const original = remove.getMockImplementation();
     remove.mockRejectedValueOnce(new Error('storage unavailable'));
     try {
-      await expect(clearAiSafetyCache()).rejects.toThrow('storage unavailable');
+      expect(await performOptOutClear(clearAiSafetyCache)).toEqual({
+        success: true,
+        declarationsCleared: false,
+      });
     } finally {
       if (original) remove.mockImplementation(original);
     }
-  });
-});
-
-describe('the background reports the delete outcome (source lock-in)', () => {
-  const source = readFileSync(
-    resolve(__dirname, '..', 'background', 'index.ts'),
-    'utf-8',
-  );
-  const handler = source.slice(source.indexOf("case 'SETTINGS_UPDATE'"), source.indexOf("case 'SETTINGS_UPDATE'") + 3000);
-
-  it('only clears when the update actually touched the flag', () => {
-    // The flag is OFF by default, so gating on its value alone fires a storage
-    // delete on every unrelated toggle — and, now that the clear can fail
-    // loudly, lets a Notifications toggle report a failure for a settings write
-    // that landed.
-    expect(handler).toMatch(/hasOwnProperty\.call\(\s*updates,\s*'aiSafetyTxtEnabled'/);
-  });
-
-  it('reports declarationsCleared separately from success', () => {
-    expect(handler).toMatch(/declarationsCleared:\s*true/);
-    expect(handler).toMatch(/declarationsCleared:\s*false/);
-  });
-
-  it('does not swallow the clear failure', () => {
-    expect(handler).not.toMatch(/clearAiSafetyCache\(\)\.catch\(/);
-  });
-});
-
-describe('the popup surfaces the delete outcome (source lock-in)', () => {
-  const source = readFileSync(resolve(__dirname, '..', 'popup', 'popup.ts'), 'utf-8');
-
-  it('reads the SETTINGS_UPDATE response instead of discarding it', () => {
-    // sendToBackground resolves with {success:false}; it does not reject. A
-    // `.catch()`-only handler therefore never observes a failure.
-    expect(source).toMatch(/declarationsCleared\s*===\s*false/);
-  });
-
-  it('tells the user when declarations could not be deleted', () => {
-    expect(source).toMatch(/could not be deleted/i);
   });
 });

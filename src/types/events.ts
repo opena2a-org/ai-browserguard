@@ -186,7 +186,9 @@ export type MessageType =
   | 'CONTRIBUTE_FLUSH'
   | 'CONTRIBUTE_TIP_DISMISS'
   | 'DOMAIN_WHITELIST'
-  | 'OPEN_POPUP';
+  | 'OPEN_POPUP'
+  /** Retry deleting stored ai-safety.txt declarations after a failed opt-out. */
+  | 'AI_SAFETY_CLEAR';
 
 /**
  * Typed message payload for inter-component communication.
