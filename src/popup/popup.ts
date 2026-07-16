@@ -18,10 +18,18 @@ import { selectEffectiveRule } from '../delegation/effective';
 import { presentAgent } from '../delegation/enforceability';
 import type { AIMAuthState } from '../aim/auth';
 import { getAIMAuthState } from '../aim/auth';
+import type { AiSafetyLookupResult } from '../aisafety/types';
+import { renderAiSafetyDeclaration } from './ai-safety-row';
 import { triggerJsonDownload } from './download';
 
 interface PopupState {
   detectedAgents: AgentIdentity[];
+  /**
+   * ai-safety.txt lookup result for the page each agent is on, keyed by agent
+   * id. Empty unless `settings.aiSafetyTxtEnabled` is on. Display-only: this
+   * never influences the trust badge or any control (ADR-009).
+   */
+  aiSafetyDeclarations: Record<string, AiSafetyLookupResult>;
   /** The session-wide delegation rule shown in the delegation panel. */
   activeDelegation: DelegationRule | null;
   /** All delegation rules, used to render per-agent grant state on each card. */
@@ -51,6 +59,7 @@ interface PopupState {
 
 let popupState: PopupState = {
   detectedAgents: [],
+  aiSafetyDeclarations: {},
   activeDelegation: null,
   delegationRules: [],
   pendingFullAccessAgentId: null,
@@ -94,12 +103,14 @@ async function queryBackgroundStatus(): Promise<void> {
     if (response && typeof response === 'object') {
       const data = response as {
         detectedAgents?: AgentIdentity[];
+        aiSafetyDeclarations?: Record<string, AiSafetyLookupResult>;
         activeDelegation?: DelegationRule | null;
         delegationRules?: DelegationRule[];
         killSwitchActive?: boolean;
         recentViolations?: BoundaryAlert[];
       };
       popupState.detectedAgents = data.detectedAgents ?? [];
+      popupState.aiSafetyDeclarations = data.aiSafetyDeclarations ?? {};
       popupState.activeDelegation = data.activeDelegation ?? null;
       popupState.delegationRules = data.delegationRules ?? [];
       popupState.killSwitchActive = data.killSwitchActive ?? false;
@@ -615,6 +626,12 @@ function renderDetectionPanel(): void {
     card.appendChild(metaRow);
     card.appendChild(urlRow);
     card.appendChild(quickAllowRow);
+    // What the SITE says about itself, kept visually separate from the agent
+    // trust badge above it. The badge is about the agent and is partly derived
+    // from AIM/registry data; this is an unverified claim by the page's origin
+    // (ADR-009). Conflating the two would be the overclaim ADR-008 removed.
+    const aiSafetyBlock = renderAiSafetyDeclaration(popupState.aiSafetyDeclarations[agent.id]);
+    if (aiSafetyBlock) card.appendChild(aiSafetyBlock);
     // ADR-008: when a policy is set on an agent we cannot enforce against, state
     // the scope so "Read-Only" is not read as an enforced boundary.
     if (presentation.ruleCaveat) {
@@ -1474,6 +1491,16 @@ function renderSettingsPanel(): void {
       label: 'Browser-layer blocking (advanced)',
       description:
         'Enforce your site block rules at the browser layer for delegated tabs. Shows Chrome\'s "debugging this browser" banner while a delegated tab is active; removed when the session ends.',
+    },
+    {
+      key: 'aiSafetyTxtEnabled',
+      label: 'Read site safety declarations',
+      // States the one thing that makes this setting different from every other
+      // network toggle: it contacts the site itself, not an OpenA2A server. The
+      // privacy policy, README, and store listing say the same (ADR-006 requires
+      // these four surfaces to agree; ADR-009 changed what they must say).
+      description:
+        'When an agent is detected, read that site\'s /.well-known/ai-safety.txt declaration and show what it claims. This requests one file from the site the agent is on -- the only feature that contacts a site instead of an OpenA2A server. No cookies, no page address, and nothing about you is sent. Declarations are self-asserted, so they are shown for information only and never change detection or blocking.',
     },
   ];
 

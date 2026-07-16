@@ -3,13 +3,22 @@
  *
  * The Chrome Web Store listing and privacy policy claim the extension makes
  * zero network requests *by default*. This test locks that claim in: with the
- * shipped default settings and default contribution consent, none of the three
- * opt-in network paths (AIM lookup, registry lookup, anonymized contribution)
- * may fire. The gating is what makes the "off by default, optional opt-in"
- * disclosure (ADR-006) true, so a regression here is a disclosure bug.
+ * shipped default settings and default contribution consent, none of the four
+ * opt-in network paths (AIM lookup, registry lookup, anonymized contribution,
+ * ai-safety.txt declaration) may fire. The gating is what makes the "off by
+ * default, optional opt-in" disclosure (ADR-006) true, so a regression here is
+ * a disclosure bug.
+ *
+ * The ai-safety.txt gate (ADR-009) carries more weight than the other three: it
+ * is the only path that contacts a site we do not control. A regression that
+ * defaulted it ON would not just break the zero-network claim, it would start
+ * revealing to third-party origins that this user runs an agent — the disclosure
+ * ADR-009 exists to bound.
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { DEFAULT_SETTINGS } from '../session/types';
+import { lookupAiSafetyDeclaration } from '../aisafety/client';
+import { clearAiSafetyCache } from '../aisafety/cache';
 import { DEFAULT_CONSENT } from '../contribute/types';
 import {
   getConsent,
@@ -44,6 +53,25 @@ describe('fresh install makes zero network requests', () => {
   it('ships the trust-lookup gates default OFF', () => {
     expect(DEFAULT_SETTINGS.aimLookupEnabled).toBe(false);
     expect(DEFAULT_SETTINGS.registryLookupEnabled).toBe(false);
+  });
+
+  it('ships the ai-safety.txt gate default OFF', () => {
+    // The only setting that lets the extension contact a third-party origin.
+    expect(DEFAULT_SETTINGS.aiSafetyTxtEnabled).toBe(false);
+  });
+
+  it('does not read a site declaration on a fresh profile', async () => {
+    // Stronger than asserting the default value: this calls the real entry
+    // point, on fresh storage, and proves no request reaches the site. The
+    // other three gates live in the background service worker, which is a
+    // side-effect module a test cannot import — so for them only the default
+    // value above can be asserted. This path contacts a site we do not control,
+    // so its gate is placed where a test can actually hold it.
+    await clearAiSafetyCache();
+    const result = await lookupAiSafetyDeclaration('https://example.com/page');
+
+    expect(result).toEqual({ status: 'unreachable' });
+    expect(mockFetch).not.toHaveBeenCalled();
   });
 
   it('ships contribution consent default OFF', () => {

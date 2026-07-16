@@ -32,6 +32,9 @@ import {
 } from './cdp-enforcement';
 import { lookupAgentIdentity } from '../aim/client';
 import { lookupRegistryTrust } from '../registry/client';
+import { lookupAiSafetyDeclaration } from '../aisafety/client';
+import { clearAiSafetyCache } from '../aisafety/cache';
+import type { AiSafetyLookupResult } from '../aisafety/types';
 import { generateSessionReport, storeReport, getReports } from '../session/report';
 import { recordDetection, queueEvent, flushQueue, getConsent, getContributeStats } from '../contribute/client';
 import { anonymizeDetection, anonymizeSession } from '../contribute/anonymize';
@@ -52,6 +55,13 @@ interface BackgroundState {
   /** Cached copy of settings.cdpEnforcementEnabled (refreshed on SETTINGS_UPDATE). */
   cdpEnforcementEnabled: boolean;
   /**
+   * ai-safety.txt lookup result for the page each detected agent is operating
+   * on, keyed by tabId so it shares `activeAgents`' lifecycle and is pruned by
+   * the same tab-removal path. Display-only (ADR-009). Populated only when
+   * `aiSafetyTxtEnabled` is on.
+   */
+  aiSafetyDeclarations: Map<number, AiSafetyLookupResult>;
+  /**
    * Epoch ms of the most recent block. Drives the transient "!" icon badge
    * that surfaces a block to the user even if they missed the toast. Cleared
    * when the popup is opened or after BLOCK_BADGE_TTL_MS.
@@ -68,6 +78,7 @@ const state: BackgroundState = {
   lifetimeStats: { ...DEFAULT_LIFETIME_STATS },
   notificationsEnabled: true,
   cdpEnforcementEnabled: false,
+  aiSafetyDeclarations: new Map(),
   lastBlockAt: null,
 };
 
@@ -319,8 +330,16 @@ function handleMessage(
 
     case 'STATUS_QUERY': {
       const agents = Array.from(state.activeAgents.values());
+      // Re-key declarations from tabId to agent id: the popup renders agent
+      // cards and has no tab context. Empty unless the feature is on.
+      const aiSafetyDeclarations: Record<string, AiSafetyLookupResult> = {};
+      for (const [declTabId, agent] of state.activeAgents) {
+        const declaration = state.aiSafetyDeclarations.get(declTabId);
+        if (declaration) aiSafetyDeclarations[agent.id] = declaration;
+      }
       sendResponse({
         detectedAgents: agents,
+        aiSafetyDeclarations,
         // The popup's session-delegation panel shows the session-wide rule;
         // per-agent grants are rendered on their agent cards from
         // delegationRules below.
@@ -352,6 +371,15 @@ function handleMessage(
         state.cdpEnforcementEnabled = settings.cdpEnforcementEnabled;
         if (cdpChanged) {
           reconcileCdpEnforcement().catch(() => { /* non-critical */ });
+        }
+        // Opting out of ai-safety.txt discards everything the feature gathered,
+        // matching the one-click-opt-out promise ADR-006 makes for the other
+        // network features ("disabling the setting stops all outbound requests
+        // immediately; queued events are cleared"). Leaving stale declarations
+        // on disk and on screen after opt-out would contradict it.
+        if (!settings.aiSafetyTxtEnabled) {
+          state.aiSafetyDeclarations.clear();
+          clearAiSafetyCache().catch(() => { /* non-critical */ });
         }
         sendResponse({ success: true });
       }).catch(() => {
@@ -600,6 +628,14 @@ async function handleDetection(tabId: number, event: DetectionEvent): Promise<vo
   // AIM + Registry trust lookup (non-blocking)
   enrichAgentTrust(tabId, event.agent).catch(() => { /* non-critical */ });
 
+  // Read the page origin's ai-safety.txt declaration (non-blocking, opt-in).
+  //
+  // Agent detection is deliberately the trigger, not navigation (ADR-009): the
+  // declaration exists to be read before an agent acts on a page, this reuses an
+  // existing hook rather than adding a navigation listener and its permission,
+  // and it bounds the disclosure to "only while an agent is running".
+  enrichDomainDeclaration(tabId, event.agent).catch(() => { /* non-critical */ });
+
   // Log detection
   await appendDetectionLog(event);
 
@@ -629,6 +665,35 @@ async function handleDetection(tabId: number, event: DetectionEvent): Promise<vo
   // Attach CDP enforcement if this tab is now an agent tab under active
   // delegation (opt-in; no-op when the feature is off).
   reconcileCdpEnforcement().catch(() => { /* non-critical */ });
+}
+
+/**
+ * Read the ai-safety.txt declaration for the page an agent was detected on.
+ *
+ * Display-only, and deliberately kept out of `enrichAgentTrust`: that function
+ * computes a trust SCORE for the agent, and a declaration must never feed it.
+ * A declaration is a self-asserted claim by the site — draft section 5.1: a
+ * consumer "MUST NOT treat a declaration as proof of the property it asserts,
+ * and MUST NOT relax its own defenses solely because a domain claims a
+ * favorable posture". Any domain can write `AI-Safe: true` for free. Keeping
+ * the two functions separate means a later edit to the scoring logic cannot
+ * accidentally pull a domain's self-assessment into it (ADR-009 section 4).
+ */
+async function enrichDomainDeclaration(tabId: number, agent: AgentIdentity): Promise<void> {
+  const settings = (await getStorageState()).settings;
+  // The gate lives here, at the call site, so the fresh-install zero-network
+  // test exercises the same path production does.
+  if (!settings.aiSafetyTxtEnabled) return;
+
+  const result = await lookupAiSafetyDeclaration(agent.originUrl);
+
+  // The tab may have closed, or its agent changed, while the lookup was in
+  // flight. Writing then would leak an entry that handleTabRemoved already
+  // pruned, and the map would grow without bound.
+  const current = state.activeAgents.get(tabId);
+  if (!current || current.id !== agent.id) return;
+
+  state.aiSafetyDeclarations.set(tabId, result);
 }
 
 /**
@@ -1041,6 +1106,7 @@ async function handleTabRemoved(tabId: number): Promise<void> {
     state.activeSessions.delete(tabId);
   }
   state.activeAgents.delete(tabId);
+  state.aiSafetyDeclarations.delete(tabId);
   // Release any CDP enforcement session for the closed tab.
   detachTab(tabId).catch(() => { /* tab already gone */ });
   updateBadge();

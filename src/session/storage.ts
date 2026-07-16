@@ -152,6 +152,7 @@ function validateSettingsFields(raw: Partial<UserSettings>): { clean: UserSettin
   takeHttpsUrl('registryBaseUrl', raw.registryBaseUrl);
   takeBoolean('autoBlockUntrustedAgents', raw.autoBlockUntrustedAgents);
   takeBoolean('cdpEnforcementEnabled', raw.cdpEnforcementEnabled);
+  takeBoolean('aiSafetyTxtEnabled', raw.aiSafetyTxtEnabled);
 
   return { clean, rewrittenKeys: rewritten };
 }
