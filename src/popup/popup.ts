@@ -1525,6 +1525,14 @@ function renderSettingsPanel(): void {
     switchLabel.className = 'toggle-switch';
 
     const input = document.createElement('input');
+    // Warning line for a setting that saved but could not fully take effect.
+    // Only ai-safety.txt uses it today (its opt-out also has to delete stored
+    // declarations, and that delete can fail).
+    const settingWarning = document.createElement('div');
+    settingWarning.style.cssText =
+      'font-size: 11px; color: #b45309; font-weight: 600; margin-top: 4px; line-height: 1.35;';
+    settingWarning.hidden = true;
+
     input.type = 'checkbox';
     input.checked = Boolean(popupState.settings[toggle.key]);
     input.addEventListener('change', () => {
@@ -1532,9 +1540,35 @@ function renderSettingsPanel(): void {
         ...popupState.settings,
         [toggle.key]: input.checked,
       };
+      settingWarning.hidden = true;
       sendToBackground('SETTINGS_UPDATE', {
         [toggle.key]: input.checked,
-      }).catch(() => { /* ignore */ });
+      })
+        .then((response) => {
+          // The response is READ, not discarded. sendToBackground RESOLVES with
+          // {success:false} rather than rejecting, so a `.catch()` alone never
+          // sees a failure — the error would be silently dropped and the user
+          // told nothing.
+          const result = (response ?? {}) as { success?: boolean; declarationsCleared?: boolean };
+          if (result.success === false) {
+            settingWarning.textContent = 'Could not save this setting. Try again.';
+            settingWarning.hidden = false;
+            return;
+          }
+          if (result.declarationsCleared === false) {
+            // The setting saved and no further requests will be made, but the
+            // stored declarations are still on disk — and the privacy policy
+            // says turning this off deletes them. Saying nothing here would
+            // report that promise as kept when it was not.
+            settingWarning.textContent =
+              'Setting saved, and no further requests will be made. Stored site declarations could not be deleted from this device — toggle this off again to retry.';
+            settingWarning.hidden = false;
+          }
+        })
+        .catch(() => {
+          settingWarning.textContent = 'Could not save this setting. Try again.';
+          settingWarning.hidden = false;
+        });
     });
 
     const slider = document.createElement('span');
@@ -1546,6 +1580,7 @@ function renderSettingsPanel(): void {
     row.appendChild(labelWrap);
     row.appendChild(switchLabel);
     container.appendChild(row);
+    container.appendChild(settingWarning);
   }
 
   // Community Trust Data section

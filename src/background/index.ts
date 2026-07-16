@@ -382,18 +382,32 @@ function handleMessage(
         // immediately; queued events are cleared"). Leaving stale declarations
         // on disk and on screen after opt-out would contradict it.
         //
-        // The clear is AWAITED and its failure is surfaced, not swallowed. The
-        // privacy policy states that turning the setting off deletes every
-        // stored declaration; answering `success: true` while the delete had in
-        // fact failed would report a privacy promise as kept when it was not.
-        // The in-memory map is cleared first, so a storage failure still takes
-        // the declarations off screen and stops all further requests (the gate
-        // itself is already off in settings).
-        if (!settings.aiSafetyTxtEnabled) {
+        // Gated on this update actually TOUCHING the flag, not merely on the
+        // flag being off. It is off by default, so keying on its value alone
+        // would fire a storage delete on every unrelated toggle (Notifications,
+        // CDP), and — since the clear can now fail loudly — let an unrelated
+        // toggle report a failure for a settings write that in fact landed.
+        // Reading the payload needs no cached state, so unlike an edge check
+        // against a remembered value it cannot be wrong after a worker restart.
+        const touchedAiSafetyFlag = Object.prototype.hasOwnProperty.call(
+          updates,
+          'aiSafetyTxtEnabled',
+        );
+        if (touchedAiSafetyFlag && !settings.aiSafetyTxtEnabled) {
+          // In-memory first: even if the storage delete fails, the declarations
+          // leave the screen and no further requests can happen (the gate is
+          // already off in settings).
           state.aiSafetyDeclarations.clear();
-          return clearAiSafetyCache().then(() => {
-            sendResponse({ success: true });
-          });
+          return clearAiSafetyCache().then(
+            () => sendResponse({ success: true, declarationsCleared: true }),
+            // The setting itself SAVED; only the delete failed. Reporting
+            // `success: false` would claim the opt-out did not happen — it did.
+            // Reporting a flat `success: true` would claim the privacy policy's
+            // promise ("turning the setting off deletes every stored
+            // declaration") was kept when it was not. So the two outcomes are
+            // reported separately and the popup tells the user.
+            () => sendResponse({ success: true, declarationsCleared: false }),
+          );
         }
         sendResponse({ success: true });
         return undefined;

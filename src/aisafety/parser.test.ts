@@ -1,6 +1,18 @@
 import { describe, it, expect } from 'vitest';
 import { parseAiSafetyTxt, isEmptyDeclaration } from './parser';
 
+/**
+ * U+202E RIGHT-TO-LEFT OVERRIDE, as an escape rather than a pasted literal.
+ *
+ * An invisible codepoint in source is the GlassWorm vector and a real scanner
+ * finding in its own right: it is undetectable in review and can reorder how
+ * the surrounding code READS versus what it does. The same rule keeps
+ * real-looking credentials and homoglyphs out of fixtures -- construct the
+ * hostile input, never paste it. Identical codepoint at runtime, and it names
+ * itself.
+ */
+const RTL_OVERRIDE = '\u202e';
+
 describe('parseAiSafetyTxt: the six defined fields', () => {
   it('parses a full declaration', () => {
     const result = parseAiSafetyTxt(
@@ -230,6 +242,45 @@ describe('parseAiSafetyTxt: URI fields', () => {
     expect(parseAiSafetyTxt('Attestation: https://example.com').attestation).toBe(
       'https://example.com/',
     );
+  });
+
+  it('rejects a URI longer than the display can honestly show', () => {
+    const long = `https://example.com/${'a'.repeat(300)}`;
+    expect(parseAiSafetyTxt(`Contact: ${long}`).contact).toBeUndefined();
+    expect(parseAiSafetyTxt(`Attestation: ${long}`).attestation).toBeUndefined();
+  });
+
+  it('accepts a URI at the length limit', () => {
+    const atLimit = `https://example.com/${'a'.repeat(255 - 'https://example.com/'.length)}`;
+    expect(atLimit.length).toBe(255);
+    expect(parseAiSafetyTxt(`Contact: ${atLimit}`).contact).toBe(atLimit);
+  });
+
+  it('measures length AFTER normalisation, not before', () => {
+    // Percent-encoding lengthens the value, so a raw string under the cap can
+    // normalise to one over it.
+    const withEncodables = `https://example.com/${RTL_OVERRIDE.repeat(90)}`;
+    expect(withEncodables.length).toBeLessThan(255);
+    expect(parseAiSafetyTxt(`Contact: ${withEncodables}`).contact).toBeUndefined();
+  });
+
+  it('keeps a subdomain-padded spoof intact rather than silently shortening it', () => {
+    // The parser does NOT reject this shape: no credentials, plausible length.
+    // No parser rule can close the class, so the value must survive to the UI
+    // in full and the RENDERER must not truncate it (ai-safety-row.test.ts).
+    // What matters here is that the real host is present in what we hand over.
+    const spoof = `https://google.com.${'a'.repeat(50)}.evil.com/`;
+    const result = parseAiSafetyTxt(`Contact: ${spoof}`);
+    expect(result.contact).toBe(spoof);
+    expect(result.contact).toContain('evil.com');
+  });
+
+  it('percent-encodes an RTL override so it cannot reorder the display', () => {
+    // U+202E flips the visual order of what follows, so a raw value could read
+    // as a different host than it resolves to.
+    const result = parseAiSafetyTxt(`Attestation: https://evil.com/${RTL_OVERRIDE}moc.elgoog`);
+    expect(result.attestation).toBe('https://evil.com/%E2%80%AEmoc.elgoog');
+    expect(result.attestation).not.toContain(RTL_OVERRIDE);
   });
 
   it('leaves mailto and tel untouched (no userinfo semantics)', () => {

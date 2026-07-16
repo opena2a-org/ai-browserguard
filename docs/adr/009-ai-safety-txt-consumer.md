@@ -169,6 +169,25 @@ domain with no declaration is displayed as unknown, never as unsafe. Nearly ever
 domain has no declaration; rendering that as a warning would be both wrong and
 user-hostile.
 
+**Display integrity: a site-supplied value is shown whole or not at all.** The
+`Contact` and `Attestation` URIs are hostile-controlled strings rendered in a
+privileged surface, and for a URL the *end* is what decides where it points. So
+truncation is a spoof primitive, not a cosmetic choice:
+
+    Contact: https://google.com.<150 chars of padding>.evil.com/
+
+Under `text-overflow: ellipsis` that reads as `https://google.com.aaaa…`. The
+parser rejects embedded credentials, which kills the `https://google.com@evil.com`
+form — but padding a subdomain needs no credentials, so **no parser rule closes
+the class.** The renderer does: values wrap and are never elided
+(`ai-safety-row.ts`, pinned by `ai-safety-row.test.ts`), and the parser caps a
+URI at 255 chars so wrapping cannot be turned into a wall of text. `new URL()`
+normalisation carries the rest — a confusable host resolves to its punycode, an
+RTL override is percent-encoded. This punycodes legitimate IDN too
+(`münchen.de` → `xn--mnchen-3ya.de`), which is the intended trade: the punycode
+form is unambiguous, and rendering raw unicode is exactly what makes a confusable
+host work.
+
 `Attestation` is parsed and displayed but **not dereferenced**. Draft §5.2 says a
 consumer SHOULD retrieve it, but also that it MUST confirm the record corresponds
 to the domain and comes from a verifier the consumer trusts. Following an

@@ -56,6 +56,18 @@ export interface AiSafetyDeclaration {
  */
 const ALLOWED_URI_SCHEMES = new Set(['https:', 'http:', 'mailto:', 'tel:']);
 
+/**
+ * Longest URI accepted in `Contact` or `Attestation`.
+ *
+ * The draft sets no limit. This one is a display-integrity bound, not a parsing
+ * need: a value the popup cannot show in full is a value the user cannot check,
+ * and a hostile origin will happily supply 20 KB of padding to push the real
+ * host out of view. Real contact and attestation URIs are far under this;
+ * anything longer is treated as absent, which fails toward showing nothing
+ * rather than showing something misleading.
+ */
+const MAX_URI_LENGTH = 255;
+
 /** Draft section 3 defines exactly six fields. Anything else MUST be ignored. */
 type FieldName =
   | 'ai-safe'
@@ -117,12 +129,23 @@ function parseUri(value: string): string | undefined {
 
   // Return the PARSED form, not the raw input. `new URL()` normalises what the
   // scheme allowlist alone would let through as raw text: a unicode-confusable
-  // host (`https://еvil.com`, Cyrillic е) becomes its real punycode
-  // (`https://xn--vil-qdd.com/`), and embedded tabs/newlines are stripped. The
-  // allowlist covers the scheme half of the display-safety argument; this covers
-  // the authority half. Displaying the raw string would show the user something
-  // other than where the URI resolves.
-  return parsed.href;
+  // host (Cyrillic U+0435 leading "vil.com") becomes its real punycode
+  // (`https://xn--vil-qdd.com/`), an RTL-override is percent-encoded, and
+  // embedded tabs/newlines are stripped. Displaying the raw string would show
+  // the user something other than where the URI resolves.
+  //
+  // Note this punycodes legitimate IDN too (`https://münchen.de` ->
+  // `https://xn--mnchen-3ya.de/`). That is the intended trade: the punycode form
+  // is the unambiguous one, and rendering raw unicode is precisely what makes a
+  // confusable host possible. A slightly uglier real hostname beats a
+  // convincing fake one.
+  const href = parsed.href;
+
+  // Length is checked AFTER normalisation, since percent-encoding can lengthen
+  // the value.
+  if (href.length > MAX_URI_LENGTH) return undefined;
+
+  return href;
 }
 
 /**

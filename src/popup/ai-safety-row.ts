@@ -61,11 +61,28 @@ export function renderAiSafetyDeclaration(
     line.title = row.hint;
 
     const label = document.createElement('span');
-    label.style.cssText = 'color: var(--text-secondary);';
+    label.style.cssText = 'color: var(--text-secondary); flex: none;';
     label.textContent = row.label;
 
     const value = document.createElement('span');
-    value.style.cssText = 'color: var(--text-primary); text-align: right; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;';
+    // Wraps; never truncated. This is a security property, not a style choice.
+    //
+    // The obvious styling here is `white-space: nowrap; text-overflow: ellipsis`,
+    // and it is actively dangerous for this data. These values come from a
+    // hostile origin, and the end of a URL is the part that decides where it
+    // points, so eliding the end hands any site a spoof for free:
+    //
+    //     Contact: https://google.com.<150 chars of padding>.evil.com/
+    //
+    // renders as `https://google.com.aaaa…` — reading as Google, resolving to
+    // evil.com. Rejecting embedded credentials in the parser kills the
+    // `https://google.com@evil.com` form of this, but padding a subdomain needs
+    // no credentials at all, so no parser rule closes the class. Not truncating
+    // does: what the user sees is the whole value. `break-all` so a long
+    // unbroken host cannot force horizontal overflow instead, and the parser's
+    // 255-char cap bounds how many lines this can occupy.
+    value.style.cssText =
+      'color: var(--text-primary); text-align: right; word-break: break-all; white-space: normal; min-width: 0; flex: 1;';
     value.textContent = row.value;
 
     line.appendChild(label);

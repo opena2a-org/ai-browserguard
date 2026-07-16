@@ -128,6 +128,41 @@ describe('cap and eviction', () => {
     });
   });
 
+  it('keeps a new entry when the wall clock jumps BACKWARDS', async () => {
+    vi.useFakeTimers();
+    // Ordering by a timestamp is only FIFO while the clock moves forward.
+    // Date.now() is wall-clock: an NTP correction, a VM resume, or a user clock
+    // change moves it backwards, and a timestamp-ordered cache then sorts the
+    // freshly written entry to the front and evicts it — the original
+    // negative-cache no-op, returning behind a clock event instead of a TTL
+    // difference. Deriving the ordinal from the stored entries removes the
+    // clock from the invariant entirely.
+    for (let i = 0; i < MAX_CACHE_ENTRIES; i++) {
+      await writeCachedLookup(`https://origin-${i}.example`, OK, TTL);
+      vi.advanceTimersByTime(10);
+    }
+    vi.setSystemTime(new Date(Date.now() - 60 * 60 * 1000)); // clock jumps back an hour
+
+    await writeCachedLookup('https://after-jump.example', { status: 'unreachable' }, 5 * 60_000);
+    expect(await readCachedLookup('https://after-jump.example')).toEqual({ status: 'unreachable' });
+  });
+
+  it('keeps a new entry across a service-worker restart', async () => {
+    vi.useFakeTimers();
+    // A module-level counter would reset to 0 on every ~30s idle unload, so
+    // every post-restart entry would sort before every existing one and evict
+    // itself. The ordinal is read back from storage, so it survives.
+    for (let i = 0; i < MAX_CACHE_ENTRIES; i++) {
+      await writeCachedLookup(`https://origin-${i}.example`, OK, TTL);
+    }
+    vi.resetModules();
+    const fresh = await import('./cache');
+
+    await fresh.writeCachedLookup('https://after-restart.example', OK, TTL);
+    expect(await fresh.readCachedLookup('https://after-restart.example')).toEqual(OK);
+    expect(await fresh.getAiSafetyCacheSize()).toBe(MAX_CACHE_ENTRIES);
+  });
+
   it('purges expired entries on write', async () => {
     vi.useFakeTimers();
     await writeCachedLookup('https://old.example', OK, TTL);
@@ -156,14 +191,14 @@ describe('concurrent writes', () => {
 describe('corrupt storage is not trusted', () => {
   it.each([
     ['not an object', 'garbage'],
-    ['an entry with no expiry', { 'https://x.example': { result: OK, writtenAt: Date.now() } }],
-    ['an entry with no writtenAt', { 'https://x.example': { result: OK, expiresAt: Date.now() + TTL } }],
-    ['an entry with no result', { 'https://x.example': { expiresAt: Date.now() + TTL, writtenAt: Date.now() } }],
+    ['an entry with no expiry', { 'https://x.example': { result: OK, seq: 1 } }],
+    ['an entry with no seq', { 'https://x.example': { result: OK, expiresAt: Date.now() + TTL } }],
+    ['an entry with no result', { 'https://x.example': { expiresAt: Date.now() + TTL, seq: 1 } }],
     ['an ok entry with no declaration', {
-      'https://x.example': { result: { status: 'ok' }, expiresAt: Date.now() + TTL, writtenAt: Date.now() },
+      'https://x.example': { result: { status: 'ok' }, expiresAt: Date.now() + TTL, seq: 1 },
     }],
     ['an unknown status', {
-      'https://x.example': { result: { status: 'trusted' }, expiresAt: Date.now() + TTL, writtenAt: Date.now() },
+      'https://x.example': { result: { status: 'trusted' }, expiresAt: Date.now() + TTL, seq: 1 },
     }],
   ])('drops %s', async (_label, blob) => {
     await chrome.storage.local.set({ aiSafetyDeclarationCache: blob });
@@ -171,10 +206,32 @@ describe('corrupt storage is not trusted', () => {
     expect(await getAiSafetyCacheSize()).toBe(0);
   });
 
+  it.each(['__proto__', 'constructor', 'prototype'])(
+    'does not let the key %j reach an object assignment',
+    async (key) => {
+      // `clean['__proto__'] = entry` invokes the prototype setter rather than
+      // adding a key. Not reachable today (keys are always new URL().origin, so
+      // "https://..."), but this loop reads whatever is on disk.
+      await chrome.storage.local.set({
+        aiSafetyDeclarationCache: {
+          [key]: { result: OK, expiresAt: Date.now() + TTL, seq: 1 },
+          'https://real.example': { result: OK, expiresAt: Date.now() + TTL, seq: 2 },
+        },
+      });
+
+      expect(await readCachedLookup(key)).toBeNull();
+      // The real entry alongside it still reads back, and the cache did not
+      // acquire a polluted prototype.
+      expect(await readCachedLookup('https://real.example')).toEqual(OK);
+      expect(await getAiSafetyCacheSize()).toBe(1);
+      expect(({} as Record<string, unknown>).result).toBeUndefined();
+    },
+  );
+
   it('keeps valid entries alongside dropped ones', async () => {
     await chrome.storage.local.set({
       aiSafetyDeclarationCache: {
-        'https://good.example': { result: OK, expiresAt: Date.now() + TTL, writtenAt: Date.now() },
+        'https://good.example': { result: OK, expiresAt: Date.now() + TTL, seq: 1 },
         'https://bad.example': { result: { status: 'ok' } },
       },
     });

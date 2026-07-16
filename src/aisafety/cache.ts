@@ -32,11 +32,28 @@ interface CacheEntry {
   result: AiSafetyLookupResult;
   expiresAt: number;
   /**
-   * When this entry was written. Eviction order, kept separate from `expiresAt`
-   * because the two disagree: entries have different TTLs, so "expires soonest"
-   * is not "written longest ago".
+   * Write ordinal. Eviction order, kept separate from `expiresAt` because the
+   * two disagree: entries have different TTLs, so "expires soonest" is not
+   * "written longest ago".
+   *
+   * A counter rather than a timestamp, and derived from the cache's own contents
+   * (`1 + max(existing)`) rather than from a clock or a module variable:
+   *
+   *   - `Date.now()` is wall-clock, not monotonic. An NTP correction, a VM
+   *     resume, or a user clock change moves it BACKWARDS, and then a freshly
+   *     written entry is no longer the newest — it sorts to the front and evicts
+   *     itself, which is the original negative-cache bug returning behind a
+   *     clock event.
+   *   - A module-level counter resets to 0 every time the MV3 worker unloads
+   *     (~30s idle), so after a restart every new entry would sort before every
+   *     existing one. Worse, and constantly.
+   *
+   * Deriving it from the stored entries makes "the entry just written has the
+   * highest ordinal" structurally true: clock-independent and restart-proof.
+   * Writes are serialised by `withCacheLock`, so the read-then-max-then-write is
+   * not racy.
    */
-  writtenAt: number;
+  seq: number;
 }
 
 type CacheShape = Record<string, CacheEntry>;
@@ -74,7 +91,7 @@ function isValidEntry(value: unknown): value is CacheEntry {
   if (typeof value !== 'object' || value === null) return false;
   const entry = value as Record<string, unknown>;
   if (typeof entry.expiresAt !== 'number' || !Number.isFinite(entry.expiresAt)) return false;
-  if (typeof entry.writtenAt !== 'number' || !Number.isFinite(entry.writtenAt)) return false;
+  if (typeof entry.seq !== 'number' || !Number.isFinite(entry.seq)) return false;
 
   const result = entry.result;
   if (typeof result !== 'object' || result === null) return false;
@@ -96,12 +113,22 @@ async function readCache(): Promise<CacheShape> {
   }
   if (typeof raw !== 'object' || raw === null) return {};
 
-  const clean: CacheShape = {};
+  // Prototype-less, so the cache has no inherited keys at all.
+  //
+  // A denylist of `__proto__`/`constructor`/`prototype` on the WRITE below is
+  // not sufficient, which is easy to get wrong: the danger is on the READ side
+  // too. With a normal `{}`, `cache['constructor']` returns Object's constructor
+  // — truthy — so `readCachedLookup` sails past its `if (!entry) return null`
+  // guard, reads `entry.expiresAt` as undefined, and returns `entry.result`,
+  // also undefined. Its caller checks `cached !== null`, so `undefined` would be
+  // handed back as if it were a lookup result. `Object.create(null)` makes every
+  // such key simply absent, which is the honest answer.
+  //
+  // Not reachable today (keys are always `new URL().origin`, so "https://..."),
+  // but this loop deserializes whatever is on disk, and being structurally
+  // unable to do the wrong thing beats a list of names to remember.
+  const clean: CacheShape = Object.create(null) as CacheShape;
   for (const [origin, entry] of Object.entries(raw as Record<string, unknown>)) {
-    // `clean['__proto__'] = entry` would set the prototype rather than a key.
-    // Unreachable today — keys are `new URL().origin` values, which always look
-    // like "https://host" — but this loop reads whatever is on disk, and the
-    // cost of not having to re-derive that safety argument later is one line.
     if (origin === '__proto__' || origin === 'constructor' || origin === 'prototype') continue;
     if (isValidEntry(entry)) clean[origin] = entry;
   }
@@ -112,8 +139,8 @@ async function readCache(): Promise<CacheShape> {
  * Drop expired entries, then evict the longest-written entries until the cache
  * is at cap.
  *
- * Eviction is ordered by `writtenAt` (FIFO), NOT by `expiresAt`. Ordering by
- * expiry looks equivalent and is not, because the TTLs differ by outcome:
+ * Eviction is ordered by `seq` (FIFO), NOT by `expiresAt`. Ordering by expiry
+ * looks equivalent and is not, because the TTLs differ by outcome:
  *
  *   An `unreachable` entry is written with a 5 minute TTL, so its `expiresAt`
  *   is SOONER than that of all 50 existing 24-hour entries. Expiry-ordered
@@ -124,7 +151,8 @@ async function readCache(): Promise<CacheShape> {
  *   request is a fingerprintable signal to a third party, a privacy regression
  *   rather than a latency one.
  *
- * FIFO cannot do that: the entry just written always has the newest `writtenAt`.
+ * FIFO cannot do that: the entry just written always has the highest `seq`, by
+ * construction (see `nextSeq`) rather than by trusting a clock.
  *
  * True LRU is deliberately not implemented: it would require a storage write on
  * every cache *read*, turning the common hit path into a write and defeating the
@@ -134,8 +162,22 @@ function evict(cache: CacheShape, now: number): CacheShape {
   const live = Object.entries(cache).filter(([, entry]) => entry.expiresAt > now);
   if (live.length <= MAX_CACHE_ENTRIES) return Object.fromEntries(live);
 
-  live.sort((a, b) => a[1].writtenAt - b[1].writtenAt);
+  live.sort((a, b) => a[1].seq - b[1].seq);
   return Object.fromEntries(live.slice(live.length - MAX_CACHE_ENTRIES));
+}
+
+/**
+ * The next write ordinal: one past the highest currently stored.
+ *
+ * Derived from the cache rather than a clock or a module variable, so it cannot
+ * go backwards across a clock change or a service-worker restart.
+ */
+function nextSeq(cache: CacheShape): number {
+  let max = 0;
+  for (const entry of Object.values(cache)) {
+    if (entry.seq > max) max = entry.seq;
+  }
+  return max + 1;
 }
 
 /**
@@ -167,7 +209,7 @@ export async function writeCachedLookup(
     try {
       const now = Date.now();
       const cache = await readCache();
-      cache[origin] = { result, expiresAt: now + ttlMs, writtenAt: now };
+      cache[origin] = { result, expiresAt: now + ttlMs, seq: nextSeq(cache) };
       await chrome.storage.local.set({ [CACHE_KEY]: evict(cache, now) });
     } catch {
       /* Cache writes are best-effort. */
