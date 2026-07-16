@@ -420,13 +420,13 @@ function handleMessage(
       // just revoked. That is a dead end, and worse, one that pushes the user
       // to re-consent. This gives the retry its own button.
       //
-      // Routed through reconcileOptOut rather than clearing outright, so a click
-      // that arrives after the user re-enabled the feature is a no-op instead of
-      // wiping the cache they just opted back into. No `.catch` here:
-      // reconcileOptOut never rejects by contract, and a catch could only fire
-      // if sendResponse itself threw — in which case calling sendResponse a
-      // second time would throw again into an unhandled rejection.
-      state.aiSafetyDeclarations.clear();
+      // Routed through reconcileAiSafetyStorage rather than clearing outright,
+      // so a click that arrives after the user re-enabled the feature is a
+      // no-op instead of wiping what they just opted back into — in memory as
+      // well as on disk. No `.catch` here: reconcileOptOut never rejects by
+      // contract, and a catch could only fire if sendResponse itself threw — in
+      // which case calling sendResponse a second time would throw again into an
+      // unhandled rejection.
       reconcileAiSafetyStorage().then((settled) => {
         sendResponse({ success: true, declarationsCleared: settled });
       });
@@ -724,6 +724,14 @@ async function reconcileAiSafetyStorage(): Promise<boolean> {
   const settings = await getSettings().catch(() => null);
   // Cannot read the setting: do nothing rather than delete data on a guess.
   if (!settings) return false;
+
+  // Opted out, so nothing should be on screen either. Scoped to this branch on
+  // purpose: clearing unconditionally would let a stale retry click — the button
+  // can outlive its warning by one render — blank the declarations of a feature
+  // the user has just re-enabled.
+  if (!settings.aiSafetyTxtEnabled) {
+    state.aiSafetyDeclarations.clear();
+  }
 
   return reconcileOptOut({
     enabled: settings.aiSafetyTxtEnabled,
