@@ -765,6 +765,12 @@ async function enrichDomainDeclaration(tabId: number, agent: AgentIdentity): Pro
   const origin = declarationOriginFor(agent.originUrl);
   const result = await lookupAiSafetyDeclaration(agent.originUrl);
 
+  // Re-read consent: the lookup can take up to 5 seconds, and the opt-out that
+  // cleared this map may have run during it. Without this, a straggler puts a
+  // declaration back on screen right after the user revoked consent.
+  const settingsAfter = (await getStorageState()).settings;
+  if (!settingsAfter.aiSafetyTxtEnabled) return;
+
   // The tab may have closed, or its agent changed, while the lookup was in
   // flight. Writing then would leak an entry that handleTabRemoved already
   // pruned, and the map would grow without bound. `agent.id` is a fresh UUID per

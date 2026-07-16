@@ -72,7 +72,12 @@ describe('the gate fails closed', () => {
   it('DOES request when the flag is exactly true (proves the mock is not the reason)', async () => {
     // Without this, every assertion above would also pass against a client that
     // never fetches at all.
-    vi.mocked(getSettings).mockResolvedValueOnce({ aiSafetyTxtEnabled: true } as never);
+    //
+    // mockResolvedValue, not ...Once: the gate is read TWICE per lookup — once
+    // before the fetch, and again before the cache write, so that consent
+    // revoked mid-flight cannot land a straggler on disk. A one-shot mock would
+    // leave the second read undefined and fail this for the wrong reason.
+    vi.mocked(getSettings).mockResolvedValue({ aiSafetyTxtEnabled: true } as never);
     mockFetch.mockResolvedValueOnce({
       type: 'basic',
       ok: true,

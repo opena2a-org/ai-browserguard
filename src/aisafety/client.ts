@@ -219,6 +219,19 @@ export async function lookupAiSafetyDeclaration(
     result: AiSafetyLookupResult,
     ttlMs: number,
   ): Promise<AiSafetyLookupResult> => {
+    // Re-check consent before storing anything.
+    //
+    // The gate was checked before the fetch, up to 5 seconds ago. If the user
+    // opted out while it was in flight, the opt-out's delete has already run —
+    // and writing now would put a declaration back on disk moments after they
+    // revoked consent. The periodic reconcile would remove it, but only on the
+    // next tick, and the privacy policy says opting out deletes stored
+    // declarations, not that it deletes them within five minutes.
+    //
+    // Returns `unreachable` rather than the result, so the revoked lookup also
+    // reaches no display. The network request itself already went out — that
+    // cannot be recalled — but nothing it produced is kept.
+    if (!(await isEnabled())) return { status: 'unreachable' };
     await writeCachedLookup(origin, result, ttlMs);
     return result;
   };

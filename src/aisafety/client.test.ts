@@ -453,3 +453,44 @@ describe('a hostile declaration cannot become a favourable claim', () => {
     expect(result).toEqual({ status: 'ok', declaration: { aiSafe: true } });
   });
 });
+
+describe('consent revoked while a lookup is in flight', () => {
+  it('does not write a declaration to disk after the user opts out', async () => {
+    // A real TOCTOU. The gate is checked BEFORE the fetch, which can take up to
+    // 5 seconds. If the user opts out during it, the opt-out's delete has
+    // already run, and a straggler write would put a declaration back on disk
+    // moments after consent was revoked. The periodic reconcile would clear it,
+    // but only on the next tick — and the policy says opting out deletes stored
+    // declarations, full stop.
+    let resolveFetch: (r: unknown) => void = () => {};
+    mockFetch.mockImplementationOnce(
+      () => new Promise((resolve) => { resolveFetch = resolve; }),
+    );
+
+    const inFlight = lookupAiSafetyDeclaration('https://example.com/page');
+
+    // The user opts out while the fetch is still open.
+    await updateSettings({ aiSafetyTxtEnabled: false });
+
+    resolveFetch(textResponse(DECLARATION));
+    const result = await inFlight;
+
+    // Nothing stored...
+    const stored = await chrome.storage.local.get('aiSafetyDeclarationCache');
+    expect(stored.aiSafetyDeclarationCache).toBeUndefined();
+    // ...and nothing to display either. The request already went out and cannot
+    // be recalled, but nothing it produced is kept.
+    expect(result).toEqual({ status: 'unreachable' });
+  });
+
+  it('still writes when consent is intact for the whole lookup', async () => {
+    // The companion: without this, the test above would pass against a client
+    // that never caches anything at all.
+    mockFetch.mockResolvedValueOnce(textResponse(DECLARATION));
+    const result = await lookupAiSafetyDeclaration('https://example.com/page');
+
+    expect(result.status).toBe('ok');
+    const stored = await chrome.storage.local.get('aiSafetyDeclarationCache');
+    expect(Object.keys(stored.aiSafetyDeclarationCache)).toEqual(['https://example.com']);
+  });
+});
