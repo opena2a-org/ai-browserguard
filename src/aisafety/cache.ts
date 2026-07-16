@@ -91,6 +91,11 @@ async function readCache(): Promise<CacheShape> {
 
   const clean: CacheShape = {};
   for (const [origin, entry] of Object.entries(raw as Record<string, unknown>)) {
+    // `clean['__proto__'] = entry` would set the prototype rather than a key.
+    // Unreachable today — keys are `new URL().origin` values, which always look
+    // like "https://host" — but this loop reads whatever is on disk, and the
+    // cost of not having to re-derive that safety argument later is one line.
+    if (origin === '__proto__' || origin === 'constructor' || origin === 'prototype') continue;
     if (isValidEntry(entry)) clean[origin] = entry;
   }
   return clean;

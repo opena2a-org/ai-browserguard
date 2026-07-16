@@ -189,12 +189,20 @@ bug, so:
   description** are updated in this change. §7's categorical claim ("the only
   servers it can contact ... are OpenA2A's own") is removed, because it is the
   sentence this feature falsifies.
-- **The store listing is deliberately NOT updated here.**
+- **The store listing and the website are deliberately NOT updated here.**
   `docs/chrome-web-store-description.md` and `docs/store-listing.md` are pinned to
   the v0.5.0 submission and describe the build that is currently live. Editing
   them now would make them claim a feature the shipped extension does not have —
-  drift in the opposite direction, and just as inaccurate. The listing is updated
-  at the release that first ships this, gated in `docs/testing/release-smoke.md`.
+  drift in the opposite direction, and just as inaccurate. Same for the
+  opena2a-website pages. Both are updated at the release that first ships this,
+  gated in `docs/testing/release-smoke.md`.
+- **ADR-006's "four surfaces" is an undercount, and that matters.** It lists
+  policy, README, listing, and settings UI. But the policy a user actually reads
+  is served from **a different repo** —
+  `opena2a-website/app/aibrowserguard/privacy/page.tsx` — and it is the
+  disclosure of record; `docs/privacy-policy.html` here is only a source copy.
+  The product page and the store-launch blog post carry network claims too. Five
+  surfaces, across two repos. The release gate enumerates them by path.
 - **The rule is now enforced, not remembered.**
   `src/__tests__/network-disclosure-consistency.test.ts` fails if a boolean
   setting is neither classified local-only nor declared a network gate, if a

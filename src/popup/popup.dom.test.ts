@@ -30,32 +30,55 @@
  * remains the secondary check.
  */
 import { describe, it, expect } from 'vitest';
-import { readFileSync } from 'fs';
+import { readFileSync, readdirSync } from 'fs';
 import { resolve } from 'path';
 
 const BANNED_SINK_PATTERN = /\b(innerHTML|outerHTML|insertAdjacentHTML|setHTMLUnsafe)\b|\bdocument\.write\b/;
 
-describe('popup.ts HTML-injection sink lock-in (P1-1)', () => {
-  const source = readFileSync(
-    resolve(__dirname, 'popup.ts'),
-    'utf-8'
+/**
+ * EVERY renderer in this directory, not just popup.ts.
+ *
+ * This was originally pinned to popup.ts alone. That was safe only while
+ * popup.ts was the sole renderer; the moment a second one appeared the rule
+ * silently stopped covering the popup. `ai-safety-row.ts` renders strings taken
+ * verbatim from a hostile origin's /.well-known/ai-safety.txt (a site-supplied
+ * Contact or Attestation URI), which is exactly the input this rule exists to
+ * keep away from an HTML parser — and it would have been outside the guard.
+ *
+ * Enumerated from disk rather than listed, so a renderer added tomorrow is
+ * covered without anyone remembering to add it here.
+ */
+const POPUP_SOURCES = readdirSync(__dirname)
+  .filter((f) => f.endsWith('.ts') && !f.endsWith('.test.ts'))
+  .sort();
+
+describe('popup HTML-injection sink lock-in (P1-1)', () => {
+  it('covers every renderer in src/popup (not just popup.ts)', () => {
+    expect(POPUP_SOURCES).toContain('popup.ts');
+    expect(POPUP_SOURCES).toContain('ai-safety-row.ts');
+  });
+
+  it.each(POPUP_SOURCES)(
+    '%s contains no innerHTML / outerHTML / insertAdjacentHTML / setHTMLUnsafe / document.write',
+    (filename) => {
+      const source = readFileSync(resolve(__dirname, filename), 'utf-8');
+      const lines = source.split('\n');
+      const offenders: { line: number; text: string }[] = [];
+      for (let i = 0; i < lines.length; i++) {
+        const line = lines[i];
+        const stripped = line.replace(/\/\/.*$/, '').replace(/\/\*[\s\S]*?\*\//g, '');
+        if (BANNED_SINK_PATTERN.test(stripped)) {
+          offenders.push({ line: i + 1, text: line.trim() });
+        }
+      }
+      expect(
+        offenders,
+        `${filename} must use textContent / createElement / replaceChildren — not innerHTML, outerHTML, insertAdjacentHTML, setHTMLUnsafe, or document.write.\nOffenders:\n${offenders.map((o) => `  ${o.line}: ${o.text}`).join('\n')}`
+      ).toEqual([]);
+    }
   );
 
-  it('contains no innerHTML / outerHTML / insertAdjacentHTML / setHTMLUnsafe / document.write', () => {
-    const lines = source.split('\n');
-    const offenders: { line: number; text: string }[] = [];
-    for (let i = 0; i < lines.length; i++) {
-      const line = lines[i];
-      const stripped = line.replace(/\/\/.*$/, '').replace(/\/\*[\s\S]*?\*\//g, '');
-      if (BANNED_SINK_PATTERN.test(stripped)) {
-        offenders.push({ line: i + 1, text: line.trim() });
-      }
-    }
-    expect(
-      offenders,
-      `popup.ts must use textContent / createElement / replaceChildren — not innerHTML, outerHTML, insertAdjacentHTML, setHTMLUnsafe, or document.write.\nOffenders:\n${offenders.map((o) => `  ${o.line}: ${o.text}`).join('\n')}`
-    ).toEqual([]);
-  });
+  const source = readFileSync(resolve(__dirname, 'popup.ts'), 'utf-8');
 
   it('uses replaceChildren() for container clearing (sanity check)', () => {
     // Sanity: confirm the migration target is actually present, so a

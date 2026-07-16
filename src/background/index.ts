@@ -32,9 +32,10 @@ import {
 } from './cdp-enforcement';
 import { lookupAgentIdentity } from '../aim/client';
 import { lookupRegistryTrust } from '../registry/client';
-import { lookupAiSafetyDeclaration } from '../aisafety/client';
+import { lookupAiSafetyDeclaration, declarationOriginFor } from '../aisafety/client';
 import { clearAiSafetyCache } from '../aisafety/cache';
-import type { AiSafetyLookupResult } from '../aisafety/types';
+import { collectAiSafetyDeclarations } from '../aisafety/attribution';
+import type { StoredDeclaration } from '../aisafety/attribution';
 import { generateSessionReport, storeReport, getReports } from '../session/report';
 import { recordDetection, queueEvent, flushQueue, getConsent, getContributeStats } from '../contribute/client';
 import { anonymizeDetection, anonymizeSession } from '../contribute/anonymize';
@@ -59,8 +60,16 @@ interface BackgroundState {
    * on, keyed by tabId so it shares `activeAgents`' lifecycle and is pruned by
    * the same tab-removal path. Display-only (ADR-009). Populated only when
    * `aiSafetyTxtEnabled` is on.
+   *
+   * The `origin` the result was fetched from is stored WITH it, and readers must
+   * confirm it still matches the agent's current origin before showing it. A
+   * tabId alone is not a safe key: there is no navigation listener in this
+   * extension, so a tab keeps its id across a navigation to a different site.
+   * Detection re-fires and swaps `activeAgents` synchronously while the new
+   * lookup is still in flight, which would otherwise leave one site's safety
+   * claims rendered on a card for an agent now operating on another site.
    */
-  aiSafetyDeclarations: Map<number, AiSafetyLookupResult>;
+  aiSafetyDeclarations: Map<number, StoredDeclaration>;
   /**
    * Epoch ms of the most recent block. Drives the transient "!" icon badge
    * that surfaces a block to the user even if they missed the toast. Cleared
@@ -330,16 +339,11 @@ function handleMessage(
 
     case 'STATUS_QUERY': {
       const agents = Array.from(state.activeAgents.values());
-      // Re-key declarations from tabId to agent id: the popup renders agent
-      // cards and has no tab context. Empty unless the feature is on.
-      const aiSafetyDeclarations: Record<string, AiSafetyLookupResult> = {};
-      for (const [declTabId, agent] of state.activeAgents) {
-        const declaration = state.aiSafetyDeclarations.get(declTabId);
-        if (declaration) aiSafetyDeclarations[agent.id] = declaration;
-      }
       sendResponse({
         detectedAgents: agents,
-        aiSafetyDeclarations,
+        // Re-keyed to agent id, and only for origins that still match. Empty
+        // unless the feature is on. See aisafety/attribution.ts.
+        aiSafetyDeclarations: collectAiSafetyDeclarations(state.activeAgents, state.aiSafetyDeclarations),
         // The popup's session-delegation panel shows the session-wide rule;
         // per-agent grants are rendered on their agent cards from
         // delegationRules below.
@@ -685,15 +689,22 @@ async function enrichDomainDeclaration(tabId: number, agent: AgentIdentity): Pro
   // test exercises the same path production does.
   if (!settings.aiSafetyTxtEnabled) return;
 
+  const origin = declarationOriginFor(agent.originUrl);
   const result = await lookupAiSafetyDeclaration(agent.originUrl);
 
   // The tab may have closed, or its agent changed, while the lookup was in
   // flight. Writing then would leak an entry that handleTabRemoved already
-  // pruned, and the map would grow without bound.
+  // pruned, and the map would grow without bound. `agent.id` is a fresh UUID per
+  // detection, so an id match means this is still the same detection.
   const current = state.activeAgents.get(tabId);
   if (!current || current.id !== agent.id) return;
 
-  state.aiSafetyDeclarations.set(tabId, result);
+  // Store the origin the result describes, so a reader can prove the two still
+  // agree rather than trusting the tabId. Null (a non-HTTPS page we declined to
+  // read) is a real value here, not a missing one: it must compare equal to the
+  // same null on re-derivation so the honest "could not check" state still
+  // renders, rather than being silently dropped as a mismatch.
+  state.aiSafetyDeclarations.set(tabId, { origin, result });
 }
 
 /**
