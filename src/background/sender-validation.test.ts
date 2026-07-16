@@ -7,8 +7,11 @@
  */
 
 import { describe, it, expect } from 'vitest';
+import { readFileSync } from 'fs';
+import { resolve } from 'path';
 import '../__tests__/setup';
 import { isValidSender } from './sender-validation';
+import { ALL_MESSAGE_TYPES } from '../types/events';
 import type { MessageType } from '../types/events';
 
 function contentSender(overrides: Partial<chrome.runtime.MessageSender> = {}): chrome.runtime.MessageSender {
@@ -27,6 +30,71 @@ function popupSender(overrides: Partial<chrome.runtime.MessageSender> = {}): chr
     ...overrides,
   };
 }
+
+/**
+ * Types the background SENDS but never receives, so they are correctly absent
+ * from both inbound sets. Responses and pushes, not requests.
+ *
+ * Listed explicitly rather than inferred, so that adding a new message type
+ * forces a deliberate choice: inbound (classify it) or outbound (say so here).
+ */
+const OUTBOUND_ONLY_TYPES: readonly MessageType[] = [
+  'BOUNDARY_CHECK_RESPONSE',
+  'KILL_SWITCH_RESULT',
+  'SESSION_DATA',
+  'STATUS_RESPONSE',
+  'ALLOW_ONCE',
+];
+
+describe('every inbound message type is classified', () => {
+  // isValidSender fails CLOSED on an unclassified type — "adding a new type
+  // without categorizing it here cannot bypass validation by default". That is
+  // the right default, and it has a sharp edge: a type added to the union but
+  // not to a set is silently REJECTED at runtime. No error, no crash, nothing
+  // red — the feature that sends it is simply dead.
+  //
+  // Not hypothetical. AI_SAFETY_CLEAR was added without being classified, so
+  // the "Delete stored declarations" button — itself added to fix a dead end —
+  // did nothing at all when clicked, and every test still passed.
+  //
+  // Asserted by outcome rather than by reading the sets: a routable type is one
+  // some legitimate sender can actually get through.
+  const inboundTypes = ALL_MESSAGE_TYPES.filter((t) => !OUTBOUND_ONLY_TYPES.includes(t));
+
+  it.each(inboundTypes)('%s is routable by a legitimate sender', (type) => {
+    const routable =
+      isValidSender(type, contentSender()) || isValidSender(type, popupSender());
+
+    expect(
+      routable,
+      `Message type "${type}" is accepted from neither a content script nor the popup, ` +
+        'so every message of this type is silently rejected and whatever sends it is ' +
+        'dead code. Add it to CONTENT_ONLY_TYPES or POPUP_ONLY_TYPES in ' +
+        'sender-validation.ts — or to OUTBOUND_ONLY_TYPES in this file if the ' +
+        'background only ever sends it.',
+    ).toBe(true);
+  });
+
+  it.each(OUTBOUND_ONLY_TYPES)('%s is genuinely outbound-only (no handler exists)', (type) => {
+    // Keeps the list above honest, and catches the dangerous direction: adding
+    // a background handler for a type declared outbound-only would mean every
+    // message to it is rejected, and nothing else would notice.
+    const backgroundSource = readFileSync(resolve(__dirname, 'index.ts'), 'utf-8');
+    expect(
+      backgroundSource.includes(`case '${type}'`),
+      `"${type}" is listed as outbound-only, but background/index.ts now handles it. ` +
+        'An inbound type must be classified in sender-validation.ts or every such ' +
+        'message is silently dropped.',
+    ).toBe(false);
+  });
+
+  it('still rejects a type that is not a real message type', () => {
+    // The fail-closed default must survive the tests above: proving every real
+    // inbound type is routable must not tempt anyone into defaulting to accept.
+    expect(isValidSender('NOT_A_REAL_TYPE' as MessageType, popupSender())).toBe(false);
+    expect(isValidSender('NOT_A_REAL_TYPE' as MessageType, contentSender())).toBe(false);
+  });
+});
 
 describe('isValidSender', () => {
   describe('content-only message types', () => {

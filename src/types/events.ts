@@ -158,37 +158,51 @@ export interface DetectionEvent {
 // ============================================================
 
 /**
+ * Every message type used in chrome.runtime.sendMessage communication.
+ *
+ * A runtime array, with `MessageType` derived from it, rather than a bare union.
+ * The union alone exists only at compile time, so nothing could enumerate the
+ * types — and `sender-validation.ts` fails CLOSED on any type it has not
+ * classified, by design. That combination means adding a type to the union and
+ * forgetting to classify it produces a message that is silently rejected at
+ * runtime: the feature is simply dead, with no error and no failing test. This
+ * array is what lets `sender-validation.test.ts` assert every type is routable.
+ */
+export const ALL_MESSAGE_TYPES = [
+  'DETECTION_RESULT',
+  'AGENT_ACTION',
+  'BOUNDARY_CHECK_REQUEST',
+  'BOUNDARY_CHECK_RESPONSE',
+  'KILL_SWITCH_ACTIVATE',
+  'KILL_SWITCH_RESET',
+  'KILL_SWITCH_RESULT',
+  'DELEGATION_UPDATE',
+  'SESSION_QUERY',
+  'SESSION_DATA',
+  'STATUS_QUERY',
+  'STATUS_RESPONSE',
+  'SETTINGS_UPDATE',
+  'ALLOW_ONCE',
+  'CDP_DEBUGGER_CHECK',
+  'NETWORK_EVENT',
+  'REPORTS_QUERY',
+  'REPORT_EXPORT',
+  'REPORT_DOWNLOAD',
+  'CONTRIBUTE_STATS',
+  'CONTRIBUTE_ENABLE',
+  'CONTRIBUTE_DISABLE',
+  'CONTRIBUTE_FLUSH',
+  'CONTRIBUTE_TIP_DISMISS',
+  'DOMAIN_WHITELIST',
+  'OPEN_POPUP',
+  /** Retry deleting stored ai-safety.txt declarations after a failed opt-out. */
+  'AI_SAFETY_CLEAR',
+] as const;
+
+/**
  * Message types used in chrome.runtime.sendMessage communication.
  */
-export type MessageType =
-  | 'DETECTION_RESULT'
-  | 'AGENT_ACTION'
-  | 'BOUNDARY_CHECK_REQUEST'
-  | 'BOUNDARY_CHECK_RESPONSE'
-  | 'KILL_SWITCH_ACTIVATE'
-  | 'KILL_SWITCH_RESET'
-  | 'KILL_SWITCH_RESULT'
-  | 'DELEGATION_UPDATE'
-  | 'SESSION_QUERY'
-  | 'SESSION_DATA'
-  | 'STATUS_QUERY'
-  | 'STATUS_RESPONSE'
-  | 'SETTINGS_UPDATE'
-  | 'ALLOW_ONCE'
-  | 'CDP_DEBUGGER_CHECK'
-  | 'NETWORK_EVENT'
-  | 'REPORTS_QUERY'
-  | 'REPORT_EXPORT'
-  | 'REPORT_DOWNLOAD'
-  | 'CONTRIBUTE_STATS'
-  | 'CONTRIBUTE_ENABLE'
-  | 'CONTRIBUTE_DISABLE'
-  | 'CONTRIBUTE_FLUSH'
-  | 'CONTRIBUTE_TIP_DISMISS'
-  | 'DOMAIN_WHITELIST'
-  | 'OPEN_POPUP'
-  /** Retry deleting stored ai-safety.txt declarations after a failed opt-out. */
-  | 'AI_SAFETY_CLEAR';
+export type MessageType = (typeof ALL_MESSAGE_TYPES)[number];
 
 /**
  * Typed message payload for inter-component communication.
