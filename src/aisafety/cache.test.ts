@@ -73,9 +73,8 @@ describe('cap and eviction', () => {
     expect(await getAiSafetyCacheSize()).toBe(MAX_CACHE_ENTRIES);
   });
 
-  it('evicts the entries closest to expiry first, keeping the newest', async () => {
+  it('evicts the longest-written entry first, keeping the newest', async () => {
     vi.useFakeTimers();
-    // Same TTL, so expiry order is insertion order.
     for (let i = 0; i < MAX_CACHE_ENTRIES; i++) {
       await writeCachedLookup(`https://origin-${i}.example`, OK, TTL);
       vi.advanceTimersByTime(10);
@@ -87,16 +86,46 @@ describe('cap and eviction', () => {
     expect(await getAiSafetyCacheSize()).toBe(MAX_CACHE_ENTRIES);
   });
 
-  it('evicts a short-TTL unreachable entry before a real declaration', async () => {
+  it('keeps a short-TTL entry written into a FULL cache of long-TTL entries', async () => {
     vi.useFakeTimers();
-    // An `unreachable` entry is worth little and is cheap to re-derive, so
-    // expiry-ordered eviction should shed it before a parsed declaration.
-    await writeCachedLookup('https://transient.example', { status: 'unreachable' }, 1_000);
+    // The regression. `unreachable` is written with a 5 min TTL while real
+    // declarations get 24 h, so the new entry's expiresAt is SOONER than all 50
+    // existing ones. Expiry-ordered eviction sorted the just-written entry to
+    // the front and dropped it immediately, making the negative cache a no-op
+    // and re-fetching a broken origin on every single detection.
+    //
+    // Order matters: fill the cache FIRST, then write. Writing the short-TTL
+    // entry first and filling afterwards passes against the buggy code.
     for (let i = 0; i < MAX_CACHE_ENTRIES; i++) {
       await writeCachedLookup(`https://origin-${i}.example`, OK, TTL);
+      vi.advanceTimersByTime(10);
     }
-    expect(await readCachedLookup('https://transient.example')).toBeNull();
-    expect(await readCachedLookup('https://origin-0.example')).toEqual(OK);
+    await writeCachedLookup('https://transient.example', { status: 'unreachable' }, 1_000);
+
+    expect(await readCachedLookup('https://transient.example')).toEqual({ status: 'unreachable' });
+    // It displaced the oldest-written entry, not itself.
+    expect(await readCachedLookup('https://origin-0.example')).toBeNull();
+    expect(await getAiSafetyCacheSize()).toBe(MAX_CACHE_ENTRIES);
+  });
+
+  it('evicts by write order, not by expiry order', async () => {
+    vi.useFakeTimers();
+    // A long-TTL entry written long ago must go before a short-TTL entry written
+    // recently, even though the long-TTL one expires much later.
+    await writeCachedLookup('https://oldest.example', OK, TTL);
+    vi.advanceTimersByTime(1_000);
+    for (let i = 0; i < MAX_CACHE_ENTRIES - 1; i++) {
+      await writeCachedLookup(`https://origin-${i}.example`, OK, TTL);
+      vi.advanceTimersByTime(10);
+    }
+    // TTL must be genuinely shorter than the others, or expiry order and write
+    // order coincide and this proves nothing.
+    await writeCachedLookup('https://newest-but-short.example', { status: 'unreachable' }, 1_000);
+
+    expect(await readCachedLookup('https://oldest.example')).toBeNull();
+    expect(await readCachedLookup('https://newest-but-short.example')).toEqual({
+      status: 'unreachable',
+    });
   });
 
   it('purges expired entries on write', async () => {
@@ -127,13 +156,14 @@ describe('concurrent writes', () => {
 describe('corrupt storage is not trusted', () => {
   it.each([
     ['not an object', 'garbage'],
-    ['an entry with no expiry', { 'https://x.example': { result: OK } }],
-    ['an entry with no result', { 'https://x.example': { expiresAt: Date.now() + TTL } }],
+    ['an entry with no expiry', { 'https://x.example': { result: OK, writtenAt: Date.now() } }],
+    ['an entry with no writtenAt', { 'https://x.example': { result: OK, expiresAt: Date.now() + TTL } }],
+    ['an entry with no result', { 'https://x.example': { expiresAt: Date.now() + TTL, writtenAt: Date.now() } }],
     ['an ok entry with no declaration', {
-      'https://x.example': { result: { status: 'ok' }, expiresAt: Date.now() + TTL },
+      'https://x.example': { result: { status: 'ok' }, expiresAt: Date.now() + TTL, writtenAt: Date.now() },
     }],
     ['an unknown status', {
-      'https://x.example': { result: { status: 'trusted' }, expiresAt: Date.now() + TTL },
+      'https://x.example': { result: { status: 'trusted' }, expiresAt: Date.now() + TTL, writtenAt: Date.now() },
     }],
   ])('drops %s', async (_label, blob) => {
     await chrome.storage.local.set({ aiSafetyDeclarationCache: blob });
@@ -144,7 +174,7 @@ describe('corrupt storage is not trusted', () => {
   it('keeps valid entries alongside dropped ones', async () => {
     await chrome.storage.local.set({
       aiSafetyDeclarationCache: {
-        'https://good.example': { result: OK, expiresAt: Date.now() + TTL },
+        'https://good.example': { result: OK, expiresAt: Date.now() + TTL, writtenAt: Date.now() },
         'https://bad.example': { result: { status: 'ok' } },
       },
     });
@@ -159,5 +189,20 @@ describe('clearAiSafetyCache', () => {
     await writeCachedLookup('https://b.example', OK, TTL);
     await clearAiSafetyCache();
     expect(await getAiSafetyCacheSize()).toBe(0);
+  });
+
+  it('rejects when the delete fails, rather than reporting a false success', async () => {
+    // Not best-effort, unlike a write. A failed write costs a refetch; a failed
+    // clear leaves third-party data on disk after the user revoked consent,
+    // while the privacy policy says opting out deletes every stored
+    // declaration. The caller must be able to tell that apart from success.
+    const remove = chrome.storage.local.remove as unknown as ReturnType<typeof vi.fn>;
+    const original = remove.getMockImplementation();
+    remove.mockRejectedValueOnce(new Error('storage unavailable'));
+    try {
+      await expect(clearAiSafetyCache()).rejects.toThrow('storage unavailable');
+    } finally {
+      if (original) remove.mockImplementation(original);
+    }
   });
 });

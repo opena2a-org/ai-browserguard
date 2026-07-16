@@ -78,19 +78,12 @@ describe('the opt-in gate', () => {
     expect(result.status).toBe('ok');
   });
 
-  it('fails closed when the setting cannot be read', async () => {
-    const get = chrome.storage.local.get as unknown as ReturnType<typeof vi.fn>;
-    const original = get.getMockImplementation();
-    get.mockRejectedValueOnce(new Error('storage unavailable'));
-    try {
-      // An unreadable setting is not consent.
-      const result = await lookupAiSafetyDeclaration('https://example.com/page');
-      expect(mockFetch).not.toHaveBeenCalled();
-      expect(result).toEqual({ status: 'unreachable' });
-    } finally {
-      if (original) get.mockImplementation(original);
-    }
-  });
+  // Fail-closed (an unreadable settings object is not consent) is proven in
+  // client.failclosed.test.ts, which mocks the storage module. It cannot be
+  // tested from here: rejecting chrome.storage.local.get does not make
+  // getSettings reject — getStorageState swallows it and returns defaults — so
+  // the test would pass against a client with no gate at all, on the strength of
+  // the default value alone.
 
   it('writes nothing to the cache while off', async () => {
     await updateSettings({ aiSafetyTxtEnabled: false });

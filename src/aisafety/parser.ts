@@ -104,7 +104,25 @@ function parseUri(value: string): string | undefined {
     return undefined;
   }
   if (!ALLOWED_URI_SCHEMES.has(parsed.protocol)) return undefined;
-  return value;
+
+  // Reject embedded credentials. `https://google.com@evil.com` has username
+  // "google.com" and host "evil.com": it points at the attacker while reading as
+  // a link to Google. That is dangerous specifically because of how the popup
+  // renders these — one line, `white-space: nowrap`, `text-overflow: ellipsis` —
+  // so a long value truncates to `https://google.com@evil.co…`, hiding the only
+  // part that decides where it actually points. A Contact or Attestation URI has
+  // no legitimate use for userinfo. (Empty for mailto:/tel:, which are not
+  // hierarchical, so this does not touch them.)
+  if (parsed.username !== '' || parsed.password !== '') return undefined;
+
+  // Return the PARSED form, not the raw input. `new URL()` normalises what the
+  // scheme allowlist alone would let through as raw text: a unicode-confusable
+  // host (`https://еvil.com`, Cyrillic е) becomes its real punycode
+  // (`https://xn--vil-qdd.com/`), and embedded tabs/newlines are stripped. The
+  // allowlist covers the scheme half of the display-safety argument; this covers
+  // the authority half. Displaying the raw string would show the user something
+  // other than where the URI resolves.
+  return parsed.href;
 }
 
 /**

@@ -381,11 +381,22 @@ function handleMessage(
         // network features ("disabling the setting stops all outbound requests
         // immediately; queued events are cleared"). Leaving stale declarations
         // on disk and on screen after opt-out would contradict it.
+        //
+        // The clear is AWAITED and its failure is surfaced, not swallowed. The
+        // privacy policy states that turning the setting off deletes every
+        // stored declaration; answering `success: true` while the delete had in
+        // fact failed would report a privacy promise as kept when it was not.
+        // The in-memory map is cleared first, so a storage failure still takes
+        // the declarations off screen and stops all further requests (the gate
+        // itself is already off in settings).
         if (!settings.aiSafetyTxtEnabled) {
           state.aiSafetyDeclarations.clear();
-          clearAiSafetyCache().catch(() => { /* non-critical */ });
+          return clearAiSafetyCache().then(() => {
+            sendResponse({ success: true });
+          });
         }
         sendResponse({ success: true });
+        return undefined;
       }).catch(() => {
         sendResponse({ success: false });
       });

@@ -68,7 +68,7 @@
         <li><strong>Who it reaches:</strong> only the site your agent is already on. The extension will not follow a redirect to any other server, and only requests declarations over HTTPS.</li>
         <li><strong>What the site can infer:</strong> because your agent has already loaded a page there, the site's logs already record your visit. The new information the site gains is that something on your device checked for a safety declaration -- which it could use to tell visitors running a declaration-reading tool apart from those who are not. This is the reason the feature is off by default and asks for your consent.</li>
         <li><strong>Only while an agent is running:</strong> nothing is requested for pages you browse yourself. The check happens only when an AI agent has been detected on that page.</li>
-        <li><strong>Caching:</strong> a result is stored locally for 24 hours, so repeat visits do not repeat the request. Turning the setting off deletes every stored declaration.</li>
+        <li><strong>Caching:</strong> a result is stored locally so repeat visits do not repeat the request -- for 24 hours when the site gave a usable answer (a declaration, or a clear "no declaration here"), and for 5 minutes when the site could not be reached, so a site that is temporarily down is retried sooner. Storage is capped at 50 sites; the least recently added is dropped first. Turning the setting off deletes every stored declaration.</li>
       </ul>
     </li>
   </ul>

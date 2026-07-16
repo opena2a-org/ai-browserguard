@@ -31,6 +31,12 @@ export const MAX_CACHE_ENTRIES = 50;
 interface CacheEntry {
   result: AiSafetyLookupResult;
   expiresAt: number;
+  /**
+   * When this entry was written. Eviction order, kept separate from `expiresAt`
+   * because the two disagree: entries have different TTLs, so "expires soonest"
+   * is not "written longest ago".
+   */
+  writtenAt: number;
 }
 
 type CacheShape = Record<string, CacheEntry>;
@@ -68,6 +74,7 @@ function isValidEntry(value: unknown): value is CacheEntry {
   if (typeof value !== 'object' || value === null) return false;
   const entry = value as Record<string, unknown>;
   if (typeof entry.expiresAt !== 'number' || !Number.isFinite(entry.expiresAt)) return false;
+  if (typeof entry.writtenAt !== 'number' || !Number.isFinite(entry.writtenAt)) return false;
 
   const result = entry.result;
   if (typeof result !== 'object' || result === null) return false;
@@ -102,14 +109,22 @@ async function readCache(): Promise<CacheShape> {
 }
 
 /**
- * Drop expired entries, then evict the entries closest to expiry until the cache
+ * Drop expired entries, then evict the longest-written entries until the cache
  * is at cap.
  *
- * Eviction order is by `expiresAt` ascending. Because `expiresAt` is
- * `writtenAt + ttl`, this is insertion-order (FIFO) eviction among entries
- * sharing a TTL, and it evicts short-TTL `unreachable` entries ahead of real
- * declarations — the right preference: an `unreachable` entry is worth little
- * and is cheap to re-derive.
+ * Eviction is ordered by `writtenAt` (FIFO), NOT by `expiresAt`. Ordering by
+ * expiry looks equivalent and is not, because the TTLs differ by outcome:
+ *
+ *   An `unreachable` entry is written with a 5 minute TTL, so its `expiresAt`
+ *   is SOONER than that of all 50 existing 24-hour entries. Expiry-ordered
+ *   eviction therefore sorts the entry we just wrote to the front and discards
+ *   it immediately — every time the cache is full. The negative cache silently
+ *   becomes a no-op, and a broken origin gets re-fetched on every single agent
+ *   detection: the repeat traffic the TTL exists to prevent, and, since every
+ *   request is a fingerprintable signal to a third party, a privacy regression
+ *   rather than a latency one.
+ *
+ * FIFO cannot do that: the entry just written always has the newest `writtenAt`.
  *
  * True LRU is deliberately not implemented: it would require a storage write on
  * every cache *read*, turning the common hit path into a write and defeating the
@@ -119,7 +134,7 @@ function evict(cache: CacheShape, now: number): CacheShape {
   const live = Object.entries(cache).filter(([, entry]) => entry.expiresAt > now);
   if (live.length <= MAX_CACHE_ENTRIES) return Object.fromEntries(live);
 
-  live.sort((a, b) => a[1].expiresAt - b[1].expiresAt);
+  live.sort((a, b) => a[1].writtenAt - b[1].writtenAt);
   return Object.fromEntries(live.slice(live.length - MAX_CACHE_ENTRIES));
 }
 
@@ -152,7 +167,7 @@ export async function writeCachedLookup(
     try {
       const now = Date.now();
       const cache = await readCache();
-      cache[origin] = { result, expiresAt: now + ttlMs };
+      cache[origin] = { result, expiresAt: now + ttlMs, writtenAt: now };
       await chrome.storage.local.set({ [CACHE_KEY]: evict(cache, now) });
     } catch {
       /* Cache writes are best-effort. */
@@ -160,14 +175,18 @@ export async function writeCachedLookup(
   });
 }
 
-/** Remove every cached entry. Used on opt-out and by tests. */
+/**
+ * Remove every cached entry. Used on opt-out and by tests.
+ *
+ * Deliberately NOT best-effort, unlike `writeCachedLookup`. A failed write costs
+ * a refetch; a failed clear leaves third-party data on disk after the user
+ * revoked consent, and the privacy policy states that turning the setting off
+ * deletes every stored declaration. So this rejects, and the caller reports the
+ * failure rather than answering "success" for a promise it did not keep.
+ */
 export async function clearAiSafetyCache(): Promise<void> {
   await withCacheLock(async () => {
-    try {
-      await chrome.storage.local.remove(CACHE_KEY);
-    } catch {
-      /* Best-effort. */
-    }
+    await chrome.storage.local.remove(CACHE_KEY);
   });
 }
 

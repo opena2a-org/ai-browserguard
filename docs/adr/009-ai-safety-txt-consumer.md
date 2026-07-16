@@ -133,9 +133,14 @@ Required, all enforced in `src/aisafety/client.ts`:
 - HTTPS-only origin, parsed with `new URL()` (never string prefix matching —
   `http://localhost@attacker.com` passes a naive `startsWith`).
 - `AbortSignal.timeout(5000)`.
-- **Response size cap (64 KB), enforced while streaming**, not after buffering.
-  A `content-length` header over the cap short-circuits; a body without or lying
-  about `content-length` is capped by the reader and cancelled.
+- **Response size cap (64 KB), enforced while streaming** on every path Chrome
+  takes. A `content-length` header over the cap short-circuits; a body without or
+  lying about `content-length` is capped by the reader and cancelled. (`readCappedText`
+  keeps a `response.text()` fallback for a response with no body stream, and that
+  path necessarily buffers before measuring. It is unreachable in Chrome, where a
+  response body is always a stream; it exists so the function stays usable against
+  simple response mocks. Said plainly here rather than left as an unqualified
+  "never buffers" the code would not support.)
 - **`Content-Type` must be `text/plain`** (parameters such as `; charset=utf-8`
   allowed). This is stricter than the draft, which makes `text/plain` a SHOULD. The
   reason is not ceremony: a very large share of sites answer unknown paths with a
@@ -218,7 +223,7 @@ bug, so:
 - No manifest change, so no permission-triggered store re-review.
 - The disclosure is narrower and more accurate than the roadmap assumed, and the
   policy text can say something short and true.
-- `redirect: 'error'` + `credentials: 'omit'` make "reaches only the origin the
+- `redirect: 'manual'` (never followed) + `credentials: 'omit'` make "reaches only the origin the
   agent already loaded, with no identity attached" a structural property.
 
 ### Negative

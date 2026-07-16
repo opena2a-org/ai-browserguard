@@ -195,6 +195,49 @@ describe('parseAiSafetyTxt: URI fields', () => {
     expect(parseAiSafetyTxt('Contact: security team').contact).toBeUndefined();
     expect(parseAiSafetyTxt('Attestation: /verify/example.com').attestation).toBeUndefined();
   });
+
+  it.each([
+    'https://google.com@evil.com/',
+    'https://google.com:pass@evil.com/',
+    'https://info@opena2a.org@evil.com/',
+  ])('rejects the credential-embedding URI %j', (uri) => {
+    // Host is evil.com; the part before "@" is userinfo, not a host. The popup
+    // renders this on one nowrap/ellipsis line, so it truncates to
+    // "https://google.com@evil.co…" and hides the only part that decides where
+    // it points. No Contact URI needs userinfo.
+    expect(parseAiSafetyTxt(`Contact: ${uri}`).contact).toBeUndefined();
+    expect(parseAiSafetyTxt(`Attestation: ${uri}`).attestation).toBeUndefined();
+  });
+
+  it('normalises a unicode-confusable host to punycode', () => {
+    // A host whose leading character is Cyrillic U+0435, not ASCII "e", so it
+    // reads as "evil.com" but resolves elsewhere. Displaying the raw string
+    // would show the user a host that is not the one it points at.
+    //
+    // Written as an escape rather than a literal on purpose. A pasted confusable
+    // is invisible in review, and a scanner flags it as a real finding (it is
+    // the same trick in source that this test is about in data) — the same rule
+    // that keeps real-looking credentials out of fixtures. The escape is the
+    // identical codepoint at runtime and names it explicitly.
+    const CYRILLIC_E = '\u0435';
+    const result = parseAiSafetyTxt(`Attestation: https://${CYRILLIC_E}vil.com/verify`);
+
+    expect(result.attestation).toBe('https://xn--vil-qdd.com/verify');
+    expect(result.attestation).not.toContain(CYRILLIC_E);
+  });
+
+  it('returns the parsed form, so what is displayed is where it resolves', () => {
+    expect(parseAiSafetyTxt('Attestation: https://example.com').attestation).toBe(
+      'https://example.com/',
+    );
+  });
+
+  it('leaves mailto and tel untouched (no userinfo semantics)', () => {
+    expect(parseAiSafetyTxt('Contact: mailto:info@opena2a.org').contact).toBe(
+      'mailto:info@opena2a.org',
+    );
+    expect(parseAiSafetyTxt('Contact: tel:+15551234').contact).toBe('tel:+15551234');
+  });
 });
 
 describe('parseAiSafetyTxt: Last-Verified', () => {
