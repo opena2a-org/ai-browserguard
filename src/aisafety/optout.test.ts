@@ -14,7 +14,7 @@
  * The decision now lives in a pure module and is asserted by what it returns.
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { shouldClearDeclarations, performOptOutClear } from './optout';
+import { shouldClearDeclarations, performOptOutClear, reconcileOptOut } from './optout';
 import { clearAiSafetyCache, writeCachedLookup, getAiSafetyCacheSize } from './cache';
 import type { AiSafetyLookupResult } from './types';
 
@@ -121,5 +121,90 @@ describe('performOptOutClear', () => {
     } finally {
       if (original) remove.mockImplementation(original);
     }
+  });
+});
+
+describe('reconcileOptOut (runs at every service-worker start)', () => {
+  it('deletes declarations left behind by a failed opt-out', async () => {
+    // The scenario the popup cannot cover. The user opted out, the delete
+    // failed, and they closed the popup — which took the warning and the retry
+    // button with it, since both lived only in popup memory. Nothing else knew.
+    // Without this, the declarations stay on disk forever and the privacy
+    // policy's promise is permanently unfulfilled AND invisible.
+    const clear = vi.fn(async () => { /* succeeds this time */ });
+
+    const settled = await reconcileOptOut({
+      enabled: false,
+      cacheSize: async () => 7,
+      clear,
+    });
+
+    expect(settled).toBe(true);
+    expect(clear).toHaveBeenCalledOnce();
+  });
+
+  it('does nothing when the user has opted back IN', async () => {
+    // Also what makes a stale retry click safe: the button can outlive its
+    // warning by one render, and clearing unconditionally would wipe the cache
+    // of a feature the user just re-enabled.
+    const clear = vi.fn(async () => { /* must not run */ });
+
+    expect(await reconcileOptOut({ enabled: true, cacheSize: async () => 7, clear })).toBe(true);
+    expect(clear).not.toHaveBeenCalled();
+  });
+
+  it('does nothing when there is nothing stored', async () => {
+    // The overwhelmingly common case: opted out, cache already empty. Must not
+    // write to storage on every worker start.
+    const clear = vi.fn(async () => { /* must not run */ });
+
+    expect(await reconcileOptOut({ enabled: false, cacheSize: async () => 0, clear })).toBe(true);
+    expect(clear).not.toHaveBeenCalled();
+  });
+
+  it('reports NOT settled when the delete fails again', async () => {
+    expect(
+      await reconcileOptOut({
+        enabled: false,
+        cacheSize: async () => 3,
+        clear: async () => { throw new Error('storage still unavailable'); },
+      }),
+    ).toBe(false);
+  });
+
+  it('reports NOT settled when the cache cannot even be read', async () => {
+    // Fails closed: an unreadable cache is not evidence that nothing is
+    // outstanding.
+    expect(
+      await reconcileOptOut({
+        enabled: false,
+        cacheSize: async () => { throw new Error('storage unavailable'); },
+        clear: async () => { /* unreachable */ },
+      }),
+    ).toBe(false);
+  });
+
+  it('never throws, so a failure cannot break service-worker startup', async () => {
+    await expect(
+      reconcileOptOut({
+        enabled: false,
+        cacheSize: async () => { throw new Error('boom'); },
+        clear: async () => { throw new Error('boom'); },
+      }),
+    ).resolves.toBe(false);
+  });
+
+  it('really empties the cache when wired to the real storage', async () => {
+    await writeCachedLookup('https://a.example', OK, 60_000);
+    await writeCachedLookup('https://b.example', OK, 60_000);
+
+    const settled = await reconcileOptOut({
+      enabled: false,
+      cacheSize: getAiSafetyCacheSize,
+      clear: clearAiSafetyCache,
+    });
+
+    expect(settled).toBe(true);
+    expect(await getAiSafetyCacheSize()).toBe(0);
   });
 });

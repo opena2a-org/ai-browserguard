@@ -33,10 +33,10 @@ import {
 import { lookupAgentIdentity } from '../aim/client';
 import { lookupRegistryTrust } from '../registry/client';
 import { lookupAiSafetyDeclaration, declarationOriginFor } from '../aisafety/client';
-import { clearAiSafetyCache } from '../aisafety/cache';
+import { clearAiSafetyCache, getAiSafetyCacheSize } from '../aisafety/cache';
 import { collectAiSafetyDeclarations } from '../aisafety/attribution';
 import type { StoredDeclaration } from '../aisafety/attribution';
-import { shouldClearDeclarations, performOptOutClear } from '../aisafety/optout';
+import { shouldClearDeclarations, performOptOutClear, reconcileOptOut } from '../aisafety/optout';
 import { generateSessionReport, storeReport, getReports } from '../session/report';
 import { recordDetection, queueEvent, flushQueue, getConsent, getContributeStats } from '../contribute/client';
 import { anonymizeDetection, anonymizeSession } from '../contribute/anonymize';
@@ -122,6 +122,13 @@ function initialize(): void {
   }).catch((err) => {
     console.error('[AI Browser Guard] Failed to load state:', err);
   });
+
+  // Settle any outstanding ai-safety.txt deletion: opted out, but declarations
+  // still on disk because a previous delete failed. The obligation is durable
+  // and the popup that discovered it is not — its warning dies when the popup
+  // closes — so the check runs on every worker start and the failure self-heals.
+  // A no-op in every normal case.
+  reconcileAiSafetyStorage().catch(() => { /* retried on the next start */ });
 
   // Message routing
   chrome.runtime.onMessage.addListener(handleMessage);
@@ -412,9 +419,16 @@ function handleMessage(
       // feature back ON, which would re-enable the network requests the user
       // just revoked. That is a dead end, and worse, one that pushes the user
       // to re-consent. This gives the retry its own button.
+      //
+      // Routed through reconcileOptOut rather than clearing outright, so a click
+      // that arrives after the user re-enabled the feature is a no-op instead of
+      // wiping the cache they just opted back into. No `.catch` here:
+      // reconcileOptOut never rejects by contract, and a catch could only fire
+      // if sendResponse itself threw — in which case calling sendResponse a
+      // second time would throw again into an unhandled rejection.
       state.aiSafetyDeclarations.clear();
-      performOptOutClear(clearAiSafetyCache).then(sendResponse).catch(() => {
-        sendResponse({ success: true, declarationsCleared: false });
+      reconcileAiSafetyStorage().then((settled) => {
+        sendResponse({ success: true, declarationsCleared: settled });
       });
       return true; // async response
     }
@@ -696,6 +710,26 @@ async function handleDetection(tabId: number, event: DetectionEvent): Promise<vo
   // Attach CDP enforcement if this tab is now an agent tab under active
   // delegation (opt-in; no-op when the feature is off).
   reconcileCdpEnforcement().catch(() => { /* non-critical */ });
+}
+
+/**
+ * Settle any outstanding ai-safety.txt deletion obligation.
+ *
+ * Called at every service-worker start and by the popup's retry button. The
+ * obligation ("opted out, declarations still on disk") outlives the popup that
+ * discovered it, so it is re-checked here rather than remembered in popup state.
+ * Cheap: one storage read, and a no-op in the overwhelmingly common case.
+ */
+async function reconcileAiSafetyStorage(): Promise<boolean> {
+  const settings = await getSettings().catch(() => null);
+  // Cannot read the setting: do nothing rather than delete data on a guess.
+  if (!settings) return false;
+
+  return reconcileOptOut({
+    enabled: settings.aiSafetyTxtEnabled,
+    cacheSize: getAiSafetyCacheSize,
+    clear: clearAiSafetyCache,
+  });
 }
 
 /**

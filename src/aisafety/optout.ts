@@ -67,3 +67,42 @@ export async function performOptOutClear(clear: () => Promise<void>): Promise<Op
     return { success: true, declarationsCleared: false };
   }
 }
+
+/**
+ * Settle any outstanding deletion obligation: opted out, but declarations still
+ * on disk.
+ *
+ * Run at every service-worker start, and by the popup's retry button.
+ *
+ * This exists because the obligation is DURABLE and the popup is not. If the
+ * opt-out delete fails, the only thing that knew was a warning in popup memory,
+ * which is rebuilt empty every time the popup opens — so closing and reopening
+ * it lost the warning, lost the retry button, and left the declarations on disk
+ * with nothing anywhere aware of it. The privacy policy's promise ("turning the
+ * setting off deletes every stored declaration") would then be permanently
+ * unfulfilled AND invisible. A durable obligation needs a durable check, so the
+ * background re-checks on every start and the failure self-heals.
+ *
+ * Returns whether nothing is outstanding afterwards.
+ */
+export async function reconcileOptOut(deps: {
+  /** Whether the user currently has the feature enabled. */
+  enabled: boolean;
+  /** How many declarations are stored. */
+  cacheSize: () => Promise<number>;
+  clear: () => Promise<void>;
+}): Promise<boolean> {
+  // The user has opted back in, so there is no deletion obligation. This is also
+  // what makes a stale retry click safe: the button can outlive its warning by a
+  // render, and without this check that click would wipe the cache of a feature
+  // the user just re-enabled.
+  if (deps.enabled) return true;
+
+  try {
+    if ((await deps.cacheSize()) === 0) return true; // Nothing outstanding.
+    await deps.clear();
+    return true;
+  } catch {
+    return false;
+  }
+}
