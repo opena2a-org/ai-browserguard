@@ -227,8 +227,8 @@ export async function lookupAiSafetyDeclaration(
     // Re-check consent before storing anything. Two guards, closing different
     // halves of the same revoke-during-lookup race:
     //
-    //   - isEnabled() is the DISPLAY guard: if the setting now reads off, return
-    //     `unreachable` so nothing this lookup produced reaches the screen.
+    //   - isEnabled() gates this lookup's RETURN VALUE: if the setting now reads
+    //     off, return `unreachable` so the caller gets nothing to store.
     //   - the generation check inside writeCachedLookupUnlessCleared is the DISK
     //     guard, and it is the one the earlier fix was missing. The old re-check
     //     read the setting OUTSIDE the cache lock, so the opt-out's delete could
@@ -237,8 +237,14 @@ export async function lookupAiSafetyDeclaration(
     //     so a clear that raced this lookup voids the write even in the window
     //     where isEnabled() still reads the pre-opt-out value.
     //
+    // Scope note: this closes the DISK half and this lookup's own return. The
+    // on-screen store is a SEPARATE write on the caller's side
+    // (enrichDomainDeclaration), which carries its own generation guard against
+    // the same race -- do not read "return unreachable here" as a guarantee that
+    // nothing is shown; that guarantee lives with the caller.
+    //
     // The network request already went out and cannot be recalled, but nothing
-    // it produced is kept or shown.
+    // it produced is kept on disk.
     if (!(await isEnabled())) return { status: 'unreachable' };
     const outcome = await writeCachedLookupUnlessCleared(
       origin,

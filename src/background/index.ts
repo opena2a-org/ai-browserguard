@@ -36,10 +36,11 @@ import { lookupAiSafetyDeclaration, declarationOriginFor } from '../aisafety/cli
 import { clearAiSafetyCache } from '../aisafety/cache';
 import { collectAiSafetyDeclarations } from '../aisafety/attribution';
 import {
-  setDeclaration,
+  setDeclarationUnlessCleared,
   deleteDeclaration,
   clearInMemoryDeclarations,
   getInMemoryDeclarations,
+  getDeclarationClearGeneration,
 } from '../aisafety/declaration-store';
 import { shouldClearDeclarations, performOptOutClear, reconcileFromSettings } from '../aisafety/optout';
 import { optOutRetryResponse } from '../aisafety/opt-out-response';
@@ -748,6 +749,14 @@ async function reconcileAiSafetyStorage(): Promise<boolean> {
  * accidentally pull a domain's self-assessment into it (ADR-009 section 4).
  */
 async function enrichDomainDeclaration(tabId: number, agent: AgentIdentity): Promise<void> {
+  // Capture the store's clear generation BEFORE anything else. Any opt-out from
+  // here on bumps it (clearInMemoryDeclarations), and the guarded write below
+  // voids on mismatch. This is the DISPLAY half of the revoke-during-lookup race
+  // whose DISK half the cache generation closes: the disk cache's straggler
+  // write is voided in aisafety/client.ts, but the on-screen store is a separate
+  // write on this path and needs its own guard.
+  const capturedGen = getDeclarationClearGeneration();
+
   const settings = (await getStorageState()).settings;
   // The gate lives here, at the call site, so the fresh-install zero-network
   // test exercises the same path production does.
@@ -756,9 +765,11 @@ async function enrichDomainDeclaration(tabId: number, agent: AgentIdentity): Pro
   const origin = declarationOriginFor(agent.originUrl);
   const result = await lookupAiSafetyDeclaration(agent.originUrl);
 
-  // Re-read consent: the lookup can take up to 5 seconds, and the opt-out that
-  // cleared this map may have run during it. Without this, a straggler puts a
-  // declaration back on screen right after the user revoked consent.
+  // Belt: a plainly-off setting skips the write early. Not sufficient ALONE --
+  // this read is not serialized against the opt-out's settings write, so it can
+  // still return a stale ON while the opt-out's clear has already run, which is
+  // exactly the window that put a declaration back on screen after opt-out. The
+  // authoritative guard is the generation check in setDeclarationUnlessCleared.
   const settingsAfter = (await getStorageState()).settings;
   if (!settingsAfter.aiSafetyTxtEnabled) return;
 
@@ -774,7 +785,10 @@ async function enrichDomainDeclaration(tabId: number, agent: AgentIdentity): Pro
   // read) is a real value here, not a missing one: it must compare equal to the
   // same null on re-derivation so the honest "could not check" state still
   // renders, rather than being silently dropped as a mismatch.
-  setDeclaration(tabId, { origin, result });
+  //
+  // Guarded: if an opt-out cleared the store since capture, this is a no-op, so
+  // a straggler cannot repaint a declaration the user just revoked.
+  setDeclarationUnlessCleared(tabId, { origin, result }, capturedGen);
 }
 
 /**

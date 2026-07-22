@@ -9,9 +9,11 @@
 import { describe, it, expect, beforeEach } from 'vitest';
 import {
   setDeclaration,
+  setDeclarationUnlessCleared,
   deleteDeclaration,
   clearInMemoryDeclarations,
   getInMemoryDeclarations,
+  getDeclarationClearGeneration,
   inMemoryDeclarationCount,
 } from './declaration-store';
 import type { StoredDeclaration } from './attribution';
@@ -59,5 +61,33 @@ describe('declaration-store', () => {
     const live = getInMemoryDeclarations();
     setDeclaration(3, A);
     expect(live.get(3)).toEqual(A);
+  });
+});
+
+describe('setDeclarationUnlessCleared voids a display write an opt-out raced', () => {
+  it('writes when the store was not cleared since the generation was captured', () => {
+    const gen = getDeclarationClearGeneration();
+    expect(setDeclarationUnlessCleared(1, A, gen)).toBe(true);
+    expect(getInMemoryDeclarations().get(1)).toEqual(A);
+  });
+
+  it('refuses the write when the store was cleared after the generation was captured', () => {
+    // The display half of the opt-out race. A detection captures the generation
+    // before its lookup; the user opts out mid-lookup, so clearInMemoryDeclarations
+    // empties the store and bumps the generation; the straggler then tries to
+    // repaint its result. Without the guard the declaration reappears on screen
+    // after consent was revoked; with it, the stale generation makes it a no-op.
+    const gen = getDeclarationClearGeneration();
+    clearInMemoryDeclarations(); // the opt-out, racing the in-flight detection
+
+    expect(setDeclarationUnlessCleared(1, A, gen)).toBe(false);
+    expect(inMemoryDeclarationCount()).toBe(0);
+    expect(getInMemoryDeclarations().get(1)).toBeUndefined();
+  });
+
+  it('clearInMemoryDeclarations advances the generation', () => {
+    const before = getDeclarationClearGeneration();
+    clearInMemoryDeclarations();
+    expect(getDeclarationClearGeneration()).not.toBe(before);
   });
 });

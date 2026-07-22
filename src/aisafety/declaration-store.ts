@@ -28,9 +28,48 @@ import type { StoredDeclaration } from './attribution';
 
 const declarations = new Map<number, StoredDeclaration>();
 
-/** Record the lookup result for a tab's detected agent. */
+/**
+ * How many times this store has been cleared this worker lifetime.
+ *
+ * The display half of the opt-out revoke-during-lookup race. The disk cache
+ * closes its half with an equivalent counter (`cache.ts` clearGeneration); this
+ * one guards the on-screen store. A detection captures this before its lookup
+ * and hands it to `setDeclarationUnlessCleared`, which refuses the write if it
+ * changed -- so a straggler cannot put a declaration back on screen after an
+ * opt-out cleared the store, even in the window where a plain settings re-read
+ * still returns the pre-opt-out value (that read is not serialized against the
+ * opt-out's settings write).
+ *
+ * A module counter is correct here for the same reason it is in `cache.ts`: a
+ * detection's enrich cannot outlive its worker, so a restart resetting it to 0
+ * is unobservable. The check and the `set` in `setDeclarationUnlessCleared` are
+ * synchronous with no await between them, and `clearInMemoryDeclarations` is
+ * synchronous too, so on JS's single thread no clear can interleave.
+ */
+let clearGeneration = 0;
+
+export function getDeclarationClearGeneration(): number {
+  return clearGeneration;
+}
+
+/** Record the lookup result for a tab's detected agent. Unconditional. */
 export function setDeclaration(tabId: number, entry: StoredDeclaration): void {
   declarations.set(tabId, entry);
+}
+
+/**
+ * Record a result ONLY if the store has not been cleared since
+ * `sinceGeneration` was captured -- i.e. the user did not opt out during the
+ * lookup. Returns whether it was written.
+ */
+export function setDeclarationUnlessCleared(
+  tabId: number,
+  entry: StoredDeclaration,
+  sinceGeneration: number,
+): boolean {
+  if (clearGeneration !== sinceGeneration) return false;
+  declarations.set(tabId, entry);
+  return true;
 }
 
 /** Drop a tab's entry (tab closed, or its agent changed). */
@@ -41,8 +80,10 @@ export function deleteDeclaration(tabId: number): void {
 /**
  * Empty the store. Called on opt-out (directly, and by the reconcile), so that
  * nothing the feature gathered remains on screen after consent is revoked.
+ * Bumps the clear generation so any in-flight detection voids its pending write.
  */
 export function clearInMemoryDeclarations(): void {
+  clearGeneration += 1;
   declarations.clear();
 }
 

@@ -65,3 +65,29 @@ describe('the opt-out reconcile is actually wired up', () => {
     expect(normalized).toBe('return reconcileFromSettings();');
   });
 });
+
+describe('the on-screen declaration write is guarded against the opt-out race', () => {
+  // The decision itself (write only if the store was not cleared since capture)
+  // is tested by outcome in declaration-store.test.ts. What no test can observe
+  // -- enrichDomainDeclaration is in this side-effect module -- is that the write
+  // actually goes through the guard, and that the generation is captured BEFORE
+  // the lookup so it spans the whole in-flight window. This is a source guard,
+  // the weakest useful kind, for exactly that unreachable wiring: it catches a
+  // revert to the unguarded setter, or capturing the generation too late.
+  const fnStart = code.indexOf('async function enrichDomainDeclaration');
+  const fnBody = code.slice(fnStart, code.indexOf('\nasync function enrichAgentTrust', fnStart));
+
+  it('writes through the guarded setter, never the unconditional one', () => {
+    expect(fnBody).toContain('setDeclarationUnlessCleared(');
+    // A bare setDeclaration( would be the unguarded regression the review found.
+    expect(fnBody).not.toMatch(/[^a-zA-Z]setDeclaration\(/);
+  });
+
+  it('captures the clear generation before the lookup, so it spans the whole window', () => {
+    const capture = fnBody.indexOf('getDeclarationClearGeneration()');
+    const lookup = fnBody.indexOf('lookupAiSafetyDeclaration(');
+    expect(capture).toBeGreaterThan(-1);
+    expect(lookup).toBeGreaterThan(-1);
+    expect(capture).toBeLessThan(lookup);
+  });
+});
