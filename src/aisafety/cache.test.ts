@@ -2,8 +2,11 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import {
   readCachedLookup,
   writeCachedLookup,
+  writeCachedLookupUnlessCleared,
+  getClearGeneration,
   clearAiSafetyCache,
   getAiSafetyCacheSize,
+  getStoredEntryCount,
   MAX_CACHE_ENTRIES,
 } from './cache';
 import type { AiSafetyLookupResult } from './types';
@@ -260,6 +263,63 @@ describe('clearAiSafetyCache', () => {
       await expect(clearAiSafetyCache()).rejects.toThrow('storage unavailable');
     } finally {
       if (original) remove.mockImplementation(original);
+    }
+  });
+});
+
+describe('getStoredEntryCount counts bytes on disk, whatever their shape', () => {
+  it('reports a non-object value at the key as data to delete, not as absent', async () => {
+    // The delete obligation is about BYTES ON DISK. A bare string or number at
+    // the cache key is not `undefined`, so it is data the opt-out promise must
+    // cover. The old guard (`typeof raw !== 'object' -> 0`) reused the READER's
+    // "serve nothing" shape as the DELETER's "nothing to delete" -- the same
+    // inversion that hid the live-vs-stored bug -- and reported the data as
+    // already gone. Deciding on that count means a failed opt-out delete would
+    // "settle" while a string sat on disk.
+    await chrome.storage.local.set({ aiSafetyDeclarationCache: 'unexpected string' });
+    expect(await getStoredEntryCount()).toBe(1);
+  });
+
+  it('reports 0 only when the key is genuinely absent', async () => {
+    await clearAiSafetyCache();
+    expect(await getStoredEntryCount()).toBe(0);
+  });
+});
+
+describe('writeCachedLookupUnlessCleared voids a write that a clear raced', () => {
+  it('writes when no clear ran since the generation was captured', async () => {
+    const gen = getClearGeneration();
+    expect(await writeCachedLookupUnlessCleared('https://a.example', OK, TTL, gen)).toBe('written');
+    expect(await readCachedLookup('https://a.example')).toEqual(OK);
+  });
+
+  it('refuses the write when a clear ran after the generation was captured', async () => {
+    // The TOCTOU, deterministically. A lookup captures the generation before its
+    // fetch; the user opts out mid-fetch, so clearAiSafetyCache runs and bumps
+    // the generation; the straggler then tries to store its result. Without the
+    // guard the entry lands on disk moments after consent was revoked. With it,
+    // the stale generation makes the write a no-op.
+    const gen = getClearGeneration();
+    await clearAiSafetyCache(); // the opt-out's delete, racing the in-flight lookup
+
+    expect(await writeCachedLookupUnlessCleared('https://a.example', OK, TTL, gen)).toBe('revoked');
+    const stored = await chrome.storage.local.get('aiSafetyDeclarationCache');
+    expect(stored.aiSafetyDeclarationCache).toBeUndefined();
+  });
+
+  it('reports error (not revoked) when the write fails with consent intact', async () => {
+    // A storage hiccup with no clear racing must stay distinguishable from a
+    // revoke: the fetched declaration is still legitimate to display, just not
+    // cached. Collapsing the two would suppress valid declarations on any
+    // transient write failure.
+    const gen = getClearGeneration();
+    const set = chrome.storage.local.set as unknown as ReturnType<typeof vi.fn>;
+    const original = set.getMockImplementation();
+    set.mockRejectedValueOnce(new Error('storage unavailable'));
+    try {
+      expect(await writeCachedLookupUnlessCleared('https://a.example', OK, TTL, gen)).toBe('error');
+    } finally {
+      if (original) set.mockImplementation(original);
     }
   });
 });

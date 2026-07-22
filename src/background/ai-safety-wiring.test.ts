@@ -48,15 +48,20 @@ describe('the opt-out reconcile is actually wired up', () => {
     expect(alarmBody).toContain('reconcileAiSafetyStorage()');
   });
 
-  it('delegates every decision to the tested module', () => {
-    // reconcileAiSafetyStorage must stay dependency-injection only. An `if` here
-    // is a branch in the one place no test can reach — which is how the live-vs-
-    // stored count bug shipped.
+  it('delegates every decision to the tested module, with no logic of its own', () => {
+    // reconcileFromSettings takes zero injected dependencies now, so
+    // reconcileAiSafetyStorage is pure delegation: the miswirings that shipped
+    // (an always-`true` getSettings, a `clearInMemory: () => {}`) are no longer
+    // even expressible here. To keep it that way this asserts the body IS the
+    // delegating call and nothing else -- a tighter guard than banning the one
+    // spelling `if (`, which a ternary, `&&`, `??`, or an early return all slip
+    // past. Any added branch or wrong argument changes the normalized body.
     const fnStart = code.indexOf('async function reconcileAiSafetyStorage');
     expect(fnStart).toBeGreaterThan(0);
-    const fnBody = code.slice(fnStart, code.indexOf('\n}', fnStart));
+    const bodyStart = code.indexOf('{', fnStart);
+    const fnBody = code.slice(bodyStart + 1, code.indexOf('\n}', fnStart));
 
-    expect(fnBody).toContain('reconcileFromSettings');
-    expect(fnBody).not.toMatch(/\bif\s*\(/);
+    const normalized = fnBody.replace(/\s+/g, ' ').trim();
+    expect(normalized).toBe('return reconcileFromSettings();');
   });
 });

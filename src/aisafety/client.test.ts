@@ -493,4 +493,41 @@ describe('consent revoked while a lookup is in flight', () => {
     const stored = await chrome.storage.local.get('aiSafetyDeclarationCache');
     expect(Object.keys(stored.aiSafetyDeclarationCache)).toEqual(['https://example.com']);
   });
+
+  it('does not store the result when the cache is cleared mid-lookup, even while the setting still reads ON', async () => {
+    // The tight interleaving the settings-only test above cannot reach. In
+    // production the opt-out writes the setting off and THEN clears the cache,
+    // but the settle re-check reads the setting OUTSIDE the cache lock -- so
+    // there is a window where the re-check still sees the pre-opt-out value
+    // (ON) while the opt-out's clear has already run. The earlier fix, which
+    // only re-checked the setting, wrote the straggler in exactly that window
+    // (proven at 0d75b01: "STORED AFTER OPT-OUT = 1").
+    //
+    // This reproduces it by clearing the cache during the fetch while leaving
+    // the setting ON, so the re-check passes and only the generation guard can
+    // catch it. On the old code the entry lands on disk; with the in-lock
+    // generation check it does not.
+    let resolveFetch: (r: unknown) => void = () => {};
+    mockFetch.mockImplementationOnce(
+      () => new Promise((resolve) => { resolveFetch = resolve; }),
+    );
+
+    const inFlight = lookupAiSafetyDeclaration('https://tracked.example/page');
+
+    // Wait until the request is genuinely in flight (the generation has been
+    // captured and the fetch is parked) before the clear, so this exercises the
+    // mid-lookup race rather than a clear that finishes first.
+    await vi.waitFor(() => expect(mockFetch).toHaveBeenCalledTimes(1));
+
+    // The opt-out's cache delete lands while the fetch is still open; the
+    // setting is left ON so the display re-check cannot be what saves us.
+    await clearAiSafetyCache();
+
+    resolveFetch(textResponse(DECLARATION));
+    const result = await inFlight;
+
+    const stored = await chrome.storage.local.get('aiSafetyDeclarationCache');
+    expect(stored.aiSafetyDeclarationCache).toBeUndefined();
+    expect(result).toEqual({ status: 'unreachable' });
+  });
 });

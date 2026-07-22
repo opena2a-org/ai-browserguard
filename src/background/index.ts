@@ -35,9 +35,14 @@ import { lookupRegistryTrust } from '../registry/client';
 import { lookupAiSafetyDeclaration, declarationOriginFor } from '../aisafety/client';
 import { clearAiSafetyCache } from '../aisafety/cache';
 import { collectAiSafetyDeclarations } from '../aisafety/attribution';
-import type { StoredDeclaration } from '../aisafety/attribution';
+import {
+  setDeclaration,
+  deleteDeclaration,
+  clearInMemoryDeclarations,
+  getInMemoryDeclarations,
+} from '../aisafety/declaration-store';
 import { shouldClearDeclarations, performOptOutClear, reconcileFromSettings } from '../aisafety/optout';
-import type { OptOutResponse } from '../aisafety/optout';
+import { optOutRetryResponse } from '../aisafety/opt-out-response';
 import { generateSessionReport, storeReport, getReports } from '../session/report';
 import { recordDetection, queueEvent, flushQueue, getConsent, getContributeStats } from '../contribute/client';
 import { anonymizeDetection, anonymizeSession } from '../contribute/anonymize';
@@ -58,21 +63,6 @@ interface BackgroundState {
   /** Cached copy of settings.cdpEnforcementEnabled (refreshed on SETTINGS_UPDATE). */
   cdpEnforcementEnabled: boolean;
   /**
-   * ai-safety.txt lookup result for the page each detected agent is operating
-   * on, keyed by tabId so it shares `activeAgents`' lifecycle and is pruned by
-   * the same tab-removal path. Display-only (ADR-009). Populated only when
-   * `aiSafetyTxtEnabled` is on.
-   *
-   * The `origin` the result was fetched from is stored WITH it, and readers must
-   * confirm it still matches the agent's current origin before showing it. A
-   * tabId alone is not a safe key: there is no navigation listener in this
-   * extension, so a tab keeps its id across a navigation to a different site.
-   * Detection re-fires and swaps `activeAgents` synchronously while the new
-   * lookup is still in flight, which would otherwise leave one site's safety
-   * claims rendered on a card for an agent now operating on another site.
-   */
-  aiSafetyDeclarations: Map<number, StoredDeclaration>;
-  /**
    * Epoch ms of the most recent block. Drives the transient "!" icon badge
    * that surfaces a block to the user even if they missed the toast. Cleared
    * when the popup is opened or after BLOCK_BADGE_TTL_MS.
@@ -89,7 +79,6 @@ const state: BackgroundState = {
   lifetimeStats: { ...DEFAULT_LIFETIME_STATS },
   notificationsEnabled: true,
   cdpEnforcementEnabled: false,
-  aiSafetyDeclarations: new Map(),
   lastBlockAt: null,
 };
 
@@ -362,7 +351,7 @@ function handleMessage(
         detectedAgents: agents,
         // Re-keyed to agent id, and only for origins that still match. Empty
         // unless the feature is on. See aisafety/attribution.ts.
-        aiSafetyDeclarations: collectAiSafetyDeclarations(state.activeAgents, state.aiSafetyDeclarations),
+        aiSafetyDeclarations: collectAiSafetyDeclarations(state.activeAgents, getInMemoryDeclarations()),
         // The popup's session-delegation panel shows the session-wide rule;
         // per-agent grants are rendered on their agent cards from
         // delegationRules below.
@@ -410,7 +399,7 @@ function handleMessage(
           // In-memory first: even if the storage delete fails, the declarations
           // leave the screen and no further requests can happen (the gate is
           // already off in settings).
-          state.aiSafetyDeclarations.clear();
+          clearInMemoryDeclarations();
           return performOptOutClear(clearAiSafetyCache).then(sendResponse);
         }
         sendResponse({ success: true });
@@ -439,11 +428,12 @@ function handleMessage(
       // which case calling sendResponse a second time would throw again into an
       // unhandled rejection.
       reconcileAiSafetyStorage().then((settled) => {
-        // Typed, so the shape cannot drift from what the popup reads. `settled`
-        // is "nothing is outstanding" — true when opted out with an empty cache,
-        // having deleted nothing — which is what the popup needs to know.
-        const response: OptOutResponse = { success: true, declarationsCleared: settled };
-        sendResponse(response);
+        // The mapping from `settled` to the wire shape lives in
+        // optOutRetryResponse, pure and tested by outcome, so flipping it fails
+        // a test rather than silently telling the user their data is gone.
+        // `settled` is "nothing is outstanding" — true when opted out with an
+        // empty cache, having deleted nothing — which is what the popup needs.
+        sendResponse(optOutRetryResponse(settled));
       });
       return true; // async response
     }
@@ -736,12 +726,13 @@ async function handleDetection(tabId: number, event: DetectionEvent): Promise<vo
  * Cheap: one storage read, and a no-op in the overwhelmingly common case.
  */
 async function reconcileAiSafetyStorage(): Promise<boolean> {
-  // Dependency injection only — every decision lives in reconcileFromSettings,
-  // which is tested by outcome. Nothing here should grow an `if`.
-  return reconcileFromSettings({
-    getSettings,
-    clearInMemory: () => state.aiSafetyDeclarations.clear(),
-  });
+  // Pure delegation. reconcileFromSettings now binds the consent read, the
+  // stored count, the cache clear AND the in-memory clear by IMPORT, so there is
+  // nothing to inject and nothing to miswire — the two closures this function
+  // used to pass are exactly where the `clearInMemory: () => {}` and
+  // always-enabled miswirings hid. Every decision is tested by outcome in
+  // optout.test.ts. Nothing here should grow a branch.
+  return reconcileFromSettings();
 }
 
 /**
@@ -783,7 +774,7 @@ async function enrichDomainDeclaration(tabId: number, agent: AgentIdentity): Pro
   // read) is a real value here, not a missing one: it must compare equal to the
   // same null on re-derivation so the honest "could not check" state still
   // renders, rather than being silently dropped as a mismatch.
-  state.aiSafetyDeclarations.set(tabId, { origin, result });
+  setDeclaration(tabId, { origin, result });
 }
 
 /**
@@ -1196,7 +1187,7 @@ async function handleTabRemoved(tabId: number): Promise<void> {
     state.activeSessions.delete(tabId);
   }
   state.activeAgents.delete(tabId);
-  state.aiSafetyDeclarations.delete(tabId);
+  deleteDeclaration(tabId);
   // Release any CDP enforcement session for the closed tab.
   detachTab(tabId).catch(() => { /* tab already gone */ });
   updateBadge();

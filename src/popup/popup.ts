@@ -19,6 +19,11 @@ import { presentAgent } from '../delegation/enforceability';
 import type { AIMAuthState } from '../aim/auth';
 import { getAIMAuthState } from '../aim/auth';
 import type { AiSafetyLookupResult } from '../aisafety/types';
+import {
+  settingsWriteFailed,
+  declarationDeleteFailed,
+  declarationsWereCleared,
+} from '../aisafety/opt-out-response';
 import { renderAiSafetyDeclaration } from './ai-safety-row';
 import { triggerJsonDownload } from './download';
 
@@ -1554,11 +1559,12 @@ function renderSettingsPanel(): void {
           // {success:false} rather than rejecting, so a `.catch()` alone never
           // observes a failure — an earlier version "surfaced" the error into a
           // catch that could never fire, which moved the swallow rather than
-          // removing it.
-          const result = (response ?? {}) as { success?: boolean; declarationsCleared?: boolean };
-          if (result.success === false) {
+          // removing it. Read through the typed helpers, not an inline cast, so
+          // a rename of the field is a compile error rather than a silent
+          // `undefined`.
+          if (settingsWriteFailed(response)) {
             popupState.settingWarnings[toggle.key] = 'Could not save this setting. Try again.';
-          } else if (result.declarationsCleared === false) {
+          } else if (declarationDeleteFailed(response)) {
             // The setting saved and no further requests will be made, but the
             // stored declarations are still on disk — and the privacy policy
             // says turning this off deletes them. Saying nothing here would
@@ -1608,8 +1614,7 @@ function renderSettingsPanel(): void {
           retry.disabled = true;
           sendToBackground('AI_SAFETY_CLEAR', {})
             .then((response) => {
-              const result = (response ?? {}) as { declarationsCleared?: boolean };
-              if (result.declarationsCleared) {
+              if (declarationsWereCleared(response)) {
                 delete popupState.settingWarnings[toggle.key];
               } else {
                 popupState.settingWarnings[toggle.key] =

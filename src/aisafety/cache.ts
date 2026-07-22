@@ -80,6 +80,31 @@ function withCacheLock<T>(operation: () => Promise<T>): Promise<T> {
 }
 
 /**
+ * How many times the cache has been cleared this worker lifetime.
+ *
+ * A lookup captures this before its fetch and hands it to
+ * `writeCachedLookupUnlessCleared`, which refuses to write if it changed. That
+ * is what closes the opt-out TOCTOU: the gate is checked before a fetch that can
+ * take five seconds, and if the user opts out during it, the opt-out's
+ * `clearAiSafetyCache` runs and bumps this, so the straggler write is voided
+ * instead of restoring a declaration on disk moments after consent was revoked.
+ *
+ * A module counter is correct HERE, unlike the per-entry `seq` (which is derived
+ * from the cache precisely so it survives a worker restart). This one guards a
+ * single in-flight lookup, and a lookup cannot outlive its worker: an MV3
+ * teardown abandons the fetch promise, so `settle` never runs. Resetting to 0 on
+ * restart is therefore unobservable -- there is no lookup from before the
+ * restart to be fooled by it. The bump lives inside `withCacheLock`, the same
+ * lock a write takes, so no clear can slip between a write's generation check and
+ * its `set`.
+ */
+let clearGeneration = 0;
+
+export function getClearGeneration(): number {
+  return clearGeneration;
+}
+
+/**
  * Validate an entry read back from storage.
  *
  * Storage is not attacker-writable, but it IS long-lived across extension
@@ -195,10 +220,29 @@ export async function readCachedLookup(origin: string): Promise<AiSafetyLookupRe
 }
 
 /**
+ * Read-modify-write the cache with one new entry, evicting to stay at cap.
+ * Assumes it already holds the cache lock.
+ */
+async function commitEntry(
+  origin: string,
+  result: AiSafetyLookupResult,
+  ttlMs: number,
+): Promise<void> {
+  const now = Date.now();
+  const cache = await readCache();
+  cache[origin] = { result, expiresAt: now + ttlMs, seq: nextSeq(cache) };
+  await chrome.storage.local.set({ [CACHE_KEY]: evict(cache, now) });
+}
+
+/**
  * Store a lookup result for an origin, evicting to stay at cap.
  *
  * Never throws: a storage failure degrades to "not cached", which costs a
  * refetch but is never a correctness problem.
+ *
+ * Unconditional: use `writeCachedLookupUnlessCleared` for a write that must be
+ * voided if the user opted out mid-lookup. This variant is for seeding and for
+ * paths where no clear can be racing.
  */
 export async function writeCachedLookup(
   origin: string,
@@ -207,12 +251,52 @@ export async function writeCachedLookup(
 ): Promise<void> {
   await withCacheLock(async () => {
     try {
-      const now = Date.now();
-      const cache = await readCache();
-      cache[origin] = { result, expiresAt: now + ttlMs, seq: nextSeq(cache) };
-      await chrome.storage.local.set({ [CACHE_KEY]: evict(cache, now) });
+      await commitEntry(origin, result, ttlMs);
     } catch {
       /* Cache writes are best-effort. */
+    }
+  });
+}
+
+/** Outcome of a consent-guarded write. */
+export type GuardedWriteOutcome =
+  /** Written to disk. */
+  | 'written'
+  /** A clear (opt-out) ran since `sinceGeneration` was captured; not written. */
+  | 'revoked'
+  /** A storage error; not written, but consent was intact -- caller may display. */
+  | 'error';
+
+/**
+ * Store a lookup result ONLY if no clear has run since `sinceGeneration`.
+ *
+ * This is the disk half of the opt-out TOCTOU fix. The generation check and the
+ * `set` both run inside `withCacheLock`, the same lock `clearAiSafetyCache`
+ * takes to bump the generation, so the two cannot interleave:
+ *
+ *   - If this section runs before the opt-out's clear section, it may write --
+ *     and the clear, queued after, then removes the whole key. Not left on disk.
+ *   - If the clear section runs first, it bumps the generation and removes the
+ *     key; this section sees the changed generation and returns `revoked`.
+ *
+ * Distinguishes `revoked` (consent gone -- caller must not display either) from
+ * `error` (a storage hiccup with consent intact -- the fetched declaration is
+ * still legitimate to show, just uncached), so a transient write failure does
+ * not suppress a valid declaration.
+ */
+export async function writeCachedLookupUnlessCleared(
+  origin: string,
+  result: AiSafetyLookupResult,
+  ttlMs: number,
+  sinceGeneration: number,
+): Promise<GuardedWriteOutcome> {
+  return withCacheLock(async () => {
+    if (clearGeneration !== sinceGeneration) return 'revoked';
+    try {
+      await commitEntry(origin, result, ttlMs);
+      return 'written';
+    } catch {
+      return 'error';
     }
   });
 }
@@ -228,6 +312,13 @@ export async function writeCachedLookup(
  */
 export async function clearAiSafetyCache(): Promise<void> {
   await withCacheLock(async () => {
+    // Bump inside the lock, before the remove. Any in-flight lookup that
+    // captured the old generation now reads a different one and voids its write
+    // (see writeCachedLookupUnlessCleared). Bumping even if the remove below
+    // rejects is deliberate: the user's intent to revoke happened, so a
+    // straggler must not repopulate the cache regardless of whether this
+    // particular delete landed -- the reconcile will retry the delete itself.
+    clearGeneration += 1;
     await chrome.storage.local.remove(CACHE_KEY);
   });
 }
@@ -273,6 +364,13 @@ export async function getStoredEntryCount(): Promise<number> {
     // rather than concluding there is nothing to delete.
     return 1;
   }
-  if (typeof raw !== 'object' || raw === null) return 0;
+  // `undefined` is the only value that means "the key is absent, nothing to
+  // delete". Anything else present -- a bare string, a number, `null`, a partial
+  // object -- is bytes on disk the opt-out promise covers, so it must count as
+  // at least one outstanding entry. Returning 0 for a non-object here would be
+  // the same inversion that hid the live-vs-stored bug: treating the READER's
+  // "serve nothing" as the DELETER's "nothing to delete".
+  if (raw === undefined) return 0;
+  if (typeof raw !== 'object' || raw === null) return 1;
   return Object.keys(raw as Record<string, unknown>).length;
 }

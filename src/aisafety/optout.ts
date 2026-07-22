@@ -14,22 +14,15 @@
  */
 
 import { getStoredEntryCount, clearAiSafetyCache } from './cache';
+import { readAiSafetyEnabledFlag } from '../session/storage';
+import { clearInMemoryDeclarations } from './declaration-store';
+import type { OptOutResponse } from './opt-out-response';
 
-export interface OptOutResponse {
-  /** Whether the settings write itself landed. */
-  success: true;
-  /**
-   * Whether the stored declarations were actually deleted.
-   *
-   * Separate from `success` because they are different events. The setting can
-   * save while the delete fails, and the two must not be conflated: reporting
-   * `success: false` would claim the opt-out did not happen (it did, and no
-   * further requests will be made), while a flat `success: true` would report
-   * the privacy policy's promise — "turning the setting off deletes every
-   * stored declaration" — as kept when it was not.
-   */
-  declarationsCleared: boolean;
-}
+// The wire shape and its pure readers live in the leaf `opt-out-response`
+// module (no chrome/storage imports) so the popup can bind to them without
+// pulling storage code into its bundle. Re-exported here so existing importers
+// of the type keep working.
+export type { OptOutResponse } from './opt-out-response';
 
 /**
  * Whether a settings update should delete the stored declarations.
@@ -120,42 +113,48 @@ export async function reconcileOptOut(deps: {
  * The full reconcile, including reading the settings — the part that used to
  * live in the service worker and therefore had no test at all.
  *
- * Extracted because "extract the decision so it can be tested" does not help if
- * the extraction merely MOVES the untested code. `reconcileOptOut` was covered
- * by outcome while the wiring that gave it meaning was not, and three mutations
- * of that wiring survived the whole suite: inverting the enabled flag (deleting
- * the cache when ENABLED and never when opted out), failing open on an
- * unreadable settings read, and deleting the reconcile call outright.
+ * Takes NO injected dependencies. Every input — the consent flag, the in-memory
+ * clear, the stored count, the cache clear — is bound by IMPORT. This is the
+ * point: "extract the decision so it can be tested" does not help if the caller
+ * can still hand it the wrong thing, and this feature shipped exactly that. Two
+ * injection points survived the whole suite AND tsc:
  *
- * Every dependency is injected, so all three are now assertable by outcome.
+ *   - `getSettings: async () => ({ ...real, aiSafetyTxtEnabled: true })` made the
+ *     reconcile never delete anything;
+ *   - `clearInMemory: () => {}` made in-memory declarations survive opt-out.
+ *
+ * With nothing to inject there is nothing to miswire, and the two remaining
+ * behaviours are assertable by outcome against the real cache and the real
+ * in-memory store (the chrome.storage mock is closer to production than a
+ * hand-written fake anyway).
+ *
+ * The consent read is `readAiSafetyEnabledFlag`, which PROPAGATES a storage
+ * failure. The previous version read through `getSettings`, which swallows every
+ * error into defaults (flag `false`) — so its "fails closed" branch was dead
+ * code (getSettings never rejected) and the real path failed OPEN: a transient
+ * storage error looked like "opted out" and deleted an opted-in user's cache.
+ * The bypass also avoids `getStorageState`'s per-read corruption rewrite on a
+ * schema-downgraded profile.
  */
-export async function reconcileFromSettings(deps: {
-  getSettings: () => Promise<{ aiSafetyTxtEnabled: boolean } | null>;
-  /** Drop anything currently on screen. Only called when opted out. */
-  clearInMemory: () => void;
-}): Promise<boolean> {
-  const settings = await deps.getSettings().catch(() => null);
-  // Cannot read the setting: do nothing rather than delete data on a guess, and
-  // report not-settled so the obligation is retried.
-  if (!settings) return false;
+export async function reconcileFromSettings(): Promise<boolean> {
+  let enabled: boolean;
+  try {
+    enabled = await readAiSafetyEnabledFlag();
+  } catch {
+    // Could not read consent. Do nothing rather than delete data on a guess, and
+    // report not-settled so the obligation is retried on the next tick. THIS is
+    // the branch the old "fails closed" comment claimed to be and was not.
+    return false;
+  }
 
   // Opted out, so nothing should be on screen either. Scoped to this branch on
   // purpose: clearing unconditionally would let a stale retry click — the button
   // can outlive its warning by one render — blank the declarations of a feature
   // the user has just re-enabled.
-  if (!settings.aiSafetyTxtEnabled) {
-    deps.clearInMemory();
-  }
+  if (!enabled) clearInMemoryDeclarations();
 
   return reconcileOptOut({
-    enabled: settings.aiSafetyTxtEnabled,
-    // Imported, NOT injected. These two were parameters, and the caller lived in
-    // the service worker — a module no test can import — so "pass the live count
-    // instead of the stored count" was a one-word miswiring that no test could
-    // catch, and it is exactly the bug that shipped. Binding them here means the
-    // wrong counter cannot be supplied: there is nothing to supply. Tests
-    // exercise the real cache against the chrome.storage mock, which is closer
-    // to production than a hand-written fake anyway.
+    enabled,
     storedCount: getStoredEntryCount,
     clear: clearAiSafetyCache,
   });

@@ -26,12 +26,24 @@ import {
   getAiSafetyCacheSize,
   getStoredEntryCount,
 } from './cache';
+import {
+  setDeclaration,
+  clearInMemoryDeclarations,
+  inMemoryDeclarationCount,
+} from './declaration-store';
 import type { AiSafetyLookupResult } from './types';
 
 const OK: AiSafetyLookupResult = { status: 'ok', declaration: { aiSafe: true } };
 
+/** Persist the consent flag the way readAiSafetyEnabledFlag reads it. */
+async function setEnabled(value: boolean): Promise<void> {
+  await chrome.storage.local.set({ settings: { aiSafetyTxtEnabled: value } });
+}
+
 beforeEach(async () => {
   await clearAiSafetyCache();
+  // The store is a module singleton, not reset by the global storage reset.
+  clearInMemoryDeclarations();
 });
 
 describe('shouldClearDeclarations', () => {
@@ -300,12 +312,15 @@ describe('expired-but-stored declarations are still deleted', () => {
 });
 
 describe('reconcileFromSettings (the wiring, tested by outcome)', () => {
-  // Drives the REAL cache against the chrome.storage mock. The counter and the
-  // clear used to be injected, and the only caller lived in the service worker,
-  // so "pass the live count instead of the stored count" was a miswiring no test
-  // could reach -- and it is the bug that shipped. They are bound inside
-  // reconcileFromSettings now, so these tests exercise the same code production
-  // does rather than a fake that cannot be wrong.
+  // Zero injected dependencies now. The consent read, the stored count, the
+  // cache clear AND the in-memory clear are all bound by IMPORT, so these tests
+  // drive the REAL settings read, the REAL cache, and the REAL in-memory store
+  // against the chrome.storage mock -- the same code production runs. The two
+  // miswirings that survived the whole suite (an always-`true` getSettings, and
+  // a `clearInMemory: () => {}`) are no longer expressible: there is nothing to
+  // pass.
+  const OK_DECL = { origin: 'https://a.example', result: OK };
+
   async function seedTwoExpiredEntries() {
     vi.useFakeTimers();
     await writeCachedLookup('https://secret-site.example', { status: 'unreachable' }, 5 * 60_000);
@@ -313,20 +328,18 @@ describe('reconcileFromSettings (the wiring, tested by outcome)', () => {
     vi.advanceTimersByTime(24 * 60 * 60 * 1000);
   }
 
-  it('deletes real stored data when opted out', async () => {
+  it('deletes real stored data AND empties the in-memory store when opted out', async () => {
     await writeCachedLookup('https://a.example', OK, 60_000);
-    const clearInMemory = vi.fn();
+    setDeclaration(1, OK_DECL);
+    await setEnabled(false);
 
-    expect(
-      await reconcileFromSettings({
-        getSettings: async () => ({ aiSafetyTxtEnabled: false }),
-        clearInMemory,
-      }),
-    ).toBe(true);
+    expect(await reconcileFromSettings()).toBe(true);
 
     const stored = await chrome.storage.local.get('aiSafetyDeclarationCache');
     expect(stored.aiSafetyDeclarationCache).toBeUndefined();
-    expect(clearInMemory).toHaveBeenCalledOnce();
+    // The in-memory clear is bound by import; asserted by outcome against the
+    // real store, so `clearInMemory: () => {}` would leave this at 1.
+    expect(inMemoryDeclarationCount()).toBe(0);
   });
 
   it('deletes real stored data that has EXPIRED', async () => {
@@ -334,14 +347,15 @@ describe('reconcileFromSettings (the wiring, tested by outcome)', () => {
     // and the origins stayed on disk while the user was told deletion succeeded.
     try {
       await seedTwoExpiredEntries();
-      expect(await getAiSafetyCacheSize()).toBe(0); // the misleading ruler
+      // Premise: the data really is on disk. Without this assertion the whole
+      // test also passes on an EMPTY cache (every check below is true of one),
+      // so neutering the seed would not be caught. getAiSafetyCacheSize is the
+      // misleading ruler that reads 0; getStoredEntryCount sees the bytes.
+      expect(await getAiSafetyCacheSize()).toBe(0);
+      expect(await getStoredEntryCount()).toBe(2);
 
-      expect(
-        await reconcileFromSettings({
-          getSettings: async () => ({ aiSafetyTxtEnabled: false }),
-          clearInMemory: vi.fn(),
-        }),
-      ).toBe(true);
+      await setEnabled(false);
+      expect(await reconcileFromSettings()).toBe(true);
 
       const stored = await chrome.storage.local.get('aiSafetyDeclarationCache');
       expect(stored.aiSafetyDeclarationCache).toBeUndefined();
@@ -354,67 +368,53 @@ describe('reconcileFromSettings (the wiring, tested by outcome)', () => {
     // Kills the inverted-flag mutation, which deleted the cache when ENABLED and
     // never when opted out -- the exact inverse of the privacy contract.
     await writeCachedLookup('https://a.example', OK, 60_000);
-    const clearInMemory = vi.fn();
+    setDeclaration(1, OK_DECL);
+    await setEnabled(true);
 
-    expect(
-      await reconcileFromSettings({
-        getSettings: async () => ({ aiSafetyTxtEnabled: true }),
-        clearInMemory,
-      }),
-    ).toBe(true);
+    expect(await reconcileFromSettings()).toBe(true);
 
     expect(await getStoredEntryCount()).toBe(1);
-    expect(clearInMemory).not.toHaveBeenCalled();
+    expect(inMemoryDeclarationCount()).toBe(1); // in-memory untouched too
   });
 
-  it('fails closed when the settings read returns null', async () => {
+  it('fails closed when the consent read REJECTS, keeping the opted-in cache', async () => {
+    // The finding with real user impact. readAiSafetyEnabledFlag propagates a
+    // storage failure instead of swallowing it into defaults, so a transient
+    // error is "unknown" (do nothing) rather than "off" (delete). The old code
+    // read through getSettings, which returns DEFAULT_STORAGE (flag false) on any
+    // error, so this exact scenario deleted an opted-in user's cache.
     await writeCachedLookup('https://a.example', OK, 60_000);
-    expect(
-      await reconcileFromSettings({ getSettings: async () => null, clearInMemory: vi.fn() }),
-    ).toBe(false);
-    expect(await getStoredEntryCount()).toBe(1); // untouched
-  });
+    setDeclaration(1, OK_DECL);
 
-  it('fails closed when the settings read rejects', async () => {
-    await writeCachedLookup('https://a.example', OK, 60_000);
-    expect(
-      await reconcileFromSettings({
-        getSettings: async () => { throw new Error('storage unavailable'); },
-        clearInMemory: vi.fn(),
-      }),
-    ).toBe(false);
-    expect(await getStoredEntryCount()).toBe(1); // untouched
+    const get = chrome.storage.local.get as unknown as ReturnType<typeof vi.fn>;
+    get.mockRejectedValueOnce(new Error('storage unavailable')); // hits the consent read first
+
+    expect(await reconcileFromSettings()).toBe(false);
+    expect(await getStoredEntryCount()).toBe(1); // cache untouched
+    expect(inMemoryDeclarationCount()).toBe(1); // and nothing cleared on a guess
   });
 
   it('reports not settled when the real delete fails', async () => {
     await writeCachedLookup('https://a.example', OK, 60_000);
+    await setEnabled(false);
     const remove = chrome.storage.local.remove as unknown as ReturnType<typeof vi.fn>;
     const original = remove.getMockImplementation();
     remove.mockRejectedValueOnce(new Error('storage unavailable'));
     try {
-      expect(
-        await reconcileFromSettings({
-          getSettings: async () => ({ aiSafetyTxtEnabled: false }),
-          clearInMemory: vi.fn(),
-        }),
-      ).toBe(false);
+      expect(await reconcileFromSettings()).toBe(false);
     } finally {
       if (original) remove.mockImplementation(original);
     }
   });
 
   it('does not touch storage when opted out with an empty cache', async () => {
+    await setEnabled(false);
     const set = chrome.storage.local.set as unknown as ReturnType<typeof vi.fn>;
     const remove = chrome.storage.local.remove as unknown as ReturnType<typeof vi.fn>;
     set.mockClear();
     remove.mockClear();
 
-    expect(
-      await reconcileFromSettings({
-        getSettings: async () => ({ aiSafetyTxtEnabled: false }),
-        clearInMemory: vi.fn(),
-      }),
-    ).toBe(true);
+    expect(await reconcileFromSettings()).toBe(true);
 
     // Runs on every worker start and every 5-minute tick; it must not write.
     expect(set).not.toHaveBeenCalled();

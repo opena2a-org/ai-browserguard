@@ -28,7 +28,7 @@
  */
 
 import { parseAiSafetyTxt, isEmptyDeclaration } from './parser';
-import { readCachedLookup, writeCachedLookup } from './cache';
+import { readCachedLookup, writeCachedLookupUnlessCleared, getClearGeneration } from './cache';
 import { getSettings } from '../session/storage';
 import type { AiSafetyLookupResult } from './types';
 
@@ -215,24 +215,40 @@ export async function lookupAiSafetyDeclaration(
   const ttl = options?.cacheTtlMs ?? DEFAULT_CACHE_TTL_MS;
   const maxBytes = options?.maxBytes ?? MAX_BODY_BYTES;
 
+  // Captured before the fetch. Any clearAiSafetyCache (the opt-out's delete)
+  // that runs during the up-to-5s request bumps the generation, and the guarded
+  // write below refuses a stale result. See writeCachedLookupUnlessCleared.
+  const generationAtLookupStart = getClearGeneration();
+
   const settle = async (
     result: AiSafetyLookupResult,
     ttlMs: number,
   ): Promise<AiSafetyLookupResult> => {
-    // Re-check consent before storing anything.
+    // Re-check consent before storing anything. Two guards, closing different
+    // halves of the same revoke-during-lookup race:
     //
-    // The gate was checked before the fetch, up to 5 seconds ago. If the user
-    // opted out while it was in flight, the opt-out's delete has already run —
-    // and writing now would put a declaration back on disk moments after they
-    // revoked consent. The periodic reconcile would remove it, but only on the
-    // next tick, and the privacy policy says opting out deletes stored
-    // declarations, not that it deletes them within five minutes.
+    //   - isEnabled() is the DISPLAY guard: if the setting now reads off, return
+    //     `unreachable` so nothing this lookup produced reaches the screen.
+    //   - the generation check inside writeCachedLookupUnlessCleared is the DISK
+    //     guard, and it is the one the earlier fix was missing. The old re-check
+    //     read the setting OUTSIDE the cache lock, so the opt-out's delete could
+    //     still land between the check and the write and leave a declaration on
+    //     disk. The generation is checked INSIDE the lock the delete also takes,
+    //     so a clear that raced this lookup voids the write even in the window
+    //     where isEnabled() still reads the pre-opt-out value.
     //
-    // Returns `unreachable` rather than the result, so the revoked lookup also
-    // reaches no display. The network request itself already went out — that
-    // cannot be recalled — but nothing it produced is kept.
+    // The network request already went out and cannot be recalled, but nothing
+    // it produced is kept or shown.
     if (!(await isEnabled())) return { status: 'unreachable' };
-    await writeCachedLookup(origin, result, ttlMs);
+    const outcome = await writeCachedLookupUnlessCleared(
+      origin,
+      result,
+      ttlMs,
+      generationAtLookupStart,
+    );
+    if (outcome === 'revoked') return { status: 'unreachable' };
+    // 'written', or 'error' (a best-effort cache miss with consent intact): both
+    // display the freshly fetched result. Only a revoked lookup is suppressed.
     return result;
   };
 
