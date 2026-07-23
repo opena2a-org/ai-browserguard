@@ -18,10 +18,23 @@ import { selectEffectiveRule } from '../delegation/effective';
 import { presentAgent } from '../delegation/enforceability';
 import type { AIMAuthState } from '../aim/auth';
 import { getAIMAuthState } from '../aim/auth';
+import type { AiSafetyLookupResult } from '../aisafety/types';
+import {
+  settingsWriteFailed,
+  declarationDeleteFailed,
+  declarationsWereCleared,
+} from '../aisafety/opt-out-response';
+import { renderAiSafetyDeclaration } from './ai-safety-row';
 import { triggerJsonDownload } from './download';
 
 interface PopupState {
   detectedAgents: AgentIdentity[];
+  /**
+   * ai-safety.txt lookup result for the page each agent is on, keyed by agent
+   * id. Empty unless `settings.aiSafetyTxtEnabled` is on. Display-only: this
+   * never influences the trust badge or any control (ADR-009).
+   */
+  aiSafetyDeclarations: Record<string, AiSafetyLookupResult>;
   /** The session-wide delegation rule shown in the delegation panel. */
   activeDelegation: DelegationRule | null;
   /** All delegation rules, used to render per-agent grant state on each card. */
@@ -47,10 +60,23 @@ interface PopupState {
   settingsPanelOpen: boolean;
   contributeStats: { totalContributed: number; queuedCount: number; lastFlushedAt: string | null; enabled: boolean } | null;
   showContributeTip: boolean;
+  /**
+   * Per-setting warning text, keyed by setting name.
+   *
+   * In popupState, not a local DOM node, because `renderSettingsPanel` rebuilds
+   * the panel with `replaceChildren()` and a re-render is not rare: any
+   * DETECTION_RESULT from any tab reaches the open popup and triggers
+   * `renderAll()`, as does toggling the Community Trust Data switch directly
+   * below. A bare node would be silently destroyed, so a user whose opt-out
+   * delete failed would see the warning vanish and conclude their declarations
+   * were deleted while they are still on disk.
+   */
+  settingWarnings: Record<string, string>;
 }
 
 let popupState: PopupState = {
   detectedAgents: [],
+  aiSafetyDeclarations: {},
   activeDelegation: null,
   delegationRules: [],
   pendingFullAccessAgentId: null,
@@ -69,6 +95,7 @@ let popupState: PopupState = {
   settingsPanelOpen: false,
   contributeStats: null,
   showContributeTip: false,
+  settingWarnings: {},
 };
 
 // Holds the interval ID for the delegation countdown timer.
@@ -94,12 +121,14 @@ async function queryBackgroundStatus(): Promise<void> {
     if (response && typeof response === 'object') {
       const data = response as {
         detectedAgents?: AgentIdentity[];
+        aiSafetyDeclarations?: Record<string, AiSafetyLookupResult>;
         activeDelegation?: DelegationRule | null;
         delegationRules?: DelegationRule[];
         killSwitchActive?: boolean;
         recentViolations?: BoundaryAlert[];
       };
       popupState.detectedAgents = data.detectedAgents ?? [];
+      popupState.aiSafetyDeclarations = data.aiSafetyDeclarations ?? {};
       popupState.activeDelegation = data.activeDelegation ?? null;
       popupState.delegationRules = data.delegationRules ?? [];
       popupState.killSwitchActive = data.killSwitchActive ?? false;
@@ -615,6 +644,12 @@ function renderDetectionPanel(): void {
     card.appendChild(metaRow);
     card.appendChild(urlRow);
     card.appendChild(quickAllowRow);
+    // What the SITE says about itself, kept visually separate from the agent
+    // trust badge above it. The badge is about the agent and is partly derived
+    // from AIM/registry data; this is an unverified claim by the page's origin
+    // (ADR-009). Conflating the two would be the overclaim ADR-008 removed.
+    const aiSafetyBlock = renderAiSafetyDeclaration(popupState.aiSafetyDeclarations[agent.id]);
+    if (aiSafetyBlock) card.appendChild(aiSafetyBlock);
     // ADR-008: when a policy is set on an agent we cannot enforce against, state
     // the scope so "Read-Only" is not read as an enforced boundary.
     if (presentation.ruleCaveat) {
@@ -1475,6 +1510,16 @@ function renderSettingsPanel(): void {
       description:
         'Enforce your site block rules at the browser layer for delegated tabs. Shows Chrome\'s "debugging this browser" banner while a delegated tab is active; removed when the session ends.',
     },
+    {
+      key: 'aiSafetyTxtEnabled',
+      label: 'Read site safety declarations',
+      // States the one thing that makes this setting different from every other
+      // network toggle: it contacts the site itself, not an OpenA2A server. The
+      // privacy policy, README, and store listing say the same (ADR-006 requires
+      // these four surfaces to agree; ADR-009 changed what they must say).
+      description:
+        'When an agent is detected, read that site\'s /.well-known/ai-safety.txt declaration and show what it claims. This requests one file from the site the agent is on -- the only feature that contacts a site instead of an OpenA2A server. No cookies, no page address, and nothing about you is sent. Declarations are self-asserted, so they are shown for information only and never change detection or blocking.',
+    },
   ];
 
   for (const toggle of toggles) {
@@ -1505,9 +1550,34 @@ function renderSettingsPanel(): void {
         ...popupState.settings,
         [toggle.key]: input.checked,
       };
+      delete popupState.settingWarnings[toggle.key];
       sendToBackground('SETTINGS_UPDATE', {
         [toggle.key]: input.checked,
-      }).catch(() => { /* ignore */ });
+      })
+        .then((response) => {
+          // The response is READ, not discarded. sendToBackground RESOLVES with
+          // {success:false} rather than rejecting, so a `.catch()` alone never
+          // observes a failure — an earlier version "surfaced" the error into a
+          // catch that could never fire, which moved the swallow rather than
+          // removing it. Read through the typed helpers, not an inline cast, so
+          // a rename of the field is a compile error rather than a silent
+          // `undefined`.
+          if (settingsWriteFailed(response)) {
+            popupState.settingWarnings[toggle.key] = 'Could not save this setting. Try again.';
+          } else if (declarationDeleteFailed(response)) {
+            // The setting saved and no further requests will be made, but the
+            // stored declarations are still on disk — and the privacy policy
+            // says turning this off deletes them. Saying nothing here would
+            // report that promise as kept when it was not.
+            popupState.settingWarnings[toggle.key] =
+              'Setting saved, and no further requests will be made. Stored site declarations could not be deleted from this device.';
+          }
+          renderSettingsPanel();
+        })
+        .catch(() => {
+          popupState.settingWarnings[toggle.key] = 'Could not save this setting. Try again.';
+          renderSettingsPanel();
+        });
     });
 
     const slider = document.createElement('span');
@@ -1519,6 +1589,49 @@ function renderSettingsPanel(): void {
     row.appendChild(labelWrap);
     row.appendChild(switchLabel);
     container.appendChild(row);
+
+    // Rendered from popupState, so it survives the re-render that any tab's
+    // DETECTION_RESULT triggers.
+    const warningText = popupState.settingWarnings[toggle.key];
+    if (warningText) {
+      const warning = document.createElement('div');
+      warning.style.cssText =
+        'font-size: 11px; color: #b45309; font-weight: 600; margin-top: 4px; line-height: 1.35;';
+      warning.textContent = warningText;
+
+      // Every warning ends in an action the user can actually take. The delete
+      // only fails while the setting is already OFF, so "toggle it off again"
+      // is not available — the only toggle on screen turns the feature back ON,
+      // re-enabling the requests they just revoked. This retries the delete
+      // directly instead.
+      if (toggle.key === 'aiSafetyTxtEnabled') {
+        const retry = document.createElement('button');
+        retry.type = 'button';
+        retry.className = 'btn btn-secondary btn-sm';
+        retry.style.marginTop = '4px';
+        retry.textContent = 'Delete stored declarations';
+        retry.addEventListener('click', () => {
+          retry.disabled = true;
+          sendToBackground('AI_SAFETY_CLEAR', {})
+            .then((response) => {
+              if (declarationsWereCleared(response)) {
+                delete popupState.settingWarnings[toggle.key];
+              } else {
+                popupState.settingWarnings[toggle.key] =
+                  'Still could not delete the stored declarations. They stay on this device only; nothing is sent anywhere. Restarting the browser usually clears the storage error.';
+              }
+              renderSettingsPanel();
+            })
+            .catch(() => {
+              retry.disabled = false;
+            });
+        });
+        warning.appendChild(document.createElement('br'));
+        warning.appendChild(retry);
+      }
+
+      container.appendChild(warning);
+    }
   }
 
   // Community Trust Data section

@@ -19,6 +19,7 @@ When an AI agent (Playwright, Puppeteer, Selenium, Anthropic Computer Use, OpenA
 - Detects the takeover using multiple signals: WebDriver flags, Chrome DevTools Protocol markers, behavioral analysis of mouse/keyboard patterns, and framework-specific fingerprints
 - Shows detection status in the popup with confidence level and detection method
 - Logs the agent activity it can observe in a session timeline
+- Can read the site's published safety declaration (/.well-known/ai-safety.txt) and show what the site claims about its own content — off by default, display-only (see PRIVACY)
 
 SCOPE AND LIMITATIONS
 
@@ -48,13 +49,13 @@ PRIVACY
 
 By default, all processing happens locally on your device and the extension makes zero network requests. No analytics, no telemetry, no tracking. Session logs and settings are stored in chrome.storage.local and deleted when you uninstall.
 
-Three optional community-intelligence features are off by default and only send data after you explicitly enable them: AIM identity lookup and registry trust lookup (which send only the detected agent type, such as "playwright", to look up a trust score), and anonymized contribution (which shares anonymized detection summaries to improve community threat intelligence). None of these transmit your URLs, page content, keystrokes, or identity, and each can be turned off with one click.
+Four optional features make network requests, are off by default, and only act after you explicitly enable them. Three contact OpenA2A's own servers: AIM identity lookup and registry trust lookup (which send only the detected agent type, such as "playwright", to look up a trust score), and anonymized contribution (which shares anonymized detection summaries to improve community threat intelligence). The fourth, site safety declarations, requests /.well-known/ai-safety.txt from the website an AI agent has been detected on — the one feature that contacts a website you visit instead of an OpenA2A server. That request carries nothing about you (no cookies, no page address, no referrer), follows no redirects, runs only over HTTPS, and runs only while an agent is detected. Results are cached locally for 24 hours, and turning the setting off deletes every stored declaration. Declarations are display-only: self-asserted claims the extension does not verify, and they never change what it detects, scores, or blocks. None of these features transmit your URLs, page content, keystrokes, or identity, and each can be turned off with one click.
 
 See full privacy policy: https://opena2a.org/aibrowserguard/privacy
 
 PERMISSIONS EXPLAINED
 
-This extension requires host access to all URLs because AI agents can operate on any website. Detection content scripts must run on every page to provide coverage. By default the extension makes no network requests; the only outbound requests are the optional, off-by-default community-intelligence features described under PRIVACY.
+This extension requires host access to all URLs because AI agents can operate on any website. Detection content scripts must run on every page to provide coverage. By default the extension makes no network requests; the only outbound requests are the four optional, off-by-default features described under PRIVACY.
 
 ABOUT OPENA2A
 

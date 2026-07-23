@@ -32,6 +32,18 @@ import {
 } from './cdp-enforcement';
 import { lookupAgentIdentity } from '../aim/client';
 import { lookupRegistryTrust } from '../registry/client';
+import { lookupAiSafetyDeclaration, declarationOriginFor } from '../aisafety/client';
+import { clearAiSafetyCache } from '../aisafety/cache';
+import { collectAiSafetyDeclarations } from '../aisafety/attribution';
+import {
+  setDeclarationUnlessCleared,
+  deleteDeclaration,
+  clearInMemoryDeclarations,
+  getInMemoryDeclarations,
+  getDeclarationClearGeneration,
+} from '../aisafety/declaration-store';
+import { shouldClearDeclarations, performOptOutClear, reconcileFromSettings } from '../aisafety/optout';
+import { optOutRetryResponse } from '../aisafety/opt-out-response';
 import { generateSessionReport, storeReport, getReports } from '../session/report';
 import { recordDetection, queueEvent, flushQueue, getConsent, getContributeStats } from '../contribute/client';
 import { anonymizeDetection, anonymizeSession } from '../contribute/anonymize';
@@ -102,6 +114,16 @@ function initialize(): void {
     console.error('[AI Browser Guard] Failed to load state:', err);
   });
 
+  // Settle any outstanding ai-safety.txt deletion: opted out, but declarations
+  // still on disk because a previous delete failed. The obligation is durable
+  // and the popup that discovered it is not — its warning dies when the popup
+  // closes — so the check does not depend on the popup. A no-op in every normal
+  // case. Also re-run on the contribute-flush tick below: the keepalive alarm
+  // deliberately stops this worker from being torn down, so a start is rarer
+  // than MV3's ~30s idle implies and could otherwise be the next browser
+  // restart.
+  reconcileAiSafetyStorage().catch(() => { /* retried on the next tick */ });
+
   // Message routing
   chrome.runtime.onMessage.addListener(handleMessage);
 
@@ -142,6 +164,13 @@ function initialize(): void {
           await flushQueue().catch(() => { /* non-critical */ });
         }
       })().catch(() => { /* non-critical */ });
+      // Piggy-backed on the existing housekeeping tick rather than a new alarm.
+      // Bounds the opt-out self-heal to ~5 minutes: relying on worker start alone
+      // is weaker than it sounds, because the keepalive-ping alarm exists
+      // precisely to stop this worker being torn down, so the next start could be
+      // the next browser restart. Two storage reads, and a no-op unless a delete
+      // actually failed.
+      reconcileAiSafetyStorage().catch(() => { /* retried on the next tick */ });
     }
   });
 
@@ -321,6 +350,9 @@ function handleMessage(
       const agents = Array.from(state.activeAgents.values());
       sendResponse({
         detectedAgents: agents,
+        // Re-keyed to agent id, and only for origins that still match. Empty
+        // unless the feature is on. See aisafety/attribution.ts.
+        aiSafetyDeclarations: collectAiSafetyDeclarations(state.activeAgents, getInMemoryDeclarations()),
         // The popup's session-delegation panel shows the session-wide rule;
         // per-agent grants are rendered on their agent cards from
         // delegationRules below.
@@ -353,11 +385,58 @@ function handleMessage(
         if (cdpChanged) {
           reconcileCdpEnforcement().catch(() => { /* non-critical */ });
         }
+        // Opting out of ai-safety.txt discards everything the feature gathered,
+        // matching the one-click-opt-out promise ADR-006 makes for the other
+        // network features ("disabling the setting stops all outbound requests
+        // immediately; queued events are cleared"). Leaving stale declarations
+        // on disk and on screen after opt-out would contradict it.
+        //
+        // The decision and the outcome-reporting are in aisafety/optout.ts, pure
+        // and tested by outcome. They are not inlined here because this module
+        // is a side-effect service worker no test can import, and the only guard
+        // available then is a regex over this source — which cannot tell a
+        // correct rule from a broken one.
+        if (shouldClearDeclarations(updates, settings)) {
+          // In-memory first: even if the storage delete fails, the declarations
+          // leave the screen and no further requests can happen (the gate is
+          // already off in settings).
+          clearInMemoryDeclarations();
+          return performOptOutClear(clearAiSafetyCache).then(sendResponse);
+        }
         sendResponse({ success: true });
+        return undefined;
       }).catch(() => {
         sendResponse({ success: false });
       });
       return true;
+    }
+
+    case 'AI_SAFETY_CLEAR': {
+      // Retry the opt-out delete on demand.
+      //
+      // Exists because the failure has to leave the user somewhere to go. The
+      // delete only fails while the setting is already OFF, so "toggle it off
+      // again" is not an available action — the only toggle on screen turns the
+      // feature back ON, which would re-enable the network requests the user
+      // just revoked. That is a dead end, and worse, one that pushes the user
+      // to re-consent. This gives the retry its own button.
+      //
+      // Routed through reconcileAiSafetyStorage rather than clearing outright,
+      // so a click that arrives after the user re-enabled the feature is a
+      // no-op instead of wiping what they just opted back into — in memory as
+      // well as on disk. No `.catch` here: reconcileOptOut never rejects by
+      // contract, and a catch could only fire if sendResponse itself threw — in
+      // which case calling sendResponse a second time would throw again into an
+      // unhandled rejection.
+      reconcileAiSafetyStorage().then((settled) => {
+        // The mapping from `settled` to the wire shape lives in
+        // optOutRetryResponse, pure and tested by outcome, so flipping it fails
+        // a test rather than silently telling the user their data is gone.
+        // `settled` is "nothing is outstanding" — true when opted out with an
+        // empty cache, having deleted nothing — which is what the popup needs.
+        sendResponse(optOutRetryResponse(settled));
+      });
+      return true; // async response
     }
 
     case 'NETWORK_EVENT': {
@@ -600,6 +679,14 @@ async function handleDetection(tabId: number, event: DetectionEvent): Promise<vo
   // AIM + Registry trust lookup (non-blocking)
   enrichAgentTrust(tabId, event.agent).catch(() => { /* non-critical */ });
 
+  // Read the page origin's ai-safety.txt declaration (non-blocking, opt-in).
+  //
+  // Agent detection is deliberately the trigger, not navigation (ADR-009): the
+  // declaration exists to be read before an agent acts on a page, this reuses an
+  // existing hook rather than adding a navigation listener and its permission,
+  // and it bounds the disclosure to "only while an agent is running".
+  enrichDomainDeclaration(tabId, event.agent).catch(() => { /* non-critical */ });
+
   // Log detection
   await appendDetectionLog(event);
 
@@ -629,6 +716,79 @@ async function handleDetection(tabId: number, event: DetectionEvent): Promise<vo
   // Attach CDP enforcement if this tab is now an agent tab under active
   // delegation (opt-in; no-op when the feature is off).
   reconcileCdpEnforcement().catch(() => { /* non-critical */ });
+}
+
+/**
+ * Settle any outstanding ai-safety.txt deletion obligation.
+ *
+ * Called at every service-worker start and by the popup's retry button. The
+ * obligation ("opted out, declarations still on disk") outlives the popup that
+ * discovered it, so it is re-checked here rather than remembered in popup state.
+ * Cheap: one storage read, and a no-op in the overwhelmingly common case.
+ */
+async function reconcileAiSafetyStorage(): Promise<boolean> {
+  // Pure delegation. reconcileFromSettings now binds the consent read, the
+  // stored count, the cache clear AND the in-memory clear by IMPORT, so there is
+  // nothing to inject and nothing to miswire — the two closures this function
+  // used to pass are exactly where the `clearInMemory: () => {}` and
+  // always-enabled miswirings hid. Every decision is tested by outcome in
+  // optout.test.ts. Nothing here should grow a branch.
+  return reconcileFromSettings();
+}
+
+/**
+ * Read the ai-safety.txt declaration for the page an agent was detected on.
+ *
+ * Display-only, and deliberately kept out of `enrichAgentTrust`: that function
+ * computes a trust SCORE for the agent, and a declaration must never feed it.
+ * A declaration is a self-asserted claim by the site — draft section 5.1: a
+ * consumer "MUST NOT treat a declaration as proof of the property it asserts,
+ * and MUST NOT relax its own defenses solely because a domain claims a
+ * favorable posture". Any domain can write `AI-Safe: true` for free. Keeping
+ * the two functions separate means a later edit to the scoring logic cannot
+ * accidentally pull a domain's self-assessment into it (ADR-009 section 4).
+ */
+async function enrichDomainDeclaration(tabId: number, agent: AgentIdentity): Promise<void> {
+  // Capture the store's clear generation BEFORE anything else. Any opt-out from
+  // here on bumps it (clearInMemoryDeclarations), and the guarded write below
+  // voids on mismatch. This is the DISPLAY half of the revoke-during-lookup race
+  // whose DISK half the cache generation closes: the disk cache's straggler
+  // write is voided in aisafety/client.ts, but the on-screen store is a separate
+  // write on this path and needs its own guard.
+  const capturedGen = getDeclarationClearGeneration();
+
+  const settings = (await getStorageState()).settings;
+  // The gate lives here, at the call site, so the fresh-install zero-network
+  // test exercises the same path production does.
+  if (!settings.aiSafetyTxtEnabled) return;
+
+  const origin = declarationOriginFor(agent.originUrl);
+  const result = await lookupAiSafetyDeclaration(agent.originUrl);
+
+  // Belt: a plainly-off setting skips the write early. Not sufficient ALONE --
+  // this read is not serialized against the opt-out's settings write, so it can
+  // still return a stale ON while the opt-out's clear has already run, which is
+  // exactly the window that put a declaration back on screen after opt-out. The
+  // authoritative guard is the generation check in setDeclarationUnlessCleared.
+  const settingsAfter = (await getStorageState()).settings;
+  if (!settingsAfter.aiSafetyTxtEnabled) return;
+
+  // The tab may have closed, or its agent changed, while the lookup was in
+  // flight. Writing then would leak an entry that handleTabRemoved already
+  // pruned, and the map would grow without bound. `agent.id` is a fresh UUID per
+  // detection, so an id match means this is still the same detection.
+  const current = state.activeAgents.get(tabId);
+  if (!current || current.id !== agent.id) return;
+
+  // Store the origin the result describes, so a reader can prove the two still
+  // agree rather than trusting the tabId. Null (a non-HTTPS page we declined to
+  // read) is a real value here, not a missing one: it must compare equal to the
+  // same null on re-derivation so the honest "could not check" state still
+  // renders, rather than being silently dropped as a mismatch.
+  //
+  // Guarded: if an opt-out cleared the store since capture, this is a no-op, so
+  // a straggler cannot repaint a declaration the user just revoked.
+  setDeclarationUnlessCleared(tabId, { origin, result }, capturedGen);
 }
 
 /**
@@ -1041,6 +1201,7 @@ async function handleTabRemoved(tabId: number): Promise<void> {
     state.activeSessions.delete(tabId);
   }
   state.activeAgents.delete(tabId);
+  deleteDeclaration(tabId);
   // Release any CDP enforcement session for the closed tab.
   detachTab(tabId).catch(() => { /* tab already gone */ });
   updateBadge();

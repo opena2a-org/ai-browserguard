@@ -1,0 +1,48 @@
+AI Browser Guard detects when AI automation frameworks take control of your browser, shows you what they are doing, and gives you controls to respond.
+
+WHAT IT DOES
+
+When an AI agent (Playwright, Puppeteer, Selenium, Anthropic Computer Use, OpenAI Operator, or any WebDriver-based tool) starts controlling your browser, AI Browser Guard:
+
+- Detects the takeover using multiple signals: WebDriver flags, Chrome DevTools Protocol markers, behavioral analysis of mouse/keyboard patterns, and framework-specific fingerprints
+- Shows detection status in the popup with confidence level and detection method
+- Logs the agent activity it can observe in a session timeline
+
+SCOPE OF ENFORCEMENT
+
+Detection and monitoring work for every framework listed above. Per-action blocking does not. External automation frameworks (Playwright, Puppeteer, Selenium, Anthropic Computer Use, OpenAI Operator) drive the browser over the Chrome DevTools Protocol with native input that a page-level extension cannot intercept. For those agents, AI Browser Guard detects them, alerts you, and its kill switch closes the tabs they control, but it does not block their individual actions and cannot see their clicks, typing, or screenshots in the timeline. The delegation presets and per-action blocking below apply to IN-PAGE / injected automation only, and are best-effort. A browser extension cannot enforce per-action policy against a framework that owns the tab's debugger slot; the only categorical block is a managed-Chrome policy (RemoteDebuggingAllowed=false), and modern Chrome already blocks remote debugging of your default profile by default. If a session report shows few or no actions for an external agent, that means its actions were not observable, not that nothing happened.
+
+FIVE CORE FEATURES
+
+1. Agent Takeover Detection - identifies automation frameworks without requiring agents to self-identify. WebDriver flag detection, CDP connection scanning, behavioral heuristics (click precision, typing cadence, synthetic events), and framework fingerprinting.
+
+2. Emergency Kill Switch - one-click stop. It revokes active delegations, dispatches a page-realm stop to in-page automation, and closes the tabs an agent controls, which interrupts the in-progress action. It does not terminate an external CDP session (an extension cannot), and a persistent external driver can reopen a tab. Keyboard shortcut: Ctrl+Shift+K (Cmd+Shift+K on Mac).
+
+3. Delegation Wizard - define what an in-page agent can and cannot do before it connects: Read-Only (navigate and read, no clicking or typing), Limited (specific sites you choose, with time limits 15min / 1hr / 4hr), or Full Access (everything allowed, with logging and alerts). For an external CDP framework, a preset is a recorded intent, not an enforced boundary.
+
+4. Boundary Violation Alerts - when an IN-PAGE agent attempts an action outside its delegation scope, the action is blocked (best-effort) and you receive a notification showing what was attempted, which rule blocked it, and the option to allow it once. External CDP frameworks drive via native input these alerts cannot see; for those, rely on detection and the kill switch.
+
+5. Session Timeline - chronological log of the agent actions AI Browser Guard can observe: timestamps, action types, target URLs, element selectors, and whether each action was allowed or blocked. A session driven by an external CDP framework will show few or no actions, because its native input is not observable, not because nothing happened. Last 5 sessions retained.
+
+PRIVACY
+
+By default, AI Browser Guard makes zero network requests. All detection, delegation, and session tracking runs locally on your device. There is no analytics, no telemetry, and no tracking. Session logs and settings are stored in chrome.storage.local and are deleted when you uninstall.
+
+The extension also offers three optional community-intelligence features that are OFF BY DEFAULT. They only send data after you explicitly enable them, and each can be turned off again with one click:
+
+- AIM identity lookup and registry trust lookup - when an agent is detected, look up a trust score for that agent type. Only the detected agent type (for example "playwright") is sent. Your URLs and page content are never sent.
+- Anonymized contribution - share anonymized detection and behavior summaries (an anonymous token, the detected framework name, and summary counts) to improve community threat intelligence. Prompted once after 5 detections; dismissible.
+
+None of these features transmit your URLs, page content, form data, keystrokes, cookies, authentication tokens, or identity.
+
+Full privacy policy: https://opena2a.org/aibrowserguard/privacy
+
+PERMISSIONS
+
+AI Browser Guard requests host access to all URLs because AI agents can operate on any website, so the detection content script must run on every page. By default the extension makes no network requests; the only outbound requests are the optional, off-by-default features described under PRIVACY.
+
+ABOUT OPENA2A
+
+AI Browser Guard is built by OpenA2A, an open-source security platform building infrastructure for the AI agent ecosystem. Learn more: https://opena2a.org - Source code: https://github.com/opena2a-org/AI-BrowserGuard
+
+This is a beta release. We are actively improving detection accuracy, adding framework signatures, and expanding delegation controls. Open an issue on GitHub with feedback: https://github.com/opena2a-org/AI-BrowserGuard/issues

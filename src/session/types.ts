@@ -136,6 +136,18 @@ export interface UserSettings {
    * Chrome's "is debugging this browser" banner for that tab. Default: false.
    */
   cdpEnforcementEnabled: boolean;
+
+  /**
+   * Whether to read a site's `/.well-known/ai-safety.txt` declaration when an
+   * agent is detected on it (draft-fane-ai-safety-txt-00, ADR-009). Opt-in.
+   *
+   * Unlike every other network setting, this one contacts a site we do not
+   * control — the origin the agent is operating on — rather than an OpenA2A
+   * server. That is the whole reason it is gated separately instead of riding on
+   * `aimLookupEnabled`. Display-only: a declaration is self-asserted and never
+   * changes detection, trust scoring, or enforcement. Default: false.
+   */
+  aiSafetyTxtEnabled: boolean;
 }
 
 /**
@@ -180,4 +192,5 @@ export const DEFAULT_SETTINGS: UserSettings = {
   registryBaseUrl: 'https://api.oa2a.org',
   autoBlockUntrustedAgents: false,
   cdpEnforcementEnabled: false,
+  aiSafetyTxtEnabled: false,
 };

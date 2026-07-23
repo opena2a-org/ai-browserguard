@@ -32,7 +32,7 @@
   <p class="last-updated">Last updated: June 6, 2026</p>
 
   <div class="highlight">
-    <p><strong>Summary:</strong> By default, AI Browser Guard processes all data locally on your device and makes zero network requests. There is no analytics, telemetry, or tracking. The extension also offers optional community-intelligence features (trust lookups and anonymized contribution) that are turned <strong>off by default</strong> and send data only after you explicitly opt in. When enabled, they transmit only a detected agent type and anonymized detection summaries -- never your URLs, page content, keystrokes, or identity.</p>
+    <p><strong>Summary:</strong> By default, AI Browser Guard processes all data locally on your device and makes zero network requests. There is no analytics, telemetry, or tracking. The extension also offers optional network features (trust lookups, anonymized contribution, and site safety declarations) that are turned <strong>off by default</strong> and act only after you explicitly opt in. When enabled, they transmit only a detected agent type and anonymized detection summaries -- never your URLs, page content, keystrokes, or identity. One of them, site safety declarations, requests a public file from the website your agent is on; it sends no cookies and nothing about you, but that website can see the request was made. See section 2a.</p>
   </div>
 
   <h2>1. What This Extension Does</h2>
@@ -55,14 +55,24 @@
     <li><strong>Violation records:</strong> Logs of boundary violations (what was attempted, which rule blocked it). Stored locally, limited to the 100 most recent entries.</li>
   </ul>
 
-  <h2>2a. Optional Community-Intelligence Features (Off by Default)</h2>
-  <p>The extension includes three optional features that communicate with OpenA2A servers. <strong>All three are disabled by default.</strong> A fresh install makes zero network requests. Each feature only sends data after you explicitly enable it, and you can turn it off again at any time with one click.</p>
+  <h2>2a. Optional Network Features (Off by Default)</h2>
+  <p>The extension includes four optional features that make network requests. <strong>All four are disabled by default.</strong> A fresh install makes zero network requests. Each feature only acts after you explicitly enable it, and you can turn it off again at any time with one click.</p>
+  <p>Three of them talk to OpenA2A's own servers. The fourth, site safety declarations, is different: it requests a file from the website your agent is on. It is described in full below, and it is the only feature that contacts a server we do not operate.</p>
   <ul>
     <li><strong>AIM identity lookup</strong> (setting <code>aimLookupEnabled</code>, default off): when an agent is detected, the extension can query <code>aim.opena2a.org</code> for a published identity and trust score for that <em>agent type</em>. The request contains only the detected agent type string (for example <code>playwright</code>). The page origin is used only as a local cache key and is never sent.</li>
     <li><strong>Registry trust lookup</strong> (setting <code>registryLookupEnabled</code>, default off): the extension can query <code>api.oa2a.org</code> for a registry trust score for the detected agent type. The request contains only the detected agent type string.</li>
     <li><strong>Anonymized contribution</strong> (consent default off, with a one-time tip after 5 detections that you can dismiss): if you opt in, the extension can send anonymized detection and behavior summaries to <code>api.oa2a.org</code> to improve community threat intelligence. Each contribution contains an anonymous contributor token (a per-install random identifier generated once and stored locally, for deduplication only -- it does not identify you), the detected framework name, detection summaries (agents found, framework types), behavior summaries (interaction count, success rate, anomaly count), the extension version, and timestamps.</li>
+    <li><strong>Site safety declarations</strong> (setting <code>aiSafetyTxtEnabled</code>, default off): if you opt in, then <em>when an AI agent is detected on a page</em>, the extension requests one file from that website: <code>/.well-known/ai-safety.txt</code>. This is a public file a site may publish to state what it claims about its own content, using the <a href="https://datatracker.ietf.org/doc/draft-fane-ai-safety-txt/">ai-safety.txt</a> format. What the extension shows you is what the site claims about itself; the extension does not verify it, and a declaration never changes what the extension detects or blocks.
+      <ul>
+        <li><strong>What is sent:</strong> nothing beyond the request itself. No cookies, no page address, no referrer, no identifier, and nothing about you. The request is a plain GET for that one fixed filename.</li>
+        <li><strong>Who it reaches:</strong> only the site your agent is already on. The extension will not follow a redirect to any other server, and only requests declarations over HTTPS.</li>
+        <li><strong>What the site can infer:</strong> because your agent has already loaded a page there, the site's logs already record your visit. The new information the site gains is that something on your device checked for a safety declaration -- which it could use to tell visitors running a declaration-reading tool apart from those who are not. This is the reason the feature is off by default and asks for your consent.</li>
+        <li><strong>Only while an agent is running:</strong> nothing is requested for pages you browse yourself. The check happens only when an AI agent has been detected on that page.</li>
+        <li><strong>Caching:</strong> a result is stored locally so repeat visits do not repeat the request -- for 24 hours when the site gave a usable answer (a declaration, or a clear "no declaration here"), and for 5 minutes when the site could not be reached, so a site that is temporarily down is retried sooner. Storage is capped at 50 sites; the least recently added is dropped first. Turning the setting off deletes every stored declaration.</li>
+      </ul>
+    </li>
   </ul>
-  <p>These features never transmit your URLs, page content, form data, keystrokes, cookies, authentication tokens, personal identity, or browsing history. To enable or disable them, use the extension settings. Disabling a feature stops all outbound requests for it immediately; disabling contribution also clears any queued events.</p>
+  <p>These features never transmit your URLs, page content, form data, keystrokes, cookies, authentication tokens, personal identity, or browsing history. To enable or disable them, use the extension settings. Disabling a feature stops all outbound requests for it immediately; disabling contribution also clears any queued events, and disabling site safety declarations clears every declaration stored on your device.</p>
 
   <h2>3. How Data Is Stored</h2>
   <p>All data is stored in <code>chrome.storage.local</code>, which is a browser-provided storage mechanism that keeps data on your device only. Data is not synced across devices.</p>
@@ -87,7 +97,7 @@
 
   <h2>5. Network Communication</h2>
   <p><strong>By default, this extension makes zero network requests.</strong> All detection, analysis, and enforcement happens locally in your browser, and there are no update checks beyond Chrome's built-in extension update mechanism.</p>
-  <p>The only outbound network requests the extension can make are the three optional, off-by-default community-intelligence features described in section 2a (AIM identity lookup to <code>aim.opena2a.org</code>, registry trust lookup to <code>api.oa2a.org</code>, and anonymized contribution to <code>api.oa2a.org</code>). None of these run unless you explicitly enable them, and each can be turned off again at any time. There is no analytics or telemetry of any kind.</p>
+  <p>The only outbound network requests the extension can make are the four optional, off-by-default features described in section 2a. Three of them contact OpenA2A's own servers: AIM identity lookup to <code>aim.opena2a.org</code>, registry trust lookup to <code>api.oa2a.org</code>, and anonymized contribution to <code>api.oa2a.org</code>. The fourth, site safety declarations, requests <code>/.well-known/ai-safety.txt</code> from the website an AI agent has been detected on -- so with that setting enabled, the extension can contact a website you visit, not only our servers. It sends no cookies, no page address, and nothing about you, and it will not follow a redirect to any other server. None of the four run unless you explicitly enable them, and each can be turned off again at any time. There is no analytics or telemetry of any kind.</p>
 
   <h2>6. Permissions Explained</h2>
   <p>The extension requests the following Chrome permissions:</p>
@@ -101,7 +111,9 @@
   </ul>
 
   <h2>7. Third-Party Services</h2>
-  <p>This extension does not use or integrate with any third-party analytics platforms, advertising networks, or trackers. The only servers it can contact -- and only when you opt into the features in section 2a -- are OpenA2A's own <code>aim.opena2a.org</code> and <code>api.oa2a.org</code>.</p>
+  <p>This extension does not use or integrate with any third-party analytics platforms, advertising networks, or trackers, and it sends no data about you to any third party.</p>
+  <p>The OpenA2A servers it can contact -- and only when you opt into the features in section 2a -- are <code>aim.opena2a.org</code> and <code>api.oa2a.org</code>.</p>
+  <p>If you enable site safety declarations (section 2a), the extension additionally requests one public file, <code>/.well-known/ai-safety.txt</code>, from a website an AI agent has been detected on. That website is not a third-party service we have integrated with and receives nothing about you, but it is a server we do not operate, and it can see that the request was made. This is disclosed here rather than omitted because the previous version of this policy said our own servers were the only ones the extension could ever contact, and with this setting enabled that is no longer accurate.</p>
 
   <h2>8. Children's Privacy</h2>
   <p>This extension does not knowingly collect any information from anyone, including children under 13. Since no personal data is collected, COPPA considerations do not apply.</p>

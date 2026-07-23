@@ -1,11 +1,13 @@
-# Chrome Web Store resubmission — copy/paste fields (v0.5.0)
+# Chrome Web Store submission — copy/paste fields (v0.6.0)
 
 This file is the exact text to paste into the Chrome Web Store Developer
-Dashboard for the v0.5.0 resubmission. It supersedes the live listing's
-"Zero network requests. No analytics, no tracking, no data collection."
-claim, which is inaccurate now that opt-in community features exist (they are
-off by default). Everything below tells the same "off by default, optional
-opt-in" story as the privacy policy, README, and ADR-006.
+Dashboard for the v0.6.0 submission. v0.6.0 ships site safety declarations
+(ADR-009): an off-by-default setting that, when an AI agent is detected on a
+page, reads that website's `/.well-known/ai-safety.txt`. That feature can
+contact a server OpenA2A does not operate, so this text supersedes the v0.5.0
+listing's claim that OpenA2A's own servers are the only ones the extension can
+contact. Everything below tells the same "off by default, optional opt-in"
+story as the privacy policy, README, and ADR-006/ADR-009.
 
 ---
 
@@ -36,6 +38,7 @@ When an AI agent (Playwright, Puppeteer, Selenium, Anthropic Computer Use, OpenA
 - Detects the takeover using multiple signals: WebDriver flags, Chrome DevTools Protocol markers, behavioral analysis of mouse/keyboard patterns, and framework-specific fingerprints
 - Shows detection status in the popup with confidence level and detection method
 - Logs the agent activity it can observe in a session timeline
+- Can read the site's published safety declaration (/.well-known/ai-safety.txt) and show what the site claims about its own content — off by default, display-only (see PRIVACY)
 
 SCOPE AND LIMITATIONS
 
@@ -57,12 +60,13 @@ PRIVACY
 
 By default, AI Browser Guard makes zero network requests. All detection, delegation, and session tracking runs locally on your device. There is no analytics, no telemetry, and no tracking. Session logs and settings are stored in chrome.storage.local and are deleted when you uninstall.
 
-The extension also offers three optional community-intelligence features that are OFF BY DEFAULT. They only send data after you explicitly enable them, and each can be turned off again with one click:
+The extension also offers four optional features that make network requests and are OFF BY DEFAULT. They only act after you explicitly enable them, and each can be turned off again with one click:
 
 - AIM identity lookup and registry trust lookup — when an agent is detected, look up a trust score for that agent type. Only the detected agent type (for example "playwright") is sent. Your URLs and page content are never sent.
 - Anonymized contribution — share anonymized detection and behavior summaries (an anonymous token, the detected framework name, and summary counts) to improve community threat intelligence. Prompted once after 5 detections; dismissible.
+- Site safety declarations — when an AI agent is detected on a page, request that website's /.well-known/ai-safety.txt, a public file a site may publish to state what it claims about its own content, and show those claims alongside the detection. This is the one feature that contacts the website your agent is on instead of an OpenA2A server. The request is a plain GET for that one fixed filename: no cookies, no page address, no referrer, and nothing about you. It follows no redirects, runs only over HTTPS, and runs only while an agent is detected — never on pages you browse yourself. Results are cached locally for 24 hours; turning the setting off deletes every stored declaration. Declarations are display-only: self-asserted claims the extension does not verify, and they never change what the extension detects, scores, or blocks.
 
-None of these features transmit your URLs, page content, form data, keystrokes, cookies, authentication tokens, or identity.
+None of these features transmit your URLs, page content, form data, keystrokes, cookies, authentication tokens, or identity. Three of them contact only OpenA2A's own servers (aim.opena2a.org, api.oa2a.org); site safety declarations contacts the website your agent is on, which receives nothing about you but can see that the request was made.
 
 Full privacy policy: https://opena2a.org/aibrowserguard/privacy
 
@@ -127,7 +131,9 @@ Set the data-collection disclosures to reflect the OPTIONAL, opt-in features
   - I do not use or transfer user data to determine creditworthiness or for lending. TRUE.
 - Privacy policy URL: https://opena2a.org/aibrowserguard/privacy
 
-Note: if you prefer the simplest possible review, you can leave all three
+Note: if you prefer the simplest possible review, you can leave all four
 opt-in features off in the default build and still declare them here — the
 declaration must cover what the code is capable of, which is why we disclose
-the contribution path even though it is off by default.
+the contribution path even though it is off by default. Site safety
+declarations sends no user data at all (the request carries nothing), so it
+does not change any of the data-collection answers above.

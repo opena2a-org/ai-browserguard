@@ -2,6 +2,45 @@
 
 All notable changes to AI Browser Guard are documented here.
 
+## 0.6.0 - 2026-07-22
+
+### Added
+- **Reads site safety declarations, `/.well-known/ai-safety.txt` (ADR-009).** When
+  an AI agent is detected on a page, AI Browser Guard can read that site's
+  declaration (`draft-fane-ai-safety-txt-00`) and show what the site claims about
+  its own content: whether it is site-authored, injection-hardened, and rendered
+  the same for agents as for people, plus a contact and a last-verified date.
+  This is the first consumer of the format to exist anywhere.
+  - **Off by default**, as a new "Read site safety declarations" setting. A fresh
+    install still makes zero network requests, and the gate is enforced in the
+    client itself so the fresh-install test proves it rather than asserting a
+    default value.
+  - **Display-only.** A declaration is self-asserted: any site can claim anything,
+    including a hostile one. It is shown as claims, never as findings, and never
+    changes what the extension detects, scores, or blocks (ADR-008 epistemics).
+    A site with no declaration is reported as exactly that, never as a risk.
+  - **The one feature that contacts a site instead of an OpenA2A server.** It
+    sends no cookies, no page address, no referrer, and nothing about you;
+    follows no redirects, so only the origin the agent already loaded is ever
+    reached; reads only over HTTPS; and runs only while an agent is detected,
+    never on pages you browse yourself. Results are cached locally for 24 hours,
+    and turning the setting off deletes them.
+  - No new permission: `host_permissions` already covers it, so no Web Store
+    permission re-review.
+
+### Changed
+- **Privacy policy and README state the reachable-host set accurately (ADR-009,
+  refining ADR-006).** The policy's claim that OpenA2A's own servers were the only
+  ones the extension could contact is removed: it is false once site safety
+  declarations exist, whatever their default. The store listing
+  (`docs/chrome-web-store-description.md`, `docs/store-listing.md`) is rewritten
+  in this release to disclose the new reachable-host set (the gate enumerated in
+  `docs/testing/release-smoke.md`).
+- ADR-006's "keep all four disclosure surfaces in sync" rule is now enforced by
+  `network-disclosure-consistency.test.ts` instead of relying on memory: a new
+  boolean setting fails CI until it is classified local-only or declared a network
+  gate, and a network gate must default off and appear in the privacy policy.
+
 ## 0.5.0 - 2026-07-13
 
 ### Changed

@@ -152,6 +152,7 @@ function validateSettingsFields(raw: Partial<UserSettings>): { clean: UserSettin
   takeHttpsUrl('registryBaseUrl', raw.registryBaseUrl);
   takeBoolean('autoBlockUntrustedAgents', raw.autoBlockUntrustedAgents);
   takeBoolean('cdpEnforcementEnabled', raw.cdpEnforcementEnabled);
+  takeBoolean('aiSafetyTxtEnabled', raw.aiSafetyTxtEnabled);
 
   return { clean, rewrittenKeys: rewritten };
 }
@@ -396,6 +397,32 @@ export async function appendDetectionLog(event: DetectionEvent): Promise<void> {
 export async function getSettings(): Promise<UserSettings> {
   const state = await getStorageState();
   return state.settings;
+}
+
+/**
+ * Read the persisted `aiSafetyTxtEnabled` flag, PROPAGATING a storage failure
+ * instead of swallowing it.
+ *
+ * `getSettings` (via `getStorageState`) returns `DEFAULT_STORAGE` on any read
+ * error, and the default flag is `false`. For most callers that fail-safe is
+ * correct, but the opt-out reconcile must tell "storage says the flag is off"
+ * apart from "storage could not be read": treating a transient read error as
+ * "off" makes the reconcile delete an opted-IN user's declaration cache on the
+ * next 5-minute tick. So this lets a rejection escape -- the caller treats it as
+ * "unknown, do nothing" -- and only a SUCCESSFUL read whose value is exactly
+ * `true` counts as enabled.
+ *
+ * It also bypasses `getStorageState`'s migration/corruption bookkeeping, which
+ * rewrites a `__corrupted_state` entry on every read for a schema-downgraded
+ * profile. Driven by the reconcile alarm that would be 288 storage writes a day.
+ */
+export async function readAiSafetyEnabledFlag(): Promise<boolean> {
+  const stored = await chrome.storage.local.get('settings'); // a rejection propagates
+  const settings = stored.settings;
+  if (settings === null || typeof settings !== 'object' || Array.isArray(settings)) {
+    return false; // read succeeded; no usable settings object -> genuinely off
+  }
+  return (settings as Record<string, unknown>).aiSafetyTxtEnabled === true;
 }
 
 /**
