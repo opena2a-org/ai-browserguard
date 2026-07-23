@@ -2,7 +2,7 @@
 
 All notable changes to AI Browser Guard are documented here.
 
-## Unreleased
+## 0.6.0 - 2026-07-22
 
 ### Added
 - **Reads site safety declarations, `/.well-known/ai-safety.txt` (ADR-009).** When
@@ -32,9 +32,10 @@ All notable changes to AI Browser Guard are documented here.
 - **Privacy policy and README state the reachable-host set accurately (ADR-009,
   refining ADR-006).** The policy's claim that OpenA2A's own servers were the only
   ones the extension could contact is removed: it is false once site safety
-  declarations exist, whatever their default. The store listing is updated at the
-  release that ships this (gated in `docs/testing/release-smoke.md`), not here,
-  since it still describes the live v0.5.0 build.
+  declarations exist, whatever their default. The store listing
+  (`docs/chrome-web-store-description.md`, `docs/store-listing.md`) is rewritten
+  in this release to disclose the new reachable-host set (the gate enumerated in
+  `docs/testing/release-smoke.md`).
 - ADR-006's "keep all four disclosure surfaces in sync" rule is now enforced by
   `network-disclosure-consistency.test.ts` instead of relying on memory: a new
   boolean setting fails CI until it is classified local-only or declared a network
