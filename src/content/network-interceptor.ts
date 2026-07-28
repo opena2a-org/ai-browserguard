@@ -140,7 +140,10 @@ export function installNetworkInterceptor(
   const cleanups: Array<() => void> = [];
 
   // --- Intercept fetch ---
-  const originalFetch = window.fetch.bind(window);
+  // Capture the ORIGINAL reference (not a `.bind()` shim) so cleanup restores the
+  // exact native fetch. Repeated install/teardown cycles (the wrappers arm and
+  // disarm with delegation) must not stack `.bind()` layers on window.fetch.
+  const originalFetch = window.fetch;
 
   const wrappedFetch: typeof window.fetch = function (
     input: RequestInfo | URL,
@@ -202,7 +205,9 @@ export function installNetworkInterceptor(
       // Never let callback errors affect the actual request
     }
 
-    return originalFetch(input, init);
+    // Invoke with explicit `this` (fetch requires a window/global receiver);
+    // originalFetch is the unbound native, so this stays out of a bind chain.
+    return originalFetch.call(window, input, init);
   };
 
   window.fetch = wrappedFetch;
@@ -286,7 +291,7 @@ export function installNetworkInterceptor(
   // policy: a denied beacon returns `false` (the spec's "not queued" signal)
   // without throwing. Guarded so it is a no-op where sendBeacon is unsupported.
   if (typeof navigator !== 'undefined' && typeof navigator.sendBeacon === 'function') {
-    const originalSendBeacon = navigator.sendBeacon.bind(navigator);
+    const originalSendBeacon = navigator.sendBeacon;
     const wrappedSendBeacon = function (url: string | URL, data?: BodyInit | null): boolean {
       const initiator = detectAgentInitiation();
       const urlStr = typeof url === 'string' ? url : url.toString();
@@ -315,7 +320,7 @@ export function installNetworkInterceptor(
       } catch {
         // Never let callback errors affect the actual request
       }
-      return originalSendBeacon(url, data);
+      return originalSendBeacon.call(navigator, url, data);
     };
 
     navigator.sendBeacon = wrappedSendBeacon;

@@ -18,6 +18,30 @@ All notable changes to AI Browser Guard are documented here.
   cleared value before responding, so it always wins the race. Kill-switch
   activation is gated on the same guard. Regression test:
   `src/background/kill-switch-reset-race.test.ts` (fails on the pre-fix code).
+- **Page network failures no longer attributed to the extension.** The MAIN-world
+  `fetch`/`sendBeacon` wrappers were installed on every page unconditionally, so
+  the extension's frame sat in the call chain of every page request. When a page's
+  own request failed — e.g. a site's Content-Security-Policy refusing its own
+  analytics beacon — Chrome attributed that failure to AI Browser Guard in
+  `chrome://extensions`, making a local-first, no-telemetry tool look like the
+  source of blocked or suspicious traffic. The wrappers are now installed only
+  while there is something to enforce (an active delegation rule or the kill
+  switch), matching the invariant the XHR path already documented ("we do NOT wrap
+  `send()`… CSP violations get attributed to our extension"). In the default
+  monitor-only state the page's network runs natively and the extension stays out
+  of every site's network hot path. Cleanup now restores the exact native
+  `fetch`/`sendBeacon` (no accreting `.bind()` layers across arm/disarm cycles).
+  Two consequences of the narrower scope, stated plainly: network activity is
+  now observed only under an active delegation or the kill switch, so in
+  monitor-only mode the popup's Network Activity panel and the session report's
+  network summary stay empty (they previously recorded agent `fetch`/`XHR`/
+  beacon traffic on every page); and a `fetch`/`sendBeacon` reference a page
+  captured while disarmed stays native, so arming later cannot reach it — one
+  more route in the documented best-effort MAIN-world boundary (see
+  "Enforcement scope" in `docs/architecture.md`; the class fix is CDP-layer
+  enforcement, ADR-007). Regression test:
+  `src/content/interceptor.network-arming.test.ts`, including a pinned
+  known-limitation test for the pre-captured-reference route.
 
 ## 0.6.0 - 2026-07-22
 
