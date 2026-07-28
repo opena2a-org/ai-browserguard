@@ -255,6 +255,71 @@ function decideNetwork(
   return { blocked: true, reason };
 }
 
+// ── Network interceptor arming ───────────────────────────────────────────────
+// The fetch/sendBeacon wrappers are installed ONLY while there is something to
+// enforce. Installing them unconditionally puts this extension's frame in the
+// call chain of every page request (wrappedFetch calls the real fetch from
+// inside itself); when the page's OWN request then fails — e.g. a site's
+// Content-Security-Policy refusing its analytics beacon — Chrome attributes that
+// failure to this extension in chrome://extensions, making a privacy-first tool
+// look like the source of blocked or suspicious traffic. The XHR path already
+// avoids this by never wrapping send() (see installNetworkInterceptor); fetch and
+// sendBeacon must match that invariant by simply not being installed when idle.
+let networkInterceptorCleanup: (() => void) | null = null;
+
+/**
+ * Whether the network interceptor should be installed for a given rule and
+ * kill-switch state. Pure so it can be unit-tested without module side effects.
+ * Same arming signal as {@link isModifyDomGuardArmed} — but a different
+ * mechanism with a different trade-off. The DOM guard keeps its wrappers
+ * installed unconditionally and gates only its internal probe, so a reference
+ * captured at any time still goes through it. The network wrappers instead
+ * install and uninstall, because only NOT being installed keeps this extension
+ * out of Chrome's failure-attribution chain for page-own requests (the whole
+ * point of this gate). The accepted cost: a `window.fetch`/`navigator.sendBeacon`
+ * reference captured while disarmed stays native and bypasses a wrapper armed
+ * later. That is one more route in the already-documented best-effort boundary
+ * of MAIN-world enforcement (a page can also re-patch globals or pull a fresh
+ * `fetch` from an iframe/Worker — see "Enforcement scope" in
+ * docs/architecture.md); the hard fix for the whole class is CDP-layer
+ * enforcement (ADR-007), which the page realm cannot observe or evade.
+ */
+export function isNetworkInterceptorArmed(
+  rule: InterceptorRule | null,
+  killSwitch: boolean
+): boolean {
+  if (killSwitch) return true;
+  return !!(rule && rule.isActive);
+}
+
+/**
+ * Install or tear down the fetch/sendBeacon wrappers to match the current arming
+ * state. Idempotent: installs once when armed, restores the native
+ * implementations when disarmed. A no-op outside a browser context. Re-run on
+ * every rule/kill-switch change so the wrappers arm and disarm with delegation.
+ */
+function recomputeNetworkInterceptor(): void {
+  if (
+    typeof window === 'undefined' ||
+    typeof window.fetch !== 'function' ||
+    typeof XMLHttpRequest === 'undefined'
+  ) {
+    return;
+  }
+  const shouldArm = isNetworkInterceptorArmed(activeRule, killSwitchActive);
+  if (shouldArm && !networkInterceptorCleanup) {
+    networkInterceptorCleanup = installNetworkInterceptor(
+      (event) => {
+        sendToIsolated({ type: MSG_NETWORK_EVENT, event });
+      },
+      decideNetwork,
+    );
+  } else if (!shouldArm && networkInterceptorCleanup) {
+    networkInterceptorCleanup();
+    networkInterceptorCleanup = null;
+  }
+}
+
 // ── Secure-context guard ─────────────────────────────────────────────────────
 // This script runs in the MAIN world (page JS context). Only install API
 // intercepts on secure origins — http: pages do not support Web Crypto APIs
@@ -370,6 +435,7 @@ function handleIsolatedMessage(e: MessageEvent): void {
   if (data.type === MSG_RULE_UPDATE) {
     activeRule = (data.rule as InterceptorRule | null) ?? null;
     recomputeModifyDomGuard();
+    recomputeNetworkInterceptor();
     return;
   }
 
@@ -391,6 +457,7 @@ function handleIsolatedMessage(e: MessageEvent): void {
     if (typeof data.active === 'boolean') {
       killSwitchActive = data.active;
       recomputeModifyDomGuard();
+      recomputeNetworkInterceptor();
       // On activation, also purge any pending allow-once entries — they
       // were granted by the user before the emergency, but the emergency
       // is the higher-priority signal.
@@ -627,17 +694,12 @@ if (typeof Document !== 'undefined') {
 }
 
 // ── Network activity interception ──────────────────────────────────────────
-// Install fetch/XHR wrappers to observe network requests. Events are relayed
-// to the isolated world content script via the bridge port, which forwards
-// them to the background service worker for the Network Activity panel.
-// Guard: only install when fetch and XMLHttpRequest are available (browser context).
-if (typeof window.fetch === 'function' && typeof XMLHttpRequest !== 'undefined') {
-  installNetworkInterceptor(
-    (event) => {
-      sendToIsolated({ type: MSG_NETWORK_EVENT, event });
-    },
-    decideNetwork,
-  );
-}
+// Install fetch/sendBeacon wrappers ONLY while there is an active rule or the
+// kill switch (see isNetworkInterceptorArmed / recomputeNetworkInterceptor).
+// The wrappers arm and disarm with delegation via MSG_RULE_UPDATE /
+// MSG_KILL_SWITCH. At document_start there is no rule yet, so nothing is wrapped
+// and the page's own network runs natively — its failures (e.g. a site's own
+// CSP-blocked analytics) are attributed to the page, not to this extension.
+recomputeNetworkInterceptor();
 
 } // end secure-context guard
