@@ -2,6 +2,23 @@
 
 All notable changes to AI Browser Guard are documented here.
 
+## Unreleased
+
+### Fixed
+- **The kill switch can now always be released.** The "killed" latch is
+  re-armed from storage on every MV3 worker restart (so an idle timeout can't
+  silently lift an emergency stop), but the message listener was registered
+  before that state finished loading. A `Resume Monitoring` / `KILL_SWITCH_RESET`
+  handled during the load window was overwritten when the load reassigned
+  `state.killSwitch`, so the latch never cleared — leaving the user stuck in a
+  KILLED state that stopped protecting them, with no in-product recovery (the
+  only escape was uninstalling and reinstalling the extension). State-dependent
+  handlers now await a memoized state load (`ensureReady`) before touching the
+  kill switch, and the reset replaces the latch object wholesale and persists the
+  cleared value before responding, so it always wins the race. Kill-switch
+  activation is gated on the same guard. Regression test:
+  `src/background/kill-switch-reset-race.test.ts` (fails on the pre-fix code).
+
 ## 0.6.0 - 2026-07-22
 
 ### Added
