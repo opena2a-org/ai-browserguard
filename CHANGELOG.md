@@ -2,7 +2,10 @@
 
 All notable changes to AI Browser Guard are documented here.
 
-## Unreleased
+## 0.6.1 - 2026-07-28
+
+Two fixes from the 2026-07-28 field test of the store-installed 0.6.0
+(`docs/audit/2026-07-28-field-test-report.md`).
 
 ### Fixed
 - **The kill switch can now always be released.** The "killed" latch is

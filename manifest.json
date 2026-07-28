@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "AI Browser Guard",
-  "version": "0.6.0",
+  "version": "0.6.1",
   "description": "Detects AI agents (Playwright, Puppeteer, Selenium, Computer Use) driving your browser, alerts you, and closes tabs they control.",
   "homepage_url": "https://opena2a.org/aibrowserguard",
   "permissions": [
