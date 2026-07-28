@@ -434,7 +434,12 @@ describe('MAIN-world interceptor — P1-2 kill-switch hard-block sentinel', () =
     const file = readFileSync(resolve(__dirname, '..', 'background', 'index.ts'), 'utf8');
     const resetIdx = file.indexOf("case 'KILL_SWITCH_RESET'");
     expect(resetIdx).toBeGreaterThan(0);
-    const handlerSlice = file.slice(resetIdx, resetIdx + 1500);
+    // Slice to the next `case` label so the window is the whole handler,
+    // however long its comments grow — the invariant is "the broadcast lives
+    // INSIDE the KILL_SWITCH_RESET handler", not "within N chars of it".
+    const nextCaseIdx = file.indexOf("case '", resetIdx + 1);
+    expect(nextCaseIdx).toBeGreaterThan(resetIdx);
+    const handlerSlice = file.slice(resetIdx, nextCaseIdx);
     expect(handlerSlice).toMatch(/chrome\.tabs\.query/);
     expect(handlerSlice).toMatch(/chrome\.tabs\.sendMessage/);
     expect(handlerSlice).toMatch(/type:\s*'KILL_SWITCH_RESET'/);

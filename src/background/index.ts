@@ -107,8 +107,40 @@ async function reconcileCdpEnforcement(): Promise<void> {
   await reconcileTabs(desired);
 }
 
+let readyPromise: Promise<void> | null = null;
+
+/**
+ * Memoized state load. Any message handler that reads or mutates persisted state
+ * — above all the latched kill switch — MUST await this before touching `state`.
+ *
+ * The message listener is registered synchronously at worker start, but
+ * `loadPersistedState()` runs asynchronously and reassigns `state.killSwitch`
+ * (and delegation rules) wholesale from storage. A handler that runs before the
+ * load resolves would operate on default state and then be silently clobbered
+ * when the load completes. That race is how a KILL_SWITCH_RESET could fail to
+ * clear the latch: the reset cleared the initial object, then the late load
+ * overwrote it with the persisted `isActive: true`, leaving the user locked in a
+ * "killed" state with no in-product recovery. Awaiting `ensureReady()` serializes
+ * every kill-switch mutation behind the load so the reset always wins.
+ */
+function ensureReady(): Promise<void> {
+  if (!readyPromise) {
+    // Drop the memo on rejection so the next call retries instead of caching a
+    // failed load for the worker's whole lifetime. Today every storage helper on
+    // the load path fails safe (returns defaults), so this is defensive: if a
+    // future change lets loadPersistedState() reject, a cached rejection would
+    // permanently fail every kill-switch handler — the exact "no in-product
+    // recovery" failure mode this gate exists to remove.
+    readyPromise = loadPersistedState().catch((err) => {
+      readyPromise = null;
+      throw err;
+    });
+  }
+  return readyPromise;
+}
+
 function initialize(): void {
-  loadPersistedState().then(() => {
+  ensureReady().then(() => {
     updateBadge();
   }).catch((err) => {
     console.error('[AI Browser Guard] Failed to load state:', err);
@@ -291,8 +323,10 @@ function handleMessage(
     }
 
     case 'KILL_SWITCH_ACTIVATE': {
-      executeKillSwitch(
-        (message.data as { trigger?: string })?.trigger as 'button' | 'keyboard-shortcut' | 'api' ?? 'button'
+      ensureReady().then(() =>
+        executeKillSwitch(
+          (message.data as { trigger?: string })?.trigger as 'button' | 'keyboard-shortcut' | 'api' ?? 'button'
+        )
       ).then((event) => {
         sendResponse({ success: true, event });
       }).catch(() => {
@@ -302,29 +336,40 @@ function handleMessage(
     }
 
     case 'KILL_SWITCH_RESET': {
-      state.killSwitch.isActive = false;
-      state.killSwitch.lastEvent = null;
-      state.killSwitch.lastActivatedAt = null;
-      // Persist the cleared state so a later SW restart does not re-arm a
-      // kill switch the user has already reset.
-      saveKillSwitchState(state.killSwitch).catch(() => { /* best effort */ });
-      updateBadge();
-      // P1-2: broadcast the reset to every tab so each content script can
-      // lift the MAIN-world hard-block sentinel. Without this, MAIN-world
-      // wrappers would continue to deny every capability check after the
-      // user resets the kill switch from the popup.
-      chrome.tabs.query({}).then((tabs) => {
-        for (const tab of tabs) {
-          if (tab.id === undefined) continue;
-          chrome.tabs.sendMessage(tab.id, {
-            type: 'KILL_SWITCH_RESET',
-            data: {},
-            sentAt: new Date().toISOString(),
-          }).catch(() => { /* tab may not have a content script */ });
-        }
-      }).catch(() => { /* best effort */ });
-      sendResponse({ success: true });
-      return false;
+      // Await the state load first (see ensureReady): a reset that races the
+      // load would be overwritten when the load reassigns state.killSwitch,
+      // leaving the user locked in a "killed" state. The fresh object replaces
+      // the one the load may still reassign, and the cleared value is persisted
+      // BEFORE responding so a later SW restart cannot re-arm the latch. (This
+      // guards against the load race only — a concurrent KILL_SWITCH_ACTIVATE
+      // still races the reset on last-write-wins terms, as before.)
+      ensureReady().then(() => {
+        state.killSwitch = createInitialKillSwitchState();
+        return saveKillSwitchState(state.killSwitch);
+      }).then(() => {
+        updateBadge();
+        // The reset has taken effect (memory + disk) — report success now.
+        // Everything after this line is best-effort fan-out; its failure must
+        // not tell the user a reset failed when it already succeeded.
+        sendResponse({ success: true });
+        // P1-2: broadcast the reset to every tab so each content script can
+        // lift the MAIN-world hard-block sentinel. Without this, MAIN-world
+        // wrappers would continue to deny every capability check after the
+        // user resets the kill switch from the popup.
+        chrome.tabs.query({}).then((tabs) => {
+          for (const tab of tabs) {
+            if (tab.id === undefined) continue;
+            chrome.tabs.sendMessage(tab.id, {
+              type: 'KILL_SWITCH_RESET',
+              data: {},
+              sentAt: new Date().toISOString(),
+            }).catch(() => { /* tab may not have a content script */ });
+          }
+        }).catch(() => { /* best effort — tabs re-sync on next STATUS poll */ });
+      }).catch(() => {
+        sendResponse({ success: false });
+      });
+      return true; // async response
     }
 
     case 'DELEGATION_UPDATE': {
