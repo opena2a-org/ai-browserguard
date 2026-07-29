@@ -2,6 +2,71 @@
 
 All notable changes to AI Browser Guard are documented here.
 
+## 0.6.2 - 2026-07-29
+
+The remainder of the 2026-07-28 field-test findings
+(`docs/audit/2026-07-28-field-test-report.md`), released as one batch so the
+Web Store submission carries the full set.
+
+### Fixed
+- **In-page delegation is now reachable (F-P, the field test's core gap).** The
+  per-action block engine worked but could not be armed: the in-memory agent
+  maps die with every MV3 worker restart, and the load path force-ended every
+  un-ended session as `agent-disconnected` — so the popup showed "No agents
+  detected" mid-session and there was no agent card to grant Read-Only from. A
+  persisted active-agent registry now rehydrates agents whose tab still exists
+  **on the same origin** (tab identity is existence + origin — Chrome reuses
+  tab ids across restarts, and the kill switch closes the tabs in this map, so
+  a bare id match could aim it at an unrelated restored tab). Malformed
+  entries are dropped and pruned; origin mismatches and dead tabs end their
+  sessions honestly. The registry stores no new data class — it is a pointer
+  over the agent/session data the privacy policy already describes as stored
+  locally.
+- **The kill switch's own actions are attributed (F-M / F-D).** Sessions it
+  ends are recorded `endReason: 'kill-switch'` (previously the tab-close
+  handler relabeled every one `page-unload`), exactly once; the killed status
+  badge reads "Killed · closed N tabs" with trigger and time in the tooltip.
+- **Blocked agent downloads are attributed (F-A).** A cancelled download now
+  produces a coalesced notification (max one per 10s burst; honoring the
+  Notifications setting) and a recent-violations entry with a plain-language
+  why and the honest recovery path. Previously badge-only: the download
+  vanished with no explanation anywhere. No "Allow once" button — the
+  download is already cancelled and cannot be resumed.
+- **"Allow once" works on the monitor path (F-B).** The toast's grant used to
+  land only in the MAIN-world interceptor's set; the ISOLATED-world monitor
+  issuing the commonest in-page blocks (Read-Only click/type/submit) never
+  consulted it. Both grant entry points now feed a monitor-side one-shot set,
+  consumed on first matching event; kill-switch activation purges pending
+  grants, mirroring the MAIN world.
+- **The downloads-permission wording is accurate (F-F).** The store listing no
+  longer claims "user-initiated exports only" — the extension detects and
+  cancels agent downloads per delegation rules, and the listing now says so
+  (the privacy policy was already accurate).
+
+### Hardened (adversarial-review follow-ups)
+- Kill-switch ACTIVATE/RESET are serialized (arrival order wins; no
+  interleaved re-latch); each tab close is bounded (1.5s) so a page's
+  `beforeunload` prompt cannot wedge the emergency stop or a queued reset;
+  ACTIVATE no longer depends on a successful state load; the popup renders
+  "Killed"/"Monitoring" only on a confirmed response.
+- `getKillSwitchState` fails loud on storage read errors instead of returning
+  the inactive default — a storage blip must not silently lift a latched
+  emergency stop (missing/malformed keys still return the fresh-install
+  default).
+- The content script's message handler mirrors the background's
+  same-extension sender validation (defense-in-depth).
+- The popup's Network Activity panel shows an honest empty state (network
+  observation is delegation-scoped since 0.6.1) instead of hiding.
+
+### Added
+- `npm run smoke:arming` — release-smoke step 3, exercised end to end for the
+  first time: drives the REAL toolbar popup wizard to activate a Read-Only
+  rule, asserts the rule persists, then fires the in-page agent fixture's
+  synthetic violations and asserts the monitor block and toast. Reports an
+  explicit SKIP-ENV on a desktop without OS focus, never a false pass.
+- `scripts/inpage-agent-fixture.html` — the field test's self-driving in-page
+  agent fixture, now a repo asset.
+
 ## 0.6.1 - 2026-07-28
 
 Two fixes from the 2026-07-28 field test of the store-installed 0.6.0

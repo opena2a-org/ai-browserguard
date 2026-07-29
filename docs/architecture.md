@@ -400,9 +400,13 @@ interface StorageSchema {
 AgentSession created (handleDetection)
   -> events appended (handleAgentAction, handleBoundaryViolation)
   -> session ended with endReason:
-     - 'kill-switch' (kill switch activated)
-     - 'page-unload' (tab closed)
-     - 'agent-disconnected' (stale session on SW restart)
+     - 'kill-switch' (kill switch activated; stamped BEFORE the tabs close so
+       the tab-close handler cannot relabel it 'page-unload')
+     - 'page-unload' (tab closed outside a kill switch)
+     - 'agent-disconnected' (at SW restart, only when the agent's tab is gone
+       or no longer on the agent's origin — since 0.6.2 a persisted
+       active-agent registry rehydrates agents whose tab still exists on the
+       same origin, so a worker restart alone no longer ends live sessions)
      - 'delegation-expired' (time bound reached)
 ```
 
