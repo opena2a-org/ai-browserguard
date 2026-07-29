@@ -20,7 +20,10 @@ const CONTENT_SENDER = {
   tab: { id: 42 },
   frameId: 0,
   url: 'https://example.test/',
-  origin: 'chrome-extension://test-id',
+  // Real content-script senders carry the PAGE's origin, never the
+  // extension's — a validator requiring the extension origin here is the
+  // production bug this shape exists to catch.
+  origin: 'https://example.test',
 };
 
 function flush(): Promise<void> {

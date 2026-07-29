@@ -463,15 +463,18 @@ describe('MAIN-world interceptor — P1-2 kill-switch hard-block sentinel', () =
     expect(sentinelIdx).toBeLessThan(hasIdx);
   });
 
-  it('lock-in: content script re-arms the sentinel from the STATUS_QUERY response after navigation', () => {
+  it('lock-in: content script re-arms the sentinel from the TAB_STATE_QUERY response after navigation', () => {
     // Adversarial-review CRITICAL #2: content scripts re-inject on
     // navigation; the new MAIN-world interceptor boots with
     // killSwitchActive=false. Without re-syncing from the background's
     // current killSwitch state, navigating during a kill switch silently
-    // disarms it on the new tab. The STATUS_QUERY response carries
-    // killSwitchActive; the content script must forward it to MAIN.
+    // disarms it on the new tab. The pull is TAB_STATE_QUERY (content-only;
+    // the original STATUS_QUERY pull was popup-only under sender validation
+    // and silently failed — this source pin passed while the runtime
+    // behavior was broken, which is why src/background/tab-state-query.test.ts
+    // now pins the BEHAVIOR and this test only pins the forwarding wiring).
     const file = readFileSync(resolve(__dirname, 'index.ts'), 'utf8');
-    const statusQueryIdx = file.indexOf("sendToBackground('STATUS_QUERY'");
+    const statusQueryIdx = file.indexOf("sendToBackground('TAB_STATE_QUERY'");
     expect(statusQueryIdx).toBeGreaterThan(0);
     const handlerSlice = file.slice(statusQueryIdx, statusQueryIdx + 1200);
     expect(handlerSlice).toMatch(/killSwitchActive\?:\s*boolean/);

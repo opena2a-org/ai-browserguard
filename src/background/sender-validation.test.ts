@@ -19,6 +19,13 @@ function contentSender(overrides: Partial<chrome.runtime.MessageSender> = {}): c
     id: 'test-id',
     tab: { id: 42 } as chrome.tabs.Tab,
     frameId: 0,
+    // Real content-script senders carry the PAGE's origin (Chrome 80+), never
+    // the extension's. The previous default omitted origin entirely, so the
+    // whole suite passed against a validator that rejected every real-browser
+    // content message (its origin check demanded the extension origin for all
+    // classes). Fixtures must match production shape, or they certify a mock.
+    url: 'https://example.com/some/page',
+    origin: 'https://example.com',
     ...overrides,
   };
 }
@@ -195,19 +202,28 @@ describe('isValidSender', () => {
   });
 
   describe('sender.origin defense-in-depth', () => {
-    // Chrome 80+ populates sender.origin. We require it to match our
-    // chrome-extension origin if present, so a future externally_connectable
-    // misconfiguration (matches added) can't smuggle a web origin through
-    // the id check alone.
+    // sender.origin (Chrome 80+) means different things per sender class. A
+    // CONTENT script's origin is the PAGE it runs in — a web origin is the
+    // NORMAL case, never grounds for rejection (requiring the extension
+    // origin there killed the whole content -> background pipeline in
+    // production while the old no-origin fixtures kept this suite green).
+    // A POPUP-class sender must carry our extension origin: that is where
+    // the check blocks a future externally_connectable misconfiguration.
 
-    it('accepts a content sender with the correct chrome-extension origin', () => {
+    it('accepts a content sender with its page (web) origin — the production shape', () => {
       expect(isValidSender('DETECTION_RESULT', contentSender({
-        origin: 'chrome-extension://test-id',
+        origin: 'https://any-site.example',
+      }))).toBe(true);
+      expect(isValidSender('AGENT_ACTION', contentSender({
+        origin: 'http://127.0.0.1:8080',
+      }))).toBe(true);
+      expect(isValidSender('TAB_STATE_QUERY', contentSender({
+        origin: 'https://bank.example',
       }))).toBe(true);
     });
 
-    it('rejects a sender claiming a web origin even with our extension id', () => {
-      expect(isValidSender('DETECTION_RESULT', contentSender({
+    it('rejects a popup-class message carrying a web origin (externally_connectable guard)', () => {
+      expect(isValidSender('STATUS_QUERY', popupSender({
         origin: 'https://attacker.com',
       }))).toBe(false);
     });
@@ -222,7 +238,8 @@ describe('isValidSender', () => {
       // Backwards compat: sender.origin was added in Chrome 80. Older
       // versions populate everything else. The id check is the load-bearing
       // gate when origin is missing.
-      expect(isValidSender('DETECTION_RESULT', contentSender())).toBe(true);
+      expect(isValidSender('DETECTION_RESULT', contentSender({ origin: undefined })))
+        .toBe(true);
     });
   });
 

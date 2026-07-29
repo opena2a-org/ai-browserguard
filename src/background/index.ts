@@ -476,6 +476,34 @@ function handleMessage(
       return true;
     }
 
+    case 'TAB_STATE_QUERY': {
+      // Content-script startup pull: this tab's effective rule + the
+      // kill-switch latch. Awaits the state load — unlike the display-only
+      // STATUS_QUERY below — because a content script re-injected by
+      // navigation DURING an active kill switch re-arms the MAIN-world
+      // sentinel from this answer; replying from pre-load defaults would lift
+      // the emergency on every navigation. (The previous implementation
+      // pulled via STATUS_QUERY, which sender validation rightly rejects from
+      // content scripts — so the pull silently failed, late-opened tabs never
+      // received rules, and the sentinel was never re-armed after navigation.)
+      if (tabId === undefined) return false;
+      ensureReady().then(() => {
+        sendResponse({
+          effectiveRule: getEffectiveRuleForTab(tabId),
+          killSwitchActive: state.killSwitch.isActive,
+        });
+      }).catch(() => {
+        // Load failing: answer with the in-memory view rather than nothing —
+        // an unanswered pull leaves the tab with NO rule and NO sentinel,
+        // which is strictly worse than best-effort state.
+        sendResponse({
+          effectiveRule: getEffectiveRuleForTab(tabId),
+          killSwitchActive: state.killSwitch.isActive,
+        });
+      });
+      return true; // async response
+    }
+
     case 'STATUS_QUERY': {
       // Deliberately synchronous (display-only; the popup polls). Known
       // residual: while the initial state load keeps FAILING, this reports the

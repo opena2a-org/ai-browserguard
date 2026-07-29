@@ -21,6 +21,13 @@ const CONTENT_ONLY_TYPES: ReadonlySet<MessageType> = new Set([
   'NETWORK_EVENT',
   'CDP_DEBUGGER_CHECK',
   'OPEN_POPUP',
+  // The per-tab state pull at content-script startup. Content scripts MUST be
+  // able to learn their own tab's effective rule and the kill-switch latch on
+  // every (re)injection — a navigation during an active kill switch re-arms
+  // the MAIN-world sentinel through this, and a tab opened after a delegation
+  // activates receives its rule through this. It deliberately returns ONLY
+  // that tab's slice (least privilege), unlike the popup-only STATUS_QUERY.
+  'TAB_STATE_QUERY',
 ]);
 
 // Message types that must originate from the main frame (frameId === 0)
@@ -59,19 +66,17 @@ export function isValidSender(
   if (sender.id !== chrome.runtime.id) {
     return false;
   }
-  // Defense-in-depth: if `sender.origin` is populated (Chrome 80+), it
-  // must be our own chrome-extension origin. This blocks any future
-  // externally_connectable misconfiguration: web origins listed in
-  // matches would have sender.origin === "https://...", not our id.
-  if (typeof sender.origin === 'string') {
-    const expectedOrigin = `chrome-extension://${chrome.runtime.id}`;
-    if (sender.origin !== expectedOrigin) {
-      return false;
-    }
-  }
 
   if (CONTENT_ONLY_TYPES.has(type)) {
-    // Content scripts always have sender.tab populated by Chrome.
+    // Content scripts always have sender.tab populated by Chrome — and their
+    // sender.origin is the PAGE's origin (https://example.com), NOT our
+    // chrome-extension:// origin. A previous "defense-in-depth" check here
+    // required the extension origin for EVERY message, which rejected every
+    // content-script message in the real browser and silently killed the
+    // whole content -> background pipeline (in-page detections, action
+    // reports, boundary violations) — invisible to the unit suite, whose
+    // mock content sender carried the wrong, extension-origin shape. The
+    // extension-origin requirement belongs to the popup class only, below.
     if (sender.tab === undefined) return false;
     // Some content-only types must additionally be in the main frame.
     if (MAIN_FRAME_ONLY_TYPES.has(type) && sender.frameId !== 0) {
@@ -82,7 +87,17 @@ export function isValidSender(
 
   if (POPUP_ONLY_TYPES.has(type)) {
     // Popup messages have sender.url starting with the extension's
-    // chrome-extension:// origin and no sender.tab.
+    // chrome-extension:// origin and no sender.tab. When sender.origin is
+    // populated (Chrome 80+) it must also be our extension origin — this is
+    // where the origin check is CORRECT, and it blocks any future
+    // externally_connectable misconfiguration (web origins would carry
+    // sender.origin === "https://...").
+    if (typeof sender.origin === 'string') {
+      const expectedOrigin = `chrome-extension://${chrome.runtime.id}`;
+      if (sender.origin !== expectedOrigin) {
+        return false;
+      }
+    }
     return (
       sender.tab === undefined
       && typeof sender.url === 'string'
