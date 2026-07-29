@@ -261,20 +261,22 @@ function initialize(): void {
       if (monitorCleanup) monitorCleanup();
     });
 
-    // Request active delegation rules from background. The STATUS_QUERY
-    // response also carries the current killSwitchActive state — when the
-    // page navigates while the kill switch is active, content scripts
-    // re-inject and need to re-arm the MAIN-world hard-block sentinel.
-    // Without this, navigation would silently bypass the kill switch.
-    sendToBackground('STATUS_QUERY', {}).then((response) => {
+    // Request this tab's effective rule + kill-switch state from background.
+    // When the page navigates while the kill switch is active, content
+    // scripts re-inject and need to re-arm the MAIN-world hard-block
+    // sentinel; a tab opened after a delegation activates receives its rule
+    // here. Uses the content-only TAB_STATE_QUERY: the previous STATUS_QUERY
+    // pull was popup-only under sender validation, so it silently failed —
+    // late tabs never armed and navigation bypassed the kill-switch sentinel.
+    sendToBackground('TAB_STATE_QUERY', {}).then((response) => {
       if (response && typeof response === 'object') {
         const data = response as {
-          activeDelegation?: DelegationRule;
+          effectiveRule?: DelegationRule | null;
           killSwitchActive?: boolean;
         };
-        if (data.activeDelegation) {
-          updateActiveRule(data.activeDelegation);
-          syncRuleToMainWorld(data.activeDelegation);
+        if (data.effectiveRule) {
+          updateActiveRule(data.effectiveRule);
+          syncRuleToMainWorld(data.effectiveRule);
         }
         if (data.killSwitchActive === true) {
           postToMainWorld({ type: MSG_KILL_SWITCH, active: true });
@@ -310,18 +312,47 @@ async function sendToBackground(type: MessageType, data: unknown): Promise<unkno
   return new Promise((resolve) => {
     try {
       chrome.runtime.sendMessage(message, (response) => {
-        if (chrome.runtime.lastError) {
-          // Context invalidated between the check and the callback — resolve
-          // instead of rejecting so callers never see unhandled rejections.
-          contextInvalidated = true;
+        const lastError = chrome.runtime.lastError;
+        if (lastError) {
+          // lastError does NOT imply the context is gone. The commonest case
+          // is "The message port closed before a response was received" —
+          // produced whenever the background declines a message (sender
+          // validation, unhandled type) — which is a per-message outcome, not
+          // a context death. Treating every lastError as invalidation
+          // permanently poisoned this content script: one declined startup
+          // message and handleMessage dropped ALL background traffic for the
+          // life of the page (no rules, no kill-switch broadcasts, no
+          // allow-once). Only mark invalidated when the runtime actually says
+          // so, or the runtime id is gone.
+          const msg = lastError.message ?? '';
+          let runtimeGone = false;
+          try {
+            runtimeGone = !chrome.runtime?.id;
+          } catch {
+            runtimeGone = true;
+          }
+          if (msg.includes('Extension context invalidated') || runtimeGone) {
+            contextInvalidated = true;
+          }
           resolve(undefined);
         } else {
           resolve(response);
         }
       });
-    } catch {
-      // Extension context invalidated — silently ignore
-      contextInvalidated = true;
+    } catch (err) {
+      // A synchronous throw here usually IS invalidation ("Extension context
+      // invalidated" while the page outlives a reload/update) — but verify
+      // rather than assume, for the same reason as above.
+      const msg = err instanceof Error ? err.message : String(err);
+      let runtimeGone = false;
+      try {
+        runtimeGone = !chrome.runtime?.id;
+      } catch {
+        runtimeGone = true;
+      }
+      if (msg.includes('Extension context invalidated') || runtimeGone) {
+        contextInvalidated = true;
+      }
       resolve(undefined);
     }
   });

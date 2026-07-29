@@ -120,22 +120,13 @@ try {
   await popup.click('#delegation-wizard-btn');
   await popup.waitForSelector('#wizard-container .preset-card', { timeout: 5000 });
 
-  // Step 1: Read-Only preset (first card), then Next.
+  // Selecting the Read-Only preset (first card) jumps STRAIGHT to the confirm
+  // step — only the 'limited' preset visits the sites/time steps
+  // (selectPreset: nextStep = preset === 'limited' ? 'sites' : 'confirm').
   await popup.evaluate(() => {
     document.querySelector('#wizard-container .preset-card').click();
   });
-  await clickByText(popup, 'Next', '#wizard-container');
-
-  // Step 2: allow the fixture origin, then Next.
-  await popup.waitForSelector('#wizard-container .form-input', { timeout: 5000 });
-  await popup.type('#wizard-container .form-input', '*://127.0.0.1/*');
-  await clickByText(popup, 'Add', '#wizard-container');
-  await clickByText(popup, 'Next', '#wizard-container');
-
-  // Step 3: default duration, Next.
-  await clickByText(popup, 'Next', '#wizard-container');
-
-  // Step 4: Activate.
+  await wait(300);
   await clickByText(popup, 'Activate Delegation', '#wizard-container');
   await wait(800);
 
@@ -157,7 +148,17 @@ try {
   const page = await browser.newPage();
   await page.goto(fixtureUrl, { waitUntil: 'domcontentloaded' });
   await wait(800); // content scripts settle + rule pull
-  console.log('  step: fixture loaded under the armed rule');
+  // Diagnostic: what does the fixture tab's content script actually hold?
+  const tabState = await sw.evaluate(async (url) => {
+    const tabs = await chrome.tabs.query({ url: `${url}*` });
+    if (!tabs.length || tabs[0].id === undefined) return 'no-tab';
+    try {
+      return await chrome.tabs.sendMessage(tabs[0].id, {
+        type: 'STATUS_QUERY', data: {}, sentAt: new Date().toISOString(),
+      });
+    } catch (e) { return `sendMessage failed: ${e}`; }
+  }, fixtureUrl);
+  console.log(`  step: fixture tab content state: ${JSON.stringify(tabState)}`);
 
   // ── detection + violation phase: synthetic agent actions under the rule ───
   await page.bringToFront();
@@ -177,23 +178,46 @@ try {
   // The toast body lives in a CLOSED shadow root that page JS cannot pierce;
   // the observable light-DOM signal is its host container, which the toast
   // module creates lazily on the FIRST toast shown (#abg-toast-container).
+  const lateState = await sw.evaluate(async (url) => {
+    const tabs = await chrome.tabs.query({ url: `${url}*` });
+    if (!tabs.length || tabs[0].id === undefined) return 'no-tab';
+    try {
+      return await chrome.tabs.sendMessage(tabs[0].id, {
+        type: 'STATUS_QUERY', data: {}, sentAt: new Date().toISOString(),
+      });
+    } catch (e) { return `sendMessage failed: ${e}`; }
+  }, fixtureUrl);
+  console.log(`  step: post-violation content state: ${JSON.stringify(lateState).slice(0, 300)}`);
+
   const toastHost = await page.evaluate(() => Boolean(document.getElementById('abg-toast-container')));
   if (toastHost) ok('block toast rendered on the page', 'toast host present (created on first toast)');
   else bad('block toast rendered on the page', 'no #abg-toast-container in DOM — no toast ever showed');
 
-  const blocked = await sw.evaluate(async () => {
-    const s = await chrome.storage.local.get('sessions');
-    const sessions = s.sessions ?? [];
-    let blockedEvents = 0;
-    for (const sess of sessions) {
-      for (const e of sess.events ?? []) {
-        if (e.metadata?.outcome === 'blocked' || e.type === 'action-blocked') blockedEvents++;
+  let blocked = 0;
+  for (let i = 0; i < 16 && blocked === 0; i++) {
+    blocked = await sw.evaluate(async () => {
+      const s = await chrome.storage.local.get('sessions');
+      const sessions = s.sessions ?? [];
+      let blockedEvents = 0;
+      for (const sess of sessions) {
+        for (const e of sess.events ?? []) {
+          if (e.metadata?.outcome === 'blocked' || e.type === 'action-blocked') blockedEvents++;
+        }
       }
-    }
-    return blockedEvents;
-  });
+      return blockedEvents;
+    });
+    if (blocked === 0) await wait(500);
+  }
   if (blocked > 0) ok('blocked action recorded in the stored session timeline', `${blocked} event(s)`);
-  else bad('blocked action recorded in the stored session timeline', 'no blocked events stored');
+  else {
+    const dump = await sw.evaluate(async () => {
+      const s = await chrome.storage.local.get('sessions');
+      return (s.sessions ?? []).map((x) => ({
+        agent: x.agent?.type, ended: x.endedAt, events: (x.events ?? []).map((e) => `${e.type}:${e.metadata?.outcome}`),
+      }));
+    });
+    bad('blocked action recorded in the stored session timeline', JSON.stringify(dump).slice(0, 400));
+  }
 } catch (err) {
   bad('arming smoke aborted', String(err).slice(0, 200));
 } finally {

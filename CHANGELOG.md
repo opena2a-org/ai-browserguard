@@ -43,6 +43,31 @@ Web Store submission carries the full set.
   cancels agent downloads per delegation rules, and the listing now says so
   (the privacy policy was already accurate).
 
+### Fixed (content-messaging repair — found by the new arming smoke)
+- **The content -> background pipeline works again.** Three stacked bugs had
+  silently disabled it in production, invisible to the unit suite:
+  1. Sender validation's origin check required the extension's own origin on
+     EVERY message, but Chrome sets a content script's `sender.origin` to the
+     PAGE's origin — so every content-script message (in-page detections,
+     action reports, boundary violations) was rejected. The suite stayed green
+     because its content-sender fixtures omitted/faked the origin; fixtures
+     now carry the production shape, and the origin requirement applies only
+     to popup-class messages (where it correctly guards against a future
+     `externally_connectable` misconfiguration).
+  2. Any `chrome.runtime.lastError` on a sent message was treated as
+     "extension context invalidated", permanently muting the content script —
+     but `lastError` also fires for the routine "message port closed" produced
+     by any declined message. One declined startup message and the tab dropped
+     ALL background traffic (rules, kill-switch broadcasts, allow-once) for
+     the life of the page. Invalidation is now only inferred from the actual
+     invalidation error or a missing runtime id.
+  3. The content script's startup state pull used the popup-only STATUS_QUERY,
+     so it was (correctly) rejected: tabs opened after a delegation activated
+     never received their rule, and a navigation during an active kill switch
+     did not re-arm the MAIN-world sentinel. A new content-only
+     TAB_STATE_QUERY returns exactly the tab's slice — its effective rule and
+     the kill-switch latch, answered from loaded state.
+
 ### Hardened (adversarial-review follow-ups)
 - Kill-switch ACTIVATE/RESET are serialized (arrival order wins; no
   interleaved re-latch); each tab close is bounded (1.5s) so a page's
