@@ -18,7 +18,17 @@ because nothing exercised the rendered popup or the real download.
 npm run build
 npm test                 # unit + lock-in suites (incl. no-emoji + download)
 npm run smoke:export     # real-extension: popup chrome + export download
+npm run smoke:arming     # real-popup wizard -> Read-Only rule -> block + toast
 ```
+
+`npm run smoke:arming` closes manual step 3 below: it opens the REAL toolbar
+popup (`chrome.action.openPopup`), walks the Configure wizard to activate a
+Read-Only rule, asserts the rule persisted, then drives the in-page agent
+fixture and asserts the monitor block fires and the toast renders. It needs an
+OS-focused Chrome window, which a background-spawned Chrome cannot obtain
+while you are actively using the machine — on `SKIP-ENV` (exit 3), keep hands
+off the keyboard/mouse for ~60 seconds and re-run. It must report ALL GREEN at
+least once per release.
 
 `npm run smoke:export` loads the actual extension and asserts the settings icon
 is an inline SVG (not an emoji), no emoji text nodes render, and the popup loads
