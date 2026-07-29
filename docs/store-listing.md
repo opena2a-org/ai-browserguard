@@ -110,7 +110,7 @@ Required to alert the user when an AI agent attempts an action that violates the
 Required to detect when an automation framework (Playwright, Puppeteer) attaches a Chrome DevTools Protocol (CDP) debugger to the browser. CDP attachment is one of the core, hard-to-spoof signals that an AI agent has taken control. The extension uses this permission only to observe debugger attachment for detection; it does not read page content or inject code through the debugger.
 
 ### downloads
-Required to save a session report as a JSON file when the user chooses to export it from the popup. Used only for user-initiated exports.
+Required to monitor downloads created while an AI agent is active, so agent-initiated downloads can be detected and cancelled when your delegation rules do not permit them (your own downloads are never flagged or blocked), and to save a session report as a JSON file when you choose to export it from the popup.
 
 ### host_permissions (<all_urls>)
 AI agents can operate on any website. The detection content script must run on all pages to identify automation frameworks (WebDriver flags, CDP markers, behavioral patterns). Limiting to specific domains would leave users unprotected on unlisted sites. No page content is read or transmitted; only automation indicators are analyzed locally.

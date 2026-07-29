@@ -1349,7 +1349,29 @@ function renderNetworkPanel(): void {
 
   const events = sessionWithNetwork?.networkEvents ?? [];
   if (events.length === 0) {
-    panel.classList.add('hidden');
+    // Honest empty state, not silent absence. Since 0.6.1 network observation
+    // is delegation-scoped (wrappers install only under an active rule or the
+    // kill switch), so in monitor-only mode this panel would ALWAYS be blank —
+    // hiding it implies "no network activity happened", which is not what an
+    // empty list means. Same honest-zero pattern as the native-input coverage
+    // note on session reports.
+    if (popupState.activeDelegation || popupState.killSwitchActive) {
+      panel.classList.remove('hidden');
+      filtersContainer.replaceChildren();
+      container.replaceChildren();
+      const note = document.createElement('p');
+      note.className = 'placeholder-text-inline';
+      note.textContent = 'No network requests observed this session.';
+      container.appendChild(note);
+    } else {
+      panel.classList.remove('hidden');
+      filtersContainer.replaceChildren();
+      container.replaceChildren();
+      const note = document.createElement('p');
+      note.className = 'placeholder-text-inline';
+      note.textContent = 'Network activity is observed only while a delegation rule or the kill switch is active.';
+      container.appendChild(note);
+    }
     return;
   }
 
