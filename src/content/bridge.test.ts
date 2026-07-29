@@ -483,7 +483,11 @@ describe('MAIN-world interceptor — P1-2 kill-switch hard-block sentinel', () =
     const file = readFileSync(resolve(__dirname, '..', 'background', 'index.ts'), 'utf8');
     const handlerIdx = file.indexOf("case 'STATUS_QUERY'");
     expect(handlerIdx).toBeGreaterThan(0);
-    const handlerSlice = file.slice(handlerIdx, handlerIdx + 1000);
+    // Slice to the next case label — the invariant is "inside the
+    // STATUS_QUERY handler", not "within N chars of its label".
+    const nextCaseIdx = file.indexOf("case '", handlerIdx + 1);
+    expect(nextCaseIdx).toBeGreaterThan(handlerIdx);
+    const handlerSlice = file.slice(handlerIdx, nextCaseIdx);
     expect(handlerSlice).toMatch(/killSwitchActive:\s*state\.killSwitch\.isActive/);
   });
 });

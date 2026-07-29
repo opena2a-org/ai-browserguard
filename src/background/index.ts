@@ -139,6 +139,23 @@ function ensureReady(): Promise<void> {
   return readyPromise;
 }
 
+/**
+ * Kill-switch mutations (ACTIVATE / RESET) run strictly one at a time, in
+ * arrival order. Without this, an ACTIVATE still executing its await-chain
+ * while a RESET completes would resume and re-latch state the user just
+ * cleared (or vice versa) — last-write-wins by interleaving instead of by
+ * intent. The chain never rejects (each op's failure is delivered to its own
+ * caller and the chain continues), so one failed mutation cannot wedge the
+ * emergency stop.
+ */
+let killSwitchMutationChain: Promise<unknown> = Promise.resolve();
+
+function enqueueKillSwitchMutation<T>(op: () => Promise<T>): Promise<T> {
+  const run = killSwitchMutationChain.then(op, op);
+  killSwitchMutationChain = run.catch(() => { /* keep the chain alive */ });
+  return run;
+}
+
 function initialize(): void {
   ensureReady().then(() => {
     updateBadge();
@@ -323,11 +340,19 @@ function handleMessage(
     }
 
     case 'KILL_SWITCH_ACTIVATE': {
-      ensureReady().then(() =>
-        executeKillSwitch(
+      enqueueKillSwitchMutation(async () => {
+        // The emergency stop must NOT depend on a successful state load: it
+        // acts on in-memory agents and persists its own latch. Await the load
+        // for ordering (the clobber race), but a FAILING load proceeds — a
+        // rejected load attempt has already stopped touching state, and any
+        // later successful load re-reads the latch this activation persists.
+        // RESET stays strictly gated below: blocking a reset on a broken load
+        // is the safe direction; blocking the stop itself is not.
+        await ensureReady().catch(() => { /* proceed — see comment */ });
+        return executeKillSwitch(
           (message.data as { trigger?: string })?.trigger as 'button' | 'keyboard-shortcut' | 'api' ?? 'button'
-        )
-      ).then((event) => {
+        );
+      }).then((event) => {
         sendResponse({ success: true, event });
       }).catch(() => {
         sendResponse({ success: false });
@@ -340,12 +365,13 @@ function handleMessage(
       // load would be overwritten when the load reassigns state.killSwitch,
       // leaving the user locked in a "killed" state. The fresh object replaces
       // the one the load may still reassign, and the cleared value is persisted
-      // BEFORE responding so a later SW restart cannot re-arm the latch. (This
-      // guards against the load race only — a concurrent KILL_SWITCH_ACTIVATE
-      // still races the reset on last-write-wins terms, as before.)
-      ensureReady().then(() => {
+      // BEFORE responding so a later SW restart cannot re-arm the latch.
+      // Queued behind any in-flight ACTIVATE/RESET, so the final state is
+      // whichever operation the user issued last — never an interleave.
+      enqueueKillSwitchMutation(async () => {
+        await ensureReady();
         state.killSwitch = createInitialKillSwitchState();
-        return saveKillSwitchState(state.killSwitch);
+        await saveKillSwitchState(state.killSwitch);
       }).then(() => {
         updateBadge();
         // The reset has taken effect (memory + disk) — report success now.
@@ -392,6 +418,11 @@ function handleMessage(
     }
 
     case 'STATUS_QUERY': {
+      // Deliberately synchronous (display-only; the popup polls). Known
+      // residual: while the initial state load keeps FAILING, this reports the
+      // in-memory default (inactive) even if a latched kill switch sits on
+      // disk. Blocking status on the load would freeze the whole popup on a
+      // storage fault instead; the mutating handlers above are the ones gated.
       const agents = Array.from(state.activeAgents.values());
       sendResponse({
         detectedAgents: agents,
@@ -403,6 +434,10 @@ function handleMessage(
         // delegationRules below.
         activeDelegation: getActiveSessionRule(),
         killSwitchActive: state.killSwitch.isActive,
+        // F-D: what the emergency stop actually did (closedTabIds, trigger,
+        // timestamp) so the popup can say "closed N tabs" instead of leaving
+        // the most disruptive action unattributed.
+        killSwitchLastEvent: state.killSwitch.lastEvent,
         recentViolations: state.recentAlerts,
         delegationRules: state.delegationRules,
         lifetimeStats: state.lifetimeStats,
@@ -1049,6 +1084,16 @@ async function executeKillSwitch(
   // Tabs with an active detected agent — closing these is the real hard stop.
   const agentTabIds = Array.from(state.activeAgents.keys());
 
+  // End stored sessions BEFORE closing any tabs. Closing a tab fires
+  // tabs.onRemoved -> handleTabRemoved, which ends that tab's session as
+  // 'page-unload'; if that ran first, the kill-switch teardown below would find
+  // the session already ended and skip it — so no report ever said
+  // 'kill-switch', and the most disruptive action the extension takes was
+  // unattributed on every surface (field-test F-M). Ending them here stamps
+  // 'kill-switch' first; handleTabRemoved never overwrites an ended session.
+  await endStoredSessionsForKillSwitch(generateAndStoreReport);
+  state.activeSessions.clear();
+
   const event = await executeBackgroundKillSwitch(trigger, agentIds, [], agentTabIds);
 
   state.killSwitch.isActive = true;
@@ -1065,12 +1110,6 @@ async function executeKillSwitch(
     rule.isActive = false;
   }
   await saveDelegationRules(state.delegationRules);
-
-  // End all sessions and generate reports. Driven off STORED sessions, not the
-  // in-memory `state.activeSessions` map, which is empty after a service-worker
-  // restart — sessions that survived in storage must still be ended and reported.
-  await endStoredSessionsForKillSwitch(generateAndStoreReport);
-  state.activeSessions.clear();
 
   await clearAllNotifications();
   updateBadge();
@@ -1236,13 +1275,21 @@ async function handleDownloadCreated(item: chrome.downloads.DownloadItem): Promi
 async function handleTabRemoved(tabId: number): Promise<void> {
   const sessionId = state.activeSessions.get(tabId);
   if (sessionId) {
-    await updateSession(sessionId, (session) => ({
-      ...session,
-      endedAt: new Date().toISOString(),
-      endReason: 'page-unload' as const,
-    }));
-    // Generate post-session report
-    await generateAndStoreReport(sessionId);
+    // Never overwrite a session that already ended — when the kill switch
+    // closes this tab, the session was just ended as 'kill-switch' and reported;
+    // stamping 'page-unload' over it (or reporting it twice) would erase the
+    // attribution the user needs to understand who closed their tabs.
+    const stored = await getStorageState();
+    const session = stored.sessions.find((s) => s.id === sessionId);
+    if (session && !session.endedAt) {
+      await updateSession(sessionId, (s) => (s.endedAt ? s : {
+        ...s,
+        endedAt: new Date().toISOString(),
+        endReason: 'page-unload' as const,
+      }));
+      // Generate post-session report
+      await generateAndStoreReport(sessionId);
+    }
     state.activeSessions.delete(tabId);
   }
   state.activeAgents.delete(tabId);

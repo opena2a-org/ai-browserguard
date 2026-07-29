@@ -4,7 +4,7 @@
  * Controls the extension popup UI.
  */
 
-import type { MessagePayload, MessageType } from '../types/events';
+import type { MessagePayload, MessageType, KillSwitchEvent } from '../types/events';
 import type { AgentIdentity } from '../types/agent';
 import type { DelegationRule } from '../types/delegation';
 import type { AgentSession, LifetimeStats, UserSettings } from '../session/types';
@@ -46,6 +46,12 @@ interface PopupState {
    */
   pendingFullAccessAgentId: string | null;
   killSwitchActive: boolean;
+  /**
+   * What the last emergency stop actually did (closed tabs, trigger, time).
+   * Renders as "Killed · closed N tabs" so the most disruptive action the
+   * extension takes is attributed where the user looks first (field-test F-D).
+   */
+  killSwitchLastEvent: KillSwitchEvent | null;
   recentViolations: BoundaryAlert[];
   sessions: AgentSession[];
   wizardState: WizardState | null;
@@ -81,6 +87,7 @@ let popupState: PopupState = {
   delegationRules: [],
   pendingFullAccessAgentId: null,
   killSwitchActive: false,
+  killSwitchLastEvent: null,
   recentViolations: [],
   sessions: [],
   wizardState: null,
@@ -132,6 +139,8 @@ async function queryBackgroundStatus(): Promise<void> {
       popupState.activeDelegation = data.activeDelegation ?? null;
       popupState.delegationRules = data.delegationRules ?? [];
       popupState.killSwitchActive = data.killSwitchActive ?? false;
+      popupState.killSwitchLastEvent =
+        (data as { killSwitchLastEvent?: KillSwitchEvent | null }).killSwitchLastEvent ?? null;
       popupState.recentViolations = data.recentViolations ?? [];
       popupState.lifetimeStats = (data as { lifetimeStats?: LifetimeStats }).lifetimeStats ?? null;
     }
@@ -266,8 +275,19 @@ async function onKillSwitchClick(): Promise<void> {
   if (btn) btn.disabled = true;
 
   try {
-    await sendToBackground('KILL_SWITCH_ACTIVATE', { trigger: 'button' });
+    const resp = await sendToBackground('KILL_SWITCH_ACTIVATE', { trigger: 'button' });
+    // A resolved message is NOT a successful stop: the background answers
+    // { success: false } on failure. Confirming "Killed" for a stop that did
+    // not run would tell the user they are protected while agents keep
+    // working — never render state the background did not confirm.
+    if ((resp as { success?: boolean } | null)?.success !== true) {
+      if (btn) btn.disabled = false;
+      return;
+    }
     popupState.killSwitchActive = true;
+    // Show what the stop actually did without waiting for the next STATUS poll.
+    popupState.killSwitchLastEvent =
+      (resp as { event?: KillSwitchEvent } | null)?.event ?? popupState.killSwitchLastEvent;
     popupState.detectedAgents = [];
     popupState.activeDelegation = null;
     renderAll();
@@ -692,7 +712,14 @@ async function onResumeMonitoringClick(): Promise<void> {
   if (btn) btn.disabled = true;
 
   try {
-    await sendToBackground('KILL_SWITCH_RESET', {});
+    const resp = await sendToBackground('KILL_SWITCH_RESET', {});
+    // Same contract as activation: { success: false } resolves. Showing
+    // "Monitoring" for a reset that did not clear the latch would hide an
+    // active emergency stop.
+    if ((resp as { success?: boolean } | null)?.success !== true) {
+      if (btn) btn.disabled = false;
+      return;
+    }
     popupState.killSwitchActive = false;
     renderAll();
   } catch {
@@ -1723,7 +1750,20 @@ function renderStatusBadge(): void {
 
   if (popupState.killSwitchActive) {
     indicator.classList.add('status-killed');
-    statusText.textContent = 'Killed';
+    // Attribute what the emergency stop actually did (F-D): the user seeing
+    // tabs vanish must find "who closed my tabs" on the first surface they
+    // check. Falls back to the bare label when no event detail is available.
+    const ev = popupState.killSwitchLastEvent;
+    const closed = ev?.closedTabIds?.length ?? 0;
+    statusText.textContent = closed > 0
+      ? `Killed · closed ${closed} tab${closed === 1 ? '' : 's'}`
+      : 'Killed';
+    if (ev?.timestamp) {
+      indicator.setAttribute(
+        'title',
+        `Emergency stop (${ev.trigger}) at ${new Date(ev.timestamp).toLocaleString()}`,
+      );
+    }
   } else if (popupState.detectedAgents.length > 0) {
     indicator.classList.add('status-detected');
     statusText.textContent = `${popupState.detectedAgents.length} Agent(s) Detected`;

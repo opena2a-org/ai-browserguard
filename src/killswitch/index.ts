@@ -105,11 +105,25 @@ export async function executeBackgroundKillSwitch(
   // persistent driver can still reopen a tab at the browser level (ADR-008);
   // the categorical stop is `RemoteDebuggingAllowed=false`, which needs managed
   // Chrome and an extension cannot set.
+  // Each close is BOUNDED: chrome.tabs.remove can hang indefinitely on a
+  // page's beforeunload prompt, and an unbounded await here would stall the
+  // latch persistence below and wedge every queued kill-switch mutation
+  // behind it (including a user's RESET). On timeout the close continues in
+  // the background (fire-and-forget) but is not counted as confirmed.
+  const TAB_CLOSE_TIMEOUT_MS = 1500;
   const closedTabIds: number[] = [];
   for (const tabId of agentTabIds) {
     try {
-      await chrome.tabs.remove(tabId);
-      closedTabIds.push(tabId);
+      const removal = chrome.tabs.remove(tabId);
+      const confirmed = await Promise.race([
+        removal.then(() => true),
+        new Promise<false>((resolve) => setTimeout(() => resolve(false), TAB_CLOSE_TIMEOUT_MS)),
+      ]);
+      if (confirmed) {
+        closedTabIds.push(tabId);
+      } else {
+        removal.catch(() => { /* backgrounded close — best effort */ });
+      }
     } catch {
       // Tab already gone / not removable — best effort.
     }

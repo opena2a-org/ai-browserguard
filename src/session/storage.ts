@@ -474,22 +474,26 @@ export async function updateLifetimeStats(
  * control: it must survive a service-worker restart until the user explicitly
  * resets it. Without persistence, an MV3 idle-timeout would reconstruct the
  * state as inactive and silently disarm the block (fail-open).
+ *
+ * Failure semantics are deliberately LOUD, not open: a missing or malformed
+ * key is a genuine fresh state and returns the inactive default, but a
+ * FAILING read rejects. Swallowing a read error into the default would
+ * silently lift a latched emergency stop on a storage blip — the user invoked
+ * an emergency and the extension would drop it with no signal. The sole
+ * caller (loadPersistedState, behind ensureReady) retries per message and
+ * surfaces the failure to its callers instead.
  */
 export async function getKillSwitchState(): Promise<KillSwitchState> {
-  try {
-    const result = await chrome.storage.local.get('killSwitchState');
-    const stored = result.killSwitchState as Partial<KillSwitchState> | undefined;
-    if (!stored || typeof stored.isActive !== 'boolean') {
-      return { ...DEFAULT_KILL_SWITCH_STATE };
-    }
-    return {
-      isActive: stored.isActive,
-      lastEvent: stored.lastEvent ?? null,
-      lastActivatedAt: stored.lastActivatedAt ?? null,
-    };
-  } catch {
+  const result = await chrome.storage.local.get('killSwitchState');
+  const stored = result.killSwitchState as Partial<KillSwitchState> | undefined;
+  if (!stored || typeof stored.isActive !== 'boolean') {
     return { ...DEFAULT_KILL_SWITCH_STATE };
   }
+  return {
+    isActive: stored.isActive,
+    lastEvent: stored.lastEvent ?? null,
+    lastActivatedAt: stored.lastActivatedAt ?? null,
+  };
 }
 
 /**
