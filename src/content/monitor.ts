@@ -36,6 +36,44 @@ let monitorState: MonitorState = {
 };
 
 /**
+ * One-shot "Allow once" overrides for MONITOR-path blocks (F-B).
+ *
+ * The block toast's "Allow once" used to grant only into the MAIN-world
+ * interceptor's set — but the commonest in-page block (a synthetic click/type
+ * under a Read-Only rule) is issued by THIS monitor in the ISOLATED world,
+ * which never consulted any override. The button was inert exactly where users
+ * saw it most. Keys are `${capability}:${url}`, mirroring the MAIN-world set;
+ * an entry is consumed by the first matching event.
+ */
+const monitorAllowedOnce: Set<string> = new Set();
+
+/** Grant a one-shot override for the next monitor-blocked (capability, url). */
+export function grantMonitorAllowOnce(capability: string, url: string): void {
+  monitorAllowedOnce.add(`${capability}:${url}`);
+}
+
+/**
+ * Purge all pending overrides. Called on kill-switch activation — mirroring
+ * the MAIN-world interceptor, which clears its own allow-once set when the
+ * sentinel arms: overrides granted before the emergency were granted under
+ * conditions the emergency invalidates, and a stale grant must not let an
+ * action through a monitor that is later re-armed while the switch is active.
+ */
+export function clearMonitorAllowOnce(): void {
+  monitorAllowedOnce.clear();
+}
+
+/** Consume (and report) a pending one-shot override for this capability+url. */
+function consumeMonitorAllowOnce(capability: string, url: string): boolean {
+  const key = `${capability}:${url}`;
+  if (monitorAllowedOnce.has(key)) {
+    monitorAllowedOnce.delete(key);
+    return true;
+  }
+  return false;
+}
+
+/**
  * Check whether an agent action is permitted under delegation rules.
  *
  * Pass-through when no rule exists: normal browsing is never blocked.
@@ -179,6 +217,22 @@ export function startBoundaryMonitor(
     const target = e.target as Element;
     const selector = target ? getSelector(target) : undefined;
     const url = window.location.href;
+
+    // "Allow once" (F-B): a pending one-shot override lets exactly one
+    // otherwise-blocked event through, consumed on use. Checked before the
+    // boundary evaluation so the override applies to precisely the (capability,
+    // url) the user approved from the toast/notification.
+    if (consumeMonitorAllowOnce(capability, url)) {
+      monitorState.allowedCount++;
+      const event = createTimelineEvent('action-allowed', url, `${capability} allowed (one-time override)`, {
+        targetSelector: selector,
+        attemptedAction: capability,
+        outcome: 'allowed',
+        ruleId: monitorState.activeRule?.id,
+      });
+      onAction(event);
+      return;
+    }
 
     const result = checkBoundary(capability, url, monitorState.activeRule);
 

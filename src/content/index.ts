@@ -9,7 +9,7 @@
 import type { MessagePayload, MessageType, BoundaryViolation } from '../types/events';
 import { startDetectionMonitor } from './detector';
 import type { DetectionVerdictResult } from './detector';
-import { startBoundaryMonitor, updateActiveRule, getMonitorState } from './monitor';
+import { startBoundaryMonitor, updateActiveRule, getMonitorState, grantMonitorAllowOnce, clearMonitorAllowOnce } from './monitor';
 import { executeContentKillSwitch, registerCleanup } from '../killswitch/index';
 import type { DelegationRule } from '../types/delegation';
 import { showBlockedToast } from './toast';
@@ -70,10 +70,13 @@ function showBlockedActionToast(capability: string, url: string, reason: string)
     url,
     reason,
     onAllowOnce: () => {
-      // Relay the one-shot allow directly to the MAIN world interceptor.
-      // Same payload shape as the chrome.notifications "Allow once" button
-      // already wired through background/handlers.ts handleAllowOnce.
+      // Relay the one-shot allow to BOTH enforcement surfaces: the MAIN-world
+      // interceptor (window.open / form.submit / DOM-write / network wrappers)
+      // and the ISOLATED-world monitor, which issues the commonest in-page
+      // block (synthetic click/type under Read-Only) and previously never saw
+      // the grant — the button was inert exactly where users saw it (F-B).
       postToMainWorld({ type: MSG_ALLOW_ONCE, capability, url });
+      grantMonitorAllowOnce(capability, url);
     },
     onWhitelist: (domain: string) => {
       sendToBackground('DOMAIN_WHITELIST', { domain }).catch(() => { /* ignore */ });
@@ -326,10 +329,16 @@ async function sendToBackground(type: MessageType, data: unknown): Promise<unkno
 
 function handleMessage(
   message: MessagePayload,
-  _sender: chrome.runtime.MessageSender,
+  sender: chrome.runtime.MessageSender,
   sendResponse: (response: unknown) => void
 ): boolean {
   if (!isContextValid() || !message || !message.type) return false;
+  // Defense-in-depth mirror of the background's sender validation: only this
+  // extension may drive the content script (grants, kill-switch signals,
+  // delegation updates). Today nothing external can reach this listener (no
+  // externally_connectable), but a future manifest change must not silently
+  // open a forgery path for ALLOW_ONCE or KILL_SWITCH_RESET.
+  if (sender.id !== chrome.runtime.id) return false;
 
   switch (message.type) {
     case 'DELEGATION_UPDATE': {
@@ -360,6 +369,10 @@ function handleMessage(
       // "executeKillSwitch's whole async chain" to "one microtask delivery
       // over the bridge port."
       postToMainWorld({ type: MSG_KILL_SWITCH, active: true });
+      // Purge pending monitor-path allow-once grants, mirroring MAIN's
+      // allowedOnce.clear(): a grant issued before the emergency must not
+      // survive into a monitor re-armed while the switch is active.
+      clearMonitorAllowOnce();
       // Stop all monitoring and clean up
       const result = executeContentKillSwitch();
       detectionCleanup = null;
@@ -392,8 +405,11 @@ function handleMessage(
     case 'ALLOW_ONCE': {
       const { capability, url } = message.data as { capability: string; url: string };
       // Relay the allow-once signal to the MAIN world interceptor via the
-      // private bridge port (no longer visible to other window listeners).
+      // private bridge port (no longer visible to other window listeners),
+      // AND to the ISOLATED-world monitor so monitor-path blocks honor the
+      // grant too (F-B).
       postToMainWorld({ type: MSG_ALLOW_ONCE, capability, url });
+      grantMonitorAllowOnce(capability, url);
       sendResponse({ success: true });
       return false;
     }

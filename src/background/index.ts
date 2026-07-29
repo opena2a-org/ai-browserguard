@@ -17,7 +17,7 @@ import type { KillSwitchState } from '../killswitch/index';
 import { isTimeBoundExpired, evaluateRule } from '../delegation/rules';
 import { selectEffectiveRule, applyDelegationUpdate } from '../delegation/effective';
 import { shouldIgnoreDownload, attributeDownload, describeDownload } from './download-monitor';
-import { setupNotificationHandlers, clearAllNotifications } from '../alerts/notification';
+import { setupNotificationHandlers, clearAllNotifications, showBoundaryNotification } from '../alerts/notification';
 import type { BoundaryAlert } from '../alerts/boundary';
 import { processBoundaryViolation, handleAllowOnce } from './handlers';
 import { isValidSender } from './sender-validation';
@@ -1268,9 +1268,54 @@ async function handleDownloadCreated(item: chrome.downloads.DownloadItem): Promi
       totalActionsBlocked: state.lifetimeStats.totalActionsBlocked + 1,
     };
     updateLifetimeStats(() => state.lifetimeStats).catch(() => { /* non-critical */ });
+
+    // F-A: a cancelled download gets the same attribution chain as every other
+    // block — a notification in the moment (honoring the Notifications setting)
+    // and a findable entry in the popup's recent-violations list, with a
+    // plain-language why and a recovery path. Badge-only left the user with a
+    // vanished download and no explanation. No "Allow once" button here: the
+    // download is already cancelled and cannot be resumed, and offering an
+    // inert button is its own bug class (F-B).
+    const violation: BoundaryViolation = {
+      id: crypto.randomUUID(),
+      timestamp: new Date().toISOString(),
+      agentId: state.activeAgents.get(tabId)?.id ?? '',
+      attemptedAction: 'download-file',
+      url: downloadUrl,
+      targetSelector: undefined,
+      blockingRuleId: rule?.id ?? 'none',
+      reason: `Delegation does not permit downloads${uncertain}`,
+      userOverride: false,
+    };
+    // Bound what a page-controlled string can put into an OS notification.
+    const shortLabel = label.length > 80 ? `${label.slice(0, 77)}...` : label;
+    const alert: BoundaryAlert = {
+      violation,
+      severity: 'high',
+      title: 'Download blocked',
+      message: `Cancelled an agent download: ${shortLabel}. Your delegation (${rule?.label ?? rule?.preset ?? 'active rule'}) does not permit downloads. Downloads you start yourself are never blocked — save the file yourself if you want it.`,
+      allowOneTimeOverride: false,
+      acknowledged: false,
+    };
+    // Coalesce notifications: an agent bursting downloads must not turn the
+    // block into an OS-notification flood (each block still lands in the
+    // recent list and the badge regardless).
+    const now = Date.now();
+    if (now - lastDownloadBlockNotificationAt >= DOWNLOAD_NOTIFICATION_COALESCE_MS) {
+      lastDownloadBlockNotificationAt = now;
+      showBoundaryNotification(alert, { enabled: state.notificationsEnabled });
+    }
+    state.recentAlerts.push(alert);
+    if (state.recentAlerts.length > 20) {
+      state.recentAlerts.shift();
+    }
   }
   updateBadge();
 }
+
+/** Minimum gap between blocked-download OS notifications (burst coalescing). */
+const DOWNLOAD_NOTIFICATION_COALESCE_MS = 10_000;
+let lastDownloadBlockNotificationAt = 0;
 
 async function handleTabRemoved(tabId: number): Promise<void> {
   const sessionId = state.activeSessions.get(tabId);
