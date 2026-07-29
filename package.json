@@ -14,7 +14,8 @@
     "smoke:load": "node scripts/smoke-load.mjs",
     "smoke:scenarios": "node scripts/smoke-scenarios.mjs",
     "smoke:scope": "node scripts/smoke-scope.mjs",
-    "bump": "node scripts/bump-version.js"
+    "bump": "node scripts/bump-version.js",
+    "smoke:arming": "node scripts/smoke-arming.mjs"
   },
   "devDependencies": {
     "@types/chrome": "^0.0.268",

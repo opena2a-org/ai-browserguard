@@ -8,7 +8,7 @@ import type { MessagePayload, DetectionEvent, KillSwitchEvent, AgentEvent, Bound
 import type { AgentIdentity } from '../types/agent';
 import type { DelegationRule } from '../types/delegation';
 import type { AgentSession } from '../session/types';
-import { getStorageState, saveSession, updateSession, saveDelegationRules, appendDetectionLog, updateSettings, getSettings, getLifetimeStats, updateLifetimeStats, getKillSwitchState, saveKillSwitchState } from '../session/storage';
+import { getStorageState, saveSession, updateSession, saveDelegationRules, appendDetectionLog, updateSettings, getSettings, getLifetimeStats, updateLifetimeStats, getKillSwitchState, saveKillSwitchState, getActiveAgentRegistry, updateActiveAgentRegistry } from '../session/storage';
 import type { LifetimeStats } from '../session/types';
 import { DEFAULT_LIFETIME_STATS } from '../session/types';
 import { createTimelineEvent, appendEventToSession } from '../session/timeline';
@@ -283,11 +283,70 @@ async function loadPersistedState(): Promise<void> {
   state.notificationsEnabled = stored.settings.notificationsEnabled;
   state.cdpEnforcementEnabled = stored.settings.cdpEnforcementEnabled;
 
-  // Check for active sessions that may have survived a restart
+  // Rehydrate detected agents whose tabs still exist (F-P). The in-memory
+  // agent/session maps die with every worker restart, and this loop used to
+  // force-end EVERY un-ended session as 'agent-disconnected' — so a restart
+  // mid-session emptied the popup ("No agents detected") and left nothing to
+  // grant a delegation to. An agent entry survives as long as its tab does;
+  // entries whose tab is gone end their session honestly.
+  const registry = await getActiveAgentRegistry();
+  const liveSessionIds = new Set<string>();
+  const deadTabIds: string[] = [];
+  for (const [tabKey, entry] of Object.entries(registry)) {
+    const tabId = Number(tabKey);
+    // Shape-validate the stored entry: registry data crosses a persistence
+    // boundary, and a malformed-but-truthy entry must not become a garbage
+    // agent card (or worse, a kill-switch target).
+    if (
+      !Number.isInteger(tabId)
+      || !entry
+      || typeof entry.sessionId !== 'string'
+      || !entry.agent
+      || typeof entry.agent.id !== 'string'
+      || typeof entry.agent.type !== 'string'
+      || typeof entry.agent.originUrl !== 'string'
+    ) {
+      deadTabIds.push(tabKey);
+      continue;
+    }
+    // Tab identity is EXISTENCE + ORIGIN, never the id alone: Chrome reuses
+    // tab ids across browser restarts, so a bare tabs.get() match could pin
+    // the stale agent onto an unrelated restored tab — and the kill switch
+    // closes the tabs in this map. An origin mismatch (including a tab that
+    // navigated away while the worker was down) ends the session honestly;
+    // re-detection re-registers the agent if it is still active.
+    let tabAlive = false;
+    try {
+      if (typeof chrome.tabs?.get === 'function') {
+        const tab = await chrome.tabs.get(tabId);
+        try {
+          tabAlive = new URL(tab.url ?? '').origin === new URL(entry.agent.originUrl).origin;
+        } catch {
+          tabAlive = false;
+        }
+      }
+    } catch {
+      tabAlive = false;
+    }
+    if (tabAlive) {
+      state.activeAgents.set(tabId, entry.agent);
+      state.activeSessions.set(tabId, entry.sessionId);
+      liveSessionIds.add(entry.sessionId);
+    } else {
+      deadTabIds.push(tabKey);
+    }
+  }
+  if (deadTabIds.length > 0) {
+    await updateActiveAgentRegistry((reg) => {
+      for (const key of deadTabIds) delete reg[key];
+      return reg;
+    });
+  }
+
+  // End sessions that survived a restart WITHOUT a live agent tab backing them.
   for (const session of stored.sessions) {
-    if (!session.endedAt) {
-      // Mark stale sessions as ended
-      await updateSession(session.id, (s) => ({
+    if (!session.endedAt && !liveSessionIds.has(session.id)) {
+      await updateSession(session.id, (s) => (s.endedAt ? s : {
         ...s,
         endedAt: new Date().toISOString(),
         endReason: 'agent-disconnected',
@@ -747,6 +806,13 @@ async function handleDetection(tabId: number, event: DetectionEvent): Promise<vo
 
   await saveSession(updatedSession);
   state.activeSessions.set(tabId, updatedSession.id);
+  // Persist the agent+session pairing so a worker restart can rehydrate it
+  // while the tab lives (F-P) — without this, any restart mid-session empties
+  // the popup and there is no agent card left to grant a delegation from.
+  await updateActiveAgentRegistry((reg) => ({
+    ...reg,
+    [String(tabId)]: { agent: event.agent!, sessionId: updatedSession.id },
+  })).catch(() => { /* availability aid — next detection re-persists */ });
 
   // Push the tab's effective rule so a session-wide grant (or none) is enforced
   // in the freshly-detecting tab without waiting for the next delegation change.
@@ -917,6 +983,13 @@ async function enrichAgentTrust(tabId: number, agent: AgentIdentity): Promise<vo
 
   // Update the agent in state
   state.activeAgents.set(tabId, agent);
+  // Keep the persisted registry entry in step so a rehydrated agent card
+  // still carries its enriched label/trust score.
+  await updateActiveAgentRegistry((reg) => {
+    const entry = reg[String(tabId)];
+    if (entry) reg[String(tabId)] = { ...entry, agent: { ...agent } };
+    return reg;
+  }).catch(() => { /* availability aid */ });
 
   // Update the session agent
   const sessionId = state.activeSessions.get(tabId);
@@ -1102,8 +1175,10 @@ async function executeKillSwitch(
   // Persist immediately so the latched block survives a service-worker restart.
   await saveKillSwitchState(state.killSwitch);
 
-  // Clear active agents
+  // Clear active agents (memory + persisted registry — the kill switch ends
+  // every session, so nothing may rehydrate on the next worker start).
   state.activeAgents.clear();
+  await updateActiveAgentRegistry(() => ({}));
 
   // Deactivate all delegation rules
   for (const rule of state.delegationRules) {
@@ -1338,6 +1413,10 @@ async function handleTabRemoved(tabId: number): Promise<void> {
     state.activeSessions.delete(tabId);
   }
   state.activeAgents.delete(tabId);
+  await updateActiveAgentRegistry((reg) => {
+    delete reg[String(tabId)];
+    return reg;
+  }).catch(() => { /* availability aid */ });
   deleteDeclaration(tabId);
   // Release any CDP enforcement session for the closed tab.
   detachTab(tabId).catch(() => { /* tab already gone */ });

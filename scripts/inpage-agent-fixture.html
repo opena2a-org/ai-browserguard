@@ -1,0 +1,189 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>ABG in-page agent fixture</title>
+<style>
+  :root { color-scheme: light dark; }
+  body { font: 15px/1.5 system-ui, sans-serif; max-width: 820px; margin: 24px auto; padding: 0 16px; }
+  h1 { font-size: 20px; margin-bottom: 4px; }
+  .sub { color: #666; margin-top: 0; }
+  fieldset { border: 1px solid #bbb; border-radius: 8px; margin: 16px 0; padding: 12px 16px; }
+  legend { font-weight: 600; padding: 0 6px; }
+  button { font-size: 15px; padding: 8px 14px; border-radius: 6px; border: 1px solid #888;
+    background: #f0b429; color: #000; cursor: pointer; margin: 4px 4px 4px 0; }
+  button:disabled { opacity: .45; cursor: not-allowed; }
+  #log { white-space: pre-wrap; font: 12.5px/1.45 ui-monospace, monospace;
+    background: #111; color: #d6d6d6; border-radius: 8px; padding: 12px; min-height: 160px; }
+  .ok { color: #4ade80; } .blocked { color: #f87171; } .warn { color: #fbbf24; }
+  a#target-link { font-weight: 600; }
+  input, form { margin: 6px 0; }
+  ol { margin: 6px 0 0 0; }
+  code { background: rgba(127,127,127,.18); padding: 1px 4px; border-radius: 4px; }
+</style>
+</head>
+<body>
+<h1>AI Browser Guard — in-page agent fixture</h1>
+<p class="sub">Self-driving page. Open it <strong>by hand in your normal Chrome</strong> —
+never through Cowork, Playwright, or any CDP-driven browser (that would tag every
+agent as external-class and poison the test).</p>
+
+<fieldset>
+  <legend>How to run</legend>
+  <ol>
+    <li>Press <strong>1 — Trigger detection</strong>. It sprays synthetic
+      <code>mousemove</code>/<code>click</code> events (isTrusted:false, bot-like timing) so ABG's
+      behavioral detector fires. Watch for the ABG popup to show a <em>DETECTED</em> card
+      (may take up to ~5&nbsp;s per its recheck interval).</li>
+    <li>In the ABG popup, grant <strong>Read-Only</strong> to this agent (a real click).
+      Note the badge/label it shows (e.g. "Monitor only" vs "Managed").</li>
+    <li>Press <strong>2 — Fire violations</strong>. It waits 600&nbsp;ms (to clear ABG's
+      150&nbsp;ms user-gesture grace window) then attempts one action at a time and logs
+      whether each was blocked. Watch for the block toast.</li>
+    <li>Copy the log at the bottom and hand it back.</li>
+  </ol>
+</fieldset>
+
+<fieldset>
+  <legend>Controls</legend>
+  <button id="btn-detect">1 — Trigger detection</button>
+  <button id="btn-violate" disabled>2 — Fire violations</button>
+  <button id="btn-stop">Stop spray</button>
+</fieldset>
+
+<fieldset>
+  <legend>Interaction targets (the fixture drives these; do not click them yourself)</legend>
+  <a id="target-link" href="#navigated">in-page link</a>
+  <form id="target-form" target="sink">
+    <input id="target-input" type="text" placeholder="agent types here" />
+    <button type="submit" id="target-submit">submit</button>
+  </form>
+  <iframe name="sink" title="form sink" style="width:100%;height:40px;border:1px dashed #999;"></iframe>
+</fieldset>
+
+<h3>Action log</h3>
+<div id="log"></div>
+
+<script>
+const logEl = document.getElementById('log');
+function ts() {
+  const d = new Date();
+  const p = n => String(n).padStart(2, '0');
+  return `${p(d.getHours())}:${p(d.getMinutes())}:${p(d.getSeconds())}.${String(d.getMilliseconds()).padStart(3,'0')}`;
+}
+function log(msg, cls) {
+  const span = cls ? `<span class="${cls}">${msg}</span>` : msg;
+  logEl.innerHTML += `${ts()}  ${span}\n`;
+  logEl.scrollTop = logEl.scrollHeight;
+}
+
+// ── Phase 1: trigger behavioral detection ─────────────────────────────────────
+// Behavioral detector flags mouse activity when, over >=20 buffered events:
+//   synthetic-ratio > 0.5, timing stddev < 15ms, integer-coord ratio > 0.95.
+// A tight loop of constructed MouseEvents (isTrusted:false, integer coords,
+// near-identical timestamps) trips all three. We re-spray on an interval so
+// real mouse movement can't dilute the synthetic ratio below 0.5.
+let sprayTimer = null;
+function sprayBurst() {
+  for (let i = 0; i < 30; i++) {
+    const x = 100 + (i % 7);      // integer coords
+    const y = 200 + (i % 5);
+    document.dispatchEvent(new MouseEvent('mousemove', { clientX: x, clientY: y, bubbles: true }));
+  }
+  // a few synthetic clicks too, on empty space, to feed click-precision
+  for (let i = 0; i < 6; i++) {
+    document.body.dispatchEvent(new MouseEvent('click', { clientX: 120, clientY: 220, bubbles: true }));
+  }
+}
+document.getElementById('btn-detect').addEventListener('click', () => {
+  log('PHASE 1: spraying synthetic mouse events to trigger behavioral detection…', 'warn');
+  sprayBurst();
+  sprayTimer = setInterval(sprayBurst, 2000);
+  document.getElementById('btn-violate').disabled = false;
+  log('Spraying every 2s. Grant Read-Only in the ABG popup, then press "2 — Fire violations".', 'warn');
+});
+document.getElementById('btn-stop').addEventListener('click', () => {
+  if (sprayTimer) { clearInterval(sprayTimer); sprayTimer = null; log('Spray stopped.', 'warn'); }
+});
+
+// ── Phase 2: attempt violations, one at a time, and detect block from page side ─
+// Block signal: ABG's ISOLATED monitor runs a capture-phase listener on `document`
+// and calls stopImmediatePropagation() on a blocked synthetic event, so the page's
+// own handler on the target never runs. We flip a flag in each target handler;
+// if the flag stays false, the action was blocked.
+const targetLink = document.getElementById('target-link');
+const targetForm = document.getElementById('target-form');
+const targetInput = document.getElementById('target-input');
+
+let linkHandled = false, submitHandled = false, inputHandled = false;
+targetLink.addEventListener('click', (e) => { e.preventDefault(); linkHandled = true; });
+targetForm.addEventListener('submit', (e) => { e.preventDefault(); submitHandled = true; });
+targetInput.addEventListener('input', () => { inputHandled = true; });
+
+const sleep = ms => new Promise(r => setTimeout(r, ms));
+
+async function fireViolations() {
+  log('PHASE 2: waiting 600ms to clear the 150ms user-gesture grace window…', 'warn');
+  await sleep(600);
+
+  // 1) synthetic click on an in-page link  → monitor capability "click"
+  linkHandled = false;
+  targetLink.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }));
+  await sleep(120);
+  log(`[1] synthetic click on link  → ${linkHandled ? 'REACHED PAGE (not blocked)' : 'BLOCKED (page handler never ran)'}`,
+      linkHandled ? 'ok' : 'blocked');
+
+  // 2) synthetic keydown + input into a field  → monitor capability "type-text"
+  inputHandled = false;
+  targetInput.dispatchEvent(new KeyboardEvent('keydown', { key: 'a', bubbles: true, cancelable: true }));
+  targetInput.dispatchEvent(new InputEvent('input', { data: 'a', bubbles: true, cancelable: true }));
+  await sleep(120);
+  log(`[2] synthetic keydown+input  → ${inputHandled ? 'REACHED PAGE (not blocked)' : 'BLOCKED (input handler never ran)'}`,
+      inputHandled ? 'ok' : 'blocked');
+
+  // 3) synthetic submit event on a form  → monitor capability "submit-form"
+  submitHandled = false;
+  targetForm.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }));
+  await sleep(120);
+  log(`[3] synthetic submit event   → ${submitHandled ? 'REACHED PAGE (not blocked)' : 'BLOCKED (submit handler never ran)'}`,
+      submitHandled ? 'ok' : 'blocked');
+
+  // ── MAIN-world JS-API wrappers below. These are gated by probeCallStack(),
+  //    which only recognizes CDP framework stack signatures. For genuine in-page
+  //    JS (this fixture), that probe returns false, so we EXPECT these to pass
+  //    through unblocked. If they pass, that is a documented scope boundary, not
+  //    a pass/fail of the monitor. Logged as "N/A-scope" when unblocked.
+
+  // 4) window.open()  → MAIN wrapper "open-tab"
+  let win = null;
+  try { win = window.open('about:blank', '_blank'); } catch (err) { log(`[4] window.open threw: ${err.message}`, 'blocked'); }
+  if (win) { win.close(); log('[4] window.open()            → OPENED (in-page JS not agent-attributed; MAIN wrapper N/A-scope)', 'warn'); }
+  else if (win === null) { log('[4] window.open()            → returned null (BLOCKED, or popup-blocker)', 'blocked'); }
+
+  // 5) history.pushState()  → MAIN wrapper "navigate"
+  const beforeUrl = location.href;
+  try { history.pushState({}, '', '#agent-pushed'); } catch (err) { log(`[5] pushState threw: ${err.message}`, 'blocked'); }
+  const changed = location.href !== beforeUrl;
+  if (changed) { history.back(); log('[5] history.pushState()      → CHANGED URL (MAIN wrapper N/A-scope for in-page JS)', 'warn'); }
+  else { log('[5] history.pushState()      → URL unchanged (BLOCKED)', 'blocked'); }
+
+  // 6) form.submit() JS call  → MAIN wrapper "submit-form" (bypasses submit event)
+  //    Contained by target="sink" iframe so nothing navigates the top page.
+  let submitThrew = false;
+  targetForm.action = 'about:blank';
+  try { HTMLFormElement.prototype.submit.call(targetForm); } catch (err) { submitThrew = true; log(`[6] form.submit() threw: ${err.message}`, 'blocked'); }
+  if (!submitThrew) log('[6] form.submit() JS call    → called (watch iframe; MAIN wrapper N/A-scope for in-page JS unless blocked)', 'warn');
+
+  await sleep(200);
+  log('PHASE 2 complete. Now check: did a block TOAST appear? Note its buttons '
+    + '(Allow once / Whitelist / Settings) and whether the ABG badge showed "!".', 'warn');
+  log('Also record: what label did the popup DETECTED card / agent row show '
+    + '("Monitor only" vs "Managed")? Screenshot it.', 'warn');
+}
+document.getElementById('btn-violate').addEventListener('click', () => { fireViolations(); });
+
+log('Fixture loaded. Origin: ' + location.origin + '  (note: MAIN-world wrappers require a secure context; file:// and http:// disable them).', 'warn');
+</script>
+</body>
+</html>

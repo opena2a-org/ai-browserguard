@@ -10,6 +10,7 @@ import { DEFAULT_SETTINGS, DEFAULT_LIFETIME_STATS, CURRENT_STORAGE_SCHEMA_VERSIO
 import type { DelegationRule } from '../types/delegation';
 import type { DetectionEvent } from '../types/events';
 import type { KillSwitchState } from '../killswitch/index';
+import type { AgentIdentity } from '../types/agent';
 
 const DEFAULT_KILL_SWITCH_STATE: KillSwitchState = {
   isActive: false,
@@ -516,4 +517,58 @@ export async function clearAllStorage(): Promise<void> {
   } catch (err) {
     console.error('[AI Browser Guard] Failed to clear storage:', err);
   }
+}
+
+// ── Active-agent registry (F-P) ──────────────────────────────────────────────
+
+/** A detected agent and its live session, persisted per tab. */
+export interface ActiveAgentRegistryEntry {
+  agent: AgentIdentity;
+  sessionId: string;
+}
+
+const AGENT_REGISTRY_KEY = 'activeAgentRegistry';
+
+/**
+ * The persisted registry of currently-detected agents, keyed by tabId.
+ *
+ * The in-memory agent/session maps die with every MV3 worker restart, and the
+ * old load path then force-ended their sessions as 'agent-disconnected' — so
+ * any restart mid-session emptied the popup ("No agents detected") and there
+ * was nothing left to grant a delegation to (field-test F-P). Persisting the
+ * registry lets the worker rehydrate agents whose tabs still exist.
+ *
+ * Failure semantics: default-empty on missing/malformed/failed reads. Unlike
+ * the kill-switch latch this is an availability aid, not a latched safety
+ * control — losing it degrades to the pre-fix behavior (agent card gone until
+ * the next detection) and self-corrects, so loud failure buys nothing here.
+ */
+export async function getActiveAgentRegistry(): Promise<Record<string, ActiveAgentRegistryEntry>> {
+  try {
+    const result = await chrome.storage.local.get(AGENT_REGISTRY_KEY);
+    const stored = result[AGENT_REGISTRY_KEY];
+    if (!stored || typeof stored !== 'object' || Array.isArray(stored)) return {};
+    return stored as Record<string, ActiveAgentRegistryEntry>;
+  } catch {
+    return {};
+  }
+}
+
+/**
+ * Read-modify-write the registry under the storage lock. The mutator receives
+ * the current registry and returns the replacement (return the argument to
+ * no-op).
+ */
+export async function updateActiveAgentRegistry(
+  mutate: (registry: Record<string, ActiveAgentRegistryEntry>) => Record<string, ActiveAgentRegistryEntry>,
+): Promise<void> {
+  return withStorageLock(async () => {
+    const current = await getActiveAgentRegistry();
+    const next = mutate(current);
+    try {
+      await chrome.storage.local.set({ [AGENT_REGISTRY_KEY]: next });
+    } catch (err) {
+      console.error('[AI Browser Guard] Failed to persist agent registry:', err);
+    }
+  });
 }
