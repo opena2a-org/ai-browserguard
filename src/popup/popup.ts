@@ -16,6 +16,7 @@ import type { WizardState } from '../delegation/wizard';
 import { createRuleFromPreset, FULL_ACCESS_MAX_MINUTES } from '../delegation/rules';
 import { selectEffectiveRule } from '../delegation/effective';
 import { presentAgent } from '../delegation/enforceability';
+import { chromeMajorVersion, remoteDebuggingPosture } from '../delegation/posture';
 import type { AIMAuthState } from '../aim/auth';
 import { getAIMAuthState } from '../aim/auth';
 import type { AiSafetyLookupResult } from '../aisafety/types';
@@ -677,6 +678,18 @@ function renderDetectionPanel(): void {
       caveat.style.cssText = 'font-size: 11px; color: #b45309; font-weight: 600; margin-top: 6px; line-height: 1.35;';
       caveat.textContent = presentation.ruleCaveat;
       card.appendChild(caveat);
+    }
+    // ADR-008 R1: pair the detect-only reality with the browser's own posture,
+    // so the caveat ends in something the user can act on (or already has).
+    if (!presentation.enforceable) {
+      const posture = remoteDebuggingPosture(chromeMajorVersion(navigator.userAgent));
+      if (posture) {
+        const postureRow = document.createElement('div');
+        postureRow.className = 'agent-posture-note';
+        postureRow.style.cssText = 'font-size: 11px; color: var(--text-secondary); margin-top: 4px; line-height: 1.35;';
+        postureRow.textContent = posture;
+        card.appendChild(postureRow);
+      }
     }
     container.appendChild(card);
   }
