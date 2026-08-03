@@ -6,20 +6,29 @@
  * `allowed.test` and `blocked.test` via --host-resolver-rules. A blocked
  * request never produces a receipt; a passed-through one does. The egress
  * battery fires through every vector the page-realm interceptor never wrapped
- * (WebSocket, EventSource, Image.src, Worker fetch, iframe fetch) — so a
- * missing receipt in an enforcement phase is attributable ONLY to the CDP
- * layer, and a present receipt in a fail-safe phase proves fail-open.
+ * (EventSource, Image.src, Worker fetch, iframe fetch — plus WebSocket, which is
+ * tracked as the documented-open vector). A missing receipt in an enforcement
+ * phase is attributable ONLY to the CDP layer, and a present receipt in a
+ * fail-safe phase proves fail-open.
+ *
+ * WebSocket scope: the CDP Fetch domain does not pause ws handshakes, and
+ * Network-level ws blocking proved unreliable on the live extension's shared
+ * debugger session, so ws is NOT closed by this layer (deterministic ws blocking
+ * needs declarativeNetRequest — ADR-008 R2). The battery still fires ws and
+ * asserts it stays open with enforcement armed, so the scope line is checked,
+ * not assumed.
  *
  * Phases:
  *   A  default-off: delegation armed (allow allowed.test + BLOCK blocked.test,
  *      via the REAL popup wizard), agent detected, setting untouched -> every
  *      vector ARRIVES (default-off proof + the battery's own vacuousness
  *      control + a live demonstration of the page-realm gap ADR-007 closes).
- *   B  enabled via the real popup settings toggle -> every vector to
- *      blocked.test is BLOCKED (zero receipts), allowed.test control passes,
- *      blocked events land in the stored session timeline, navigation to the
- *      blocked domain fails in the delegated tab, and the SAME URL still loads
- *      in a second, non-delegated tab (per-tab scope).
+ *   B  enabled via the real popup settings toggle -> every CDP-closable vector
+ *      to blocked.test is BLOCKED (zero receipts) while ws stays open,
+ *      allowed.test control passes, blocked events land in the stored session
+ *      timeline, navigation to the blocked domain fails in the delegated tab,
+ *      and the SAME URL still loads in a second, non-delegated tab (per-tab
+ *      scope).
  *   C  fail-safe/teardown: setting-off -> fail-open, re-enable -> re-attach,
  *      tab close -> new agent tab re-attaches, delegation EXPIRY (storage
  *      rewrite + browser restart) -> no attach + fail-open, restart with a
@@ -210,20 +219,37 @@ async function runBattery(page, phase) {
   return inPage;
 }
 
-const VECTORS = ['ws', 'es', 'img', 'worker-fetch', 'iframe-fetch'];
+// Vectors the CDP Fetch layer closes reliably (all transit the HTTP stack Fetch
+// pauses). WebSocket is tracked separately: the Fetch domain does NOT pause ws
+// handshakes and Network-level ws blocking proved unreliable on the live
+// extension's shared debugger session, so ws is the ONE documented-open egress
+// vector for blocked domains (docs/architecture §8, ADR-007). The battery still
+// fires ws every phase so this stays an asserted, regression-guarded scope line,
+// not a silent gap.
+const CLOSED_VECTORS = ['es', 'img', 'worker-fetch', 'iframe-fetch'];
+const ALL_VECTORS = ['ws', ...CLOSED_VECTORS];
 
 function assertBattery(phase, inPage, expectBlocked) {
-  const missing = VECTORS.filter((v) => receiptsFor(`/${phase}/${v}`).length === 0);
-  const leaked = VECTORS.filter((v) => receiptsFor(`/${phase}/${v}`).length > 0);
   if (expectBlocked) {
-    if (missing.length === VECTORS.length) {
-      ok(`${phase}: ALL unwrapped vectors blocked at the CDP layer`, `zero receipts for ${VECTORS.join(', ')}`);
+    const leaked = CLOSED_VECTORS.filter((v) => receiptsFor(`/${phase}/${v}`).length > 0);
+    if (leaked.length === 0) {
+      ok(`${phase}: every CDP-closable vector blocked`, `zero receipts for ${CLOSED_VECTORS.join(', ')}`);
     } else {
-      bad(`${phase}: ALL unwrapped vectors blocked at the CDP layer`, `LEAKED to server: ${leaked.join(', ')}`);
+      bad(`${phase}: every CDP-closable vector blocked`, `LEAKED to server: ${leaked.join(', ')}`);
+    }
+    // Honest, asserted scope line: ws is NOT closed by this layer and MUST still
+    // reach the server even with enforcement armed. If a future change silently
+    // starts (or claims to start) blocking ws, this catches the drift so the
+    // copy and the code stay in agreement.
+    if (receiptsFor(`/${phase}/ws`).length > 0) {
+      ok(`${phase}: WebSocket remains the documented-open vector (reached server)`);
+    } else {
+      bad(`${phase}: WebSocket remains the documented-open vector`, 'ws did NOT arrive — scope/claim drift, reconcile the docs');
     }
   } else {
-    if (leaked.length === VECTORS.length) {
-      ok(`${phase}: all vectors pass through (fail-open)`, `receipts for ${VECTORS.join(', ')}`);
+    const missing = ALL_VECTORS.filter((v) => receiptsFor(`/${phase}/${v}`).length === 0);
+    if (missing.length === 0) {
+      ok(`${phase}: all vectors pass through (fail-open)`, `receipts for ${ALL_VECTORS.join(', ')}`);
     } else {
       bad(`${phase}: all vectors pass through (fail-open)`, `never arrived: ${missing.join(', ')} (battery vacuous or wrongly blocked)`);
     }

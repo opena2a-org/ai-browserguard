@@ -15,8 +15,13 @@ submission.
   on the `chrome.debugger` CDP `Fetch` domain, for tabs under an active
   delegation. A hostile page that re-patches the in-page interceptor cannot
   undo it, and it closes the vectors the page-realm deny left unwrapped —
-  WebSocket, EventSource, element-`src` (`new Image().src`, `<script>`/`<link>`),
-  Worker and iframe fetch, and navigation to the blocked domain. Enabled by the
+  EventSource, element-`src` (`new Image().src`, `<script>`/`<link>`), Worker and
+  iframe fetch, and navigation to the blocked domain. (WebSocket is the one
+  vector this layer does NOT close: the CDP `Fetch` domain cannot pause ws
+  handshakes and Network-level ws blocking proved unreliable on the live
+  debugger session — a ws to a blocked domain still connects, disclosed in the
+  docs and store listing; deterministic ws blocking is deferred to a future
+  `declarativeNetRequest` complement, ADR-008 R2.) Enabled by the
   new `cdpEnforcementEnabled` setting; attaches only when an agent is detected in
   the tab under an active delegation carrying at least one block pattern; shows
   Chrome's standard "started debugging this browser" bar while active, torn down
@@ -32,10 +37,11 @@ submission.
   confirm step shows each pattern's action.
 - **`npm run smoke:cdp` — real-browser release gate.** A headful Chrome exercise
   on the built `dist/` that proves, against a receipt-logging fixture server,
-  that each unwrapped egress vector is blocked only while enforcement is armed
+  that each CDP-closable egress vector is blocked only while enforcement is armed
   and flows again on every teardown path (setting-off, tab close, delegation
-  expiry across a restart, kill switch), that default-off attaches nothing, and
-  that a non-delegated tab is never affected.
+  expiry across a restart, kill switch), that default-off attaches nothing, that
+  a non-delegated tab is never affected, and that WebSocket stays open under
+  enforcement (asserting the documented scope line rather than assuming it).
 - **Browser-posture guidance on external-agent cards (ADR-008 R1, version
   half).** For a detect-only external driver, the popup now states the browser's
   own posture: Chrome 136+ already refuses remote debugging of the default

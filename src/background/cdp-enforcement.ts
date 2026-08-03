@@ -79,6 +79,20 @@ export function ruleHasBlockPattern(rule: DelegationRule | null): boolean {
   return rule.scope.sitePatterns.some((p) => p.action === 'block');
 }
 
+/**
+ * Scope note — WebSocket. The CDP `Fetch` domain does NOT pause WebSocket
+ * handshakes (measured on Chrome 145), so `decideFetchRequest` never sees a
+ * `ws://`/`wss://` connection. `Network.setBlockedURLs` can block ws in a clean
+ * session but proved UNRELIABLE on the live extension's busier debugger session
+ * (Fetch + Network + detection sharing one client) — it raced the handshake and
+ * leaked intermittently. Rather than ship a flaky block behind a confident
+ * claim, this layer does not attempt WebSocket blocking: a WebSocket to a
+ * blocked domain is the one egress vector it does not close, disclosed as such
+ * (docs/architecture §8, ADR-007). Deterministic ws blocking needs
+ * `declarativeNetRequest` (`resourceTypes: ['websocket']`, per-tab session
+ * rules) — a new permission deferred to ADR-008 R2, not this increment.
+ */
+
 /** Inputs for deciding whether a tab warrants CDP enforcement. */
 export interface EnforceTabInput {
   /** `settings.cdpEnforcementEnabled`. */

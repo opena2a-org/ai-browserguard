@@ -85,6 +85,26 @@ Playwright." We cannot, by construction, and we will not say we can.
 > targets, races with tab teardown) and is unit-covered, but DevTools-open is no
 > longer a reliable way to produce one.
 
+> **Correction 3 (post-validation, 2026-08-03) — WebSocket is NOT closed by
+> this increment.** Section 1 and the Consequences below assert the CDP layer
+> closes the WebSocket vector #50 left unwrapped. Live validation
+> (`npm run smoke:cdp`, and a focus-free mechanism harness) showed this is false:
+> the CDP `Fetch` domain does not emit `Fetch.requestPaused` for `ws://`/`wss://`
+> handshakes (measured — `pausedFetch` is always empty for ws), so
+> `decideFetchRequest` never sees them. `Network.setBlockedURLs` *can* block ws in
+> a clean debugger session with scheme-anchored patterns, but on the live
+> extension's session (Fetch + Network + detection sharing one client) it raced
+> the handshake and leaked intermittently — unreliable enough that shipping it
+> behind a "closed" claim would be an overclaim. So this increment does **not**
+> attempt WebSocket blocking. The vectors it DOES close, reliably and validated
+> end-to-end, are: `fetch`/XHR, EventSource, element-`src`, Worker and iframe
+> fetch, and navigation, for blocked domains. WebSocket to a blocked domain
+> remains open and is disclosed as such in every user-facing surface. The clean
+> fix is `declarativeNetRequest` (`resourceTypes: ['websocket']`, per-tab session
+> rules block ws deterministically), which needs a new permission and belongs to
+> ADR-008 R2 (DNR complement), not this increment. Wherever this document below
+> lists "WebSocket" among the closed vectors, read it as superseded here.
+
 ## Decision
 
 Add an **opt-in, delegation-scoped, per-tab CDP enforcement layer** that mediates
