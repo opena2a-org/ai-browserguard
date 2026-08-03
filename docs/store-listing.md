@@ -23,7 +23,7 @@ When an AI agent (Playwright, Puppeteer, Selenium, Anthropic Computer Use, OpenA
 
 SCOPE AND LIMITATIONS
 
-External automation frameworks (Playwright, Puppeteer, Selenium, Anthropic Computer Use, OpenAI Operator) drive the browser over the Chrome DevTools Protocol with native input. AI Browser Guard detects and alerts on these agents, and its kill switch closes the tab they control, but it does not block their individual actions and cannot see their clicks, typing, or screenshots in the timeline. A browser extension cannot enforce per-action policy against a framework that owns the tab's debugger slot; the only categorical block is a managed-Chrome policy (RemoteDebuggingAllowed=false), and modern Chrome already blocks remote debugging of your default profile by default. The delegation presets and per-action blocking below apply to IN-PAGE / injected automation only, best-effort. If a session report shows few or no actions for an external agent, that means its actions were not observable, not that nothing happened.
+External automation frameworks (Playwright, Puppeteer, Selenium, Anthropic Computer Use, OpenAI Operator) drive the browser over the Chrome DevTools Protocol with native input. AI Browser Guard detects and alerts on these agents, and its kill switch closes the tab they control, but it does not block their individual actions and cannot see their clicks, typing, or screenshots in the timeline. A browser extension cannot tell a framework's native input apart from yours, so per-action policy cannot be enforced against them; the only categorical block is a managed-Chrome policy (RemoteDebuggingAllowed=false), and modern Chrome already blocks remote debugging of your default profile by default. The delegation presets and per-action blocking below apply to IN-PAGE / injected automation only, best-effort. If a session report shows few or no actions for an external agent, that means its actions were not observable, not that nothing happened.
 
 FIVE CORE FEATURES
 
@@ -36,8 +36,10 @@ FIVE CORE FEATURES
 3. Delegation Wizard
    Define what agents can and cannot do before they connect:
    - Read-Only: Navigate and read, no clicking or typing
-   - Limited: Interact with specific sites you choose, with time limits (15min / 1hr / 4hr)
+   - Limited: Interact with specific sites you choose — and name sites the agent must never touch — with time limits (15min / 1hr / 4hr)
    - Full Access: Everything allowed, with logging and alerts
+
+   An optional Browser-layer blocking setting (off by default) enforces the sites you blocked below the page, at the browser's network layer, for tabs under an active delegation. It blocks the paths to a blocked domain that in-page protection cannot reach — page requests, hidden image requests, background workers, and navigating there — and cannot be undone by a page tampering with in-page protections. (WebSocket connections are the one exception this layer does not block; a future update will close that gap.) While it is active on a delegated tab, Chrome shows its standard "AI Browser Guard has started debugging this browser" bar; enforcement and the bar are removed the moment the delegation ends, the tab closes, or you turn it off. It never touches tabs you have not delegated.
 
 4. Boundary Violation Alerts
    When an IN-PAGE agent attempts a scripted navigation, form submission, click, keystroke, new-tab open, or download outside its delegation scope, the action is blocked (best-effort) and you receive a notification showing what was attempted, which rule blocked it, and the option to allow it once. External CDP frameworks drive via native input these alerts cannot see -- for those, rely on detection and the kill switch. (DOM reads, injected scripts, and screenshots are not blocked; use the kill switch to close the agent's tab.)
@@ -107,7 +109,7 @@ Required to schedule periodic checks for delegation rule expiration and detectio
 Required to alert the user when an AI agent attempts an action that violates the active delegation rules.
 
 ### debugger
-Required to detect when an automation framework (Playwright, Puppeteer) attaches a Chrome DevTools Protocol (CDP) debugger to the browser. CDP attachment is one of the core, hard-to-spoof signals that an AI agent has taken control. The extension uses this permission only to observe debugger attachment for detection; it does not read page content or inject code through the debugger.
+Required to detect when an automation framework (Playwright, Puppeteer) attaches a Chrome DevTools Protocol (CDP) debugger to the browser — one of the core, hard-to-spoof signals that an AI agent has taken control — and, when the user enables the optional Browser-layer blocking setting, to attach a CDP session to tabs the user has delegated to an agent so network requests to the user's blocked sites are blocked at the browser layer. The extension does not read page content or inject code through the debugger, and it detaches when the delegation ends, the tab closes, or the setting is turned off.
 
 ### downloads
 Required to monitor downloads created while an AI agent is active, so agent-initiated downloads can be detected and cancelled when your delegation rules do not permit them (your own downloads are never flagged or blocked), and to save a session report as a JSON file when you choose to export it from the popup.

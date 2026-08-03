@@ -7,7 +7,9 @@ import {
   clearAiSafetyCache,
   getAiSafetyCacheSize,
   getStoredEntryCount,
+  getUnreachableFailureCount,
   MAX_CACHE_ENTRIES,
+  CACHE_FORMAT_VERSION,
 } from './cache';
 import type { AiSafetyLookupResult } from './types';
 
@@ -173,7 +175,7 @@ describe('cap and eviction', () => {
     await writeCachedLookup('https://new.example', OK, TTL);
     // The expired entry is dropped from storage, not merely hidden on read.
     const stored = await chrome.storage.local.get('aiSafetyDeclarationCache');
-    expect(Object.keys(stored.aiSafetyDeclarationCache)).toEqual(['https://new.example']);
+    expect(Object.keys(stored.aiSafetyDeclarationCache.entries)).toEqual(['https://new.example']);
   });
 });
 
@@ -217,8 +219,11 @@ describe('corrupt storage is not trusted', () => {
       // "https://..."), but this loop reads whatever is on disk.
       await chrome.storage.local.set({
         aiSafetyDeclarationCache: {
-          [key]: { result: OK, expiresAt: Date.now() + TTL, seq: 1 },
-          'https://real.example': { result: OK, expiresAt: Date.now() + TTL, seq: 2 },
+          v: CACHE_FORMAT_VERSION,
+          entries: {
+            [key]: { result: OK, expiresAt: Date.now() + TTL, seq: 1 },
+            'https://real.example': { result: OK, expiresAt: Date.now() + TTL, seq: 2 },
+          },
         },
       });
 
@@ -234,8 +239,11 @@ describe('corrupt storage is not trusted', () => {
   it('keeps valid entries alongside dropped ones', async () => {
     await chrome.storage.local.set({
       aiSafetyDeclarationCache: {
-        'https://good.example': { result: OK, expiresAt: Date.now() + TTL, seq: 1 },
-        'https://bad.example': { result: { status: 'ok' } },
+        v: CACHE_FORMAT_VERSION,
+        entries: {
+          'https://good.example': { result: OK, expiresAt: Date.now() + TTL, seq: 1 },
+          'https://bad.example': { result: { status: 'ok' } },
+        },
       },
     });
     expect(await readCachedLookup('https://good.example')).toEqual(OK);
@@ -321,5 +329,158 @@ describe('writeCachedLookupUnlessCleared voids a write that a clear raced', () =
     } finally {
       if (original) set.mockImplementation(original);
     }
+  });
+});
+
+describe('cache format versioning', () => {
+  it('drops a pre-versioning (0.6.x) flat record instead of serving it', async () => {
+    // The 0.6.x format was a bare Record<origin, entry> under the same key.
+    // Its entries pass the per-entry shape check, so without the version gate
+    // they would be SERVED by a build whose format has moved on.
+    await chrome.storage.local.set({
+      aiSafetyDeclarationCache: {
+        'https://legacy.example': { result: OK, expiresAt: Date.now() + TTL, seq: 1 },
+      },
+    });
+    expect(await readCachedLookup('https://legacy.example')).toBeNull();
+    expect(await getAiSafetyCacheSize()).toBe(0);
+  });
+
+  it('drops a FUTURE format version instead of half-parsing it', async () => {
+    await chrome.storage.local.set({
+      aiSafetyDeclarationCache: {
+        v: CACHE_FORMAT_VERSION + 1,
+        entries: {
+          'https://future.example': { result: OK, expiresAt: Date.now() + TTL, seq: 1 },
+        },
+      },
+    });
+    expect(await readCachedLookup('https://future.example')).toBeNull();
+  });
+
+  it('still counts legacy bytes for the opt-out deleter', async () => {
+    // The reader must not serve a legacy record, but the opt-out promise is
+    // about bytes on disk — the deleter must still see them as outstanding.
+    await chrome.storage.local.set({
+      aiSafetyDeclarationCache: {
+        'https://legacy-a.example': { result: OK, expiresAt: Date.now() + TTL, seq: 1 },
+        'https://legacy-b.example': { result: OK, expiresAt: 0, seq: 2 },
+      },
+    });
+    expect(await getStoredEntryCount()).toBe(2);
+    await clearAiSafetyCache();
+    expect(await getStoredEntryCount()).toBe(0);
+  });
+
+  it('writes the current version wrapper', async () => {
+    await writeCachedLookup('https://example.com', OK, TTL);
+    const stored = await chrome.storage.local.get('aiSafetyDeclarationCache');
+    expect(stored.aiSafetyDeclarationCache.v).toBe(CACHE_FORMAT_VERSION);
+    expect(Object.keys(stored.aiSafetyDeclarationCache.entries)).toEqual(['https://example.com']);
+  });
+});
+
+describe('unreachable failure count', () => {
+  const UNREACHABLE: AiSafetyLookupResult = { status: 'unreachable' };
+
+  it('is 0 for a missing origin', async () => {
+    expect(await getUnreachableFailureCount('https://example.com')).toBe(0);
+  });
+
+  it('is 0 when the last settle was ok/none', async () => {
+    await writeCachedLookup('https://example.com', OK, TTL);
+    expect(await getUnreachableFailureCount('https://example.com')).toBe(0);
+  });
+
+  it('reads the recorded count back', async () => {
+    await writeCachedLookup('https://example.com', UNREACHABLE, TTL, { failures: 3 });
+    expect(await getUnreachableFailureCount('https://example.com')).toBe(3);
+  });
+
+  it('reads the count from an EXPIRED entry — that is the retry moment it exists for', async () => {
+    vi.useFakeTimers();
+    await writeCachedLookup('https://example.com', UNREACHABLE, 1000, { failures: 2 });
+    vi.advanceTimersByTime(5000);
+    expect(await readCachedLookup('https://example.com')).toBeNull();
+    expect(await getUnreachableFailureCount('https://example.com')).toBe(2);
+  });
+
+  it('treats a counter-less unreachable entry as one failure (pre-backoff write)', async () => {
+    await writeCachedLookup('https://example.com', UNREACHABLE, TTL);
+    expect(await getUnreachableFailureCount('https://example.com')).toBe(1);
+  });
+
+  it('an ok settle resets the count', async () => {
+    await writeCachedLookup('https://example.com', UNREACHABLE, TTL, { failures: 4 });
+    await writeCachedLookup('https://example.com', OK, TTL);
+    expect(await getUnreachableFailureCount('https://example.com')).toBe(0);
+  });
+});
+
+describe('concurrent clear/write chaos', () => {
+  // chrome.storage.local has no atomic read-modify-write and the opt-out's
+  // clear races in-flight lookups. Enumerate every enqueue order of
+  // {guarded write, clear, guarded write} — the lock serializes execution in
+  // enqueue order, so these ARE the reachable interleavings — and assert the
+  // one invariant that must survive all of them: a write whose generation was
+  // captured before the LAST clear never leaves bytes on disk.
+  it('a stale-generation write never lands, in any enqueue order', async () => {
+    const OKB: AiSafetyLookupResult = { status: 'ok', declaration: { aiSafe: false } };
+    const orders: Array<Array<'w1' | 'w2' | 'clear'>> = [
+      ['w1', 'clear', 'w2'],
+      ['w1', 'w2', 'clear'],
+      ['clear', 'w1', 'w2'],
+    ];
+    for (const order of orders) {
+      await clearAiSafetyCache();
+      const gen = getClearGeneration(); // both writes capture a pre-clear generation
+      const ops = {
+        w1: () => writeCachedLookupUnlessCleared('https://w1.example', OK, TTL, gen),
+        w2: () => writeCachedLookupUnlessCleared('https://w2.example', OKB, TTL, gen),
+        clear: () => clearAiSafetyCache(),
+      };
+      const settled = await Promise.all(order.map((k) => ops[k]()));
+      const outcomes = Object.fromEntries(order.map((k, i) => [k, settled[i]]));
+
+      const clearIdx = order.indexOf('clear');
+      for (const key of ['w1', 'w2'] as const) {
+        const expectWritten = order.indexOf(key) < clearIdx;
+        expect(outcomes[key], `${key} in order [${order.join(',')}]`)
+          .toBe(expectWritten ? 'written' : 'revoked');
+      }
+      // Regardless of order: after the clear has been part of the schedule,
+      // anything written BEFORE it was deleted and anything after was revoked,
+      // so nothing survives on disk.
+      const clearedBeforeSomeWrite = clearIdx < order.length - 1;
+      const size = await getAiSafetyCacheSize();
+      const stored = await getStoredEntryCount();
+      if (clearedBeforeSomeWrite) {
+        // Writes enqueued after the clear were revoked; only pre-clear writes
+        // could have landed and the clear wiped them.
+        expect(size, `order [${order.join(',')}]`).toBe(0);
+        expect(stored, `order [${order.join(',')}]`).toBe(0);
+      } else {
+        // clear last: everything written first, then wiped.
+        expect(size).toBe(0);
+        expect(stored).toBe(0);
+      }
+    }
+  });
+
+  it('interleaved unconditional writes and clears keep the chain live and end clean', async () => {
+    // 20 writes racing 4 clears through the same lock: whatever the ordering,
+    // the module must not deadlock, must not reject, and a final clear must
+    // leave zero bytes.
+    const burst = [];
+    for (let i = 0; i < 20; i++) {
+      burst.push(writeCachedLookup(`https://origin-${i}.example`, OK, TTL));
+      if (i % 5 === 4) burst.push(clearAiSafetyCache());
+    }
+    await Promise.all(burst);
+    await clearAiSafetyCache();
+    expect(await getStoredEntryCount()).toBe(0);
+    // The chain still works after the storm.
+    await writeCachedLookup('https://after.example', OK, TTL);
+    expect(await readCachedLookup('https://after.example')).toEqual(OK);
   });
 });

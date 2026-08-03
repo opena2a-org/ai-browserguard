@@ -2,6 +2,87 @@
 
 All notable changes to AI Browser Guard are documented here.
 
+## 0.7.0 - 2026-08-03
+
+Browser-layer (CDP/debugger) enforcement of blocked domains — the repatch-immune
+egress layer ADR-007 designed — taken from unit-tested to validated against a
+real Chrome, plus the review-follow-up hardening batch, in one Web Store
+submission.
+
+### Added
+- **Browser-layer blocking (opt-in, default off) — ADR-007.** For the sites a
+  user explicitly *blocks* in a delegation, egress is now enforced below the page
+  on the `chrome.debugger` CDP `Fetch` domain, for tabs under an active
+  delegation. A hostile page that re-patches the in-page interceptor cannot
+  undo it, and it closes the vectors the page-realm deny left unwrapped —
+  EventSource, element-`src` (`new Image().src`, `<script>`/`<link>`), Worker and
+  iframe fetch, and navigation to the blocked domain. (WebSocket is the one
+  vector this layer does NOT close: the CDP `Fetch` domain cannot pause ws
+  handshakes and Network-level ws blocking proved unreliable on the live
+  debugger session — a ws to a blocked domain still connects, disclosed in the
+  docs and store listing; deterministic ws blocking is deferred to a future
+  `declarativeNetRequest` complement, ADR-008 R2.) Enabled by the
+  new `cdpEnforcementEnabled` setting; attaches only when an agent is detected in
+  the tab under an active delegation carrying at least one block pattern; shows
+  Chrome's standard "started debugging this browser" bar while active, torn down
+  on delegation expiry/revoke, kill switch, tab close, or setting-off. On any
+  attach failure it falls back to the page-realm interceptor and never
+  hard-blocks the user's own browsing. It carries no agent-vs-user attribution,
+  so the per-action `network-request` *capability* withhold stays in the page
+  realm — the CDP layer enforces only the deliberate, tab-wide domain blocks.
+- **Block patterns are authorable in the delegation wizard, and validated at
+  input time.** The Limited-preset sites step now offers an Allow/Block choice
+  per site (it previously created allow patterns only, so no rule a user could
+  build ever carried a block pattern — the browser-layer enforcement above had
+  nothing to act on). Block patterns are normalized and validated where they are
+  entered (as the URL matcher's contract requires), so a user-typed block cannot
+  be silently inert: a full URL is reduced to its host (a bare `https://evil.com`
+  would otherwise match no real request), a plain host blocks the apex *and* its
+  subdomains (`evil.com` also blocks `www.evil.com`), and empty / path / lone-`*`
+  / over-broad inputs are refused with a plain-language reason instead of a false
+  sense of safety. The host is canonicalized to exactly what the matcher compares
+  against — lowercased and trailing-dot-stripped (so `Evil.Com` and `evil.com.`
+  are not silently inert), with a backslash authority folded the way the browser
+  folds it, and a wildcard on the registrable tail (`*.com`, `**.com`) refused so
+  a block cannot swallow a whole public suffix. The confirm step shows each
+  pattern's action.
+- **A `block` site pattern is now a hard deny that wins over any `allow`,** in
+  both enforcement layers. Previously the page-realm evaluator was first-match-
+  wins, so a broad allow listed before a specific block shadowed it — the monitor
+  and download paths permitted a host the CDP layer blocked, i.e. the two layers
+  disagreed on the same rule. A matching block now denies regardless of order,
+  matching the CDP layer (which is block-only).
+- **`npm run smoke:cdp` — real-browser release gate.** A headful Chrome exercise
+  on the built `dist/` that proves, against a receipt-logging fixture server,
+  that each CDP-closable egress vector is blocked only while enforcement is armed
+  and flows again on every teardown path (setting-off, tab close, delegation
+  expiry across a restart, kill switch), that default-off attaches nothing, that
+  a non-delegated tab is never affected, and that WebSocket stays open under
+  enforcement (asserting the documented scope line rather than assuming it).
+- **Browser-posture guidance on external-agent cards (ADR-008 R1, version
+  half).** For a detect-only external driver, the popup now states the browser's
+  own posture: Chrome 136+ already refuses remote debugging of the default
+  profile (so an agent that reached the tab is in a separate profile or was
+  granted debugging at launch); older Chrome gets the concrete fix (update).
+
+### Changed
+- **ai-safety.txt cache is format-versioned.** The on-disk cache is now
+  `{ v, entries }`; a record written by a different format (including the 0.6.x
+  flat shape) is dropped and refetched rather than half-parsed. The opt-out
+  deleter still counts legacy bytes so nothing survives a consent revocation.
+- **ai-safety.txt unreachable refetch backs off exponentially.** Consecutive
+  `unreachable` results double the negative-cache TTL (5 min up to a 4 h cap)
+  instead of re-hitting a broken origin every 5 minutes; any `ok`/`none` result
+  resets it. Fewer requests to a third-party origin is the point (ADR-009).
+
+### Docs
+- architecture §7/§8, ADR-007, and ADR-008 updated to describe the shipped CDP
+  layer and correct the stale one-client-per-tab premise: on current
+  multi-client Chrome our attach usually succeeds alongside an external driver
+  (a strengthening ABG does not rely on against a browser-level adversary).
+- README and both store surfaces describe the opt-in Browser-layer blocking
+  setting and the `debugger` permission's enforcement use.
+
 ## 0.6.2 - 2026-07-29
 
 The remainder of the 2026-07-28 field-test findings

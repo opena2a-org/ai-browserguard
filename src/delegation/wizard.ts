@@ -49,22 +49,127 @@ export function selectPreset(state: WizardState, preset: DelegationPreset): Wiza
 }
 
 /**
- * Add a site pattern to the wizard configuration.
+ * Normalize + validate a user-typed BLOCK pattern into the effective pattern
+ * set to store, or an error string.
+ *
+ * `url/match-pattern.ts` states in binding language that callers "MUST validate
+ * block patterns at input time so a malformed block pattern is never silently
+ * inert" — because the matcher fail-CLOSES (returns false) on a non-match, and
+ * for a *block* a non-match is fail-OPEN (the request the user meant to block
+ * sails through). This is the input-time gate the wizard is the first and only
+ * author of block patterns, so it owns:
+ *
+ *  - **Host-level, not URL-level.** A browser-layer block is tab-wide and
+ *    host-scoped. A `scheme://host` pattern with no path matches NO real request
+ *    (`https://evil.com` never matches `https://evil.com/steal`), and a
+ *    path-scoped block is not meaningfully enforceable off-realm — so any URL is
+ *    reduced to its host (scheme, userinfo, port, path stripped).
+ *  - **Reject the inert / over-broad.** Empty, a lone `*`/`**` (would block the
+ *    tab's own resources), a path/whitespace, or more wildcards than the matcher
+ *    will compile (all silently inert or catastrophic) are refused with a
+ *    plain-language reason instead of being stored as a false sense of safety.
+ *  - **Cover subdomains for a plain host.** A bare `evil.com` matches only the
+ *    apex; the store copy promises the domain is blocked and users expect
+ *    `www.evil.com` blocked too. A plain host expands to `evil.com` + the
+ *    cross-label `**.evil.com`. An explicit wildcard is respected as typed.
+ */
+export function normalizeBlockPattern(input: string): { patterns: SitePattern[] } | { error: string } {
+  const badDomain = 'Enter a plain domain to block, e.g. ads.example.com.';
+  const tooBroad = 'That would block almost every site. Name a specific domain, e.g. ads.example.com.';
+
+  // Canonicalize to exactly what the matcher will COMPARE against, not just
+  // check the shape: the matcher lowercases and trailing-dot-strips the request
+  // HOST but never the pattern, so a pattern that differs in case or a trailing
+  // dot is silently inert (fail-open for a block). Lowercase up front.
+  let host = input.trim().toLowerCase();
+  if (!host) return { error: 'Pattern cannot be empty.' };
+
+  const schemeIdx = host.indexOf('://');
+  if (schemeIdx !== -1) {
+    host = host.slice(schemeIdx + 3);
+    // Authority ends at the first path separator. WHATWG folds `\` to `/` for
+    // special schemes, so BOTH end it — cutting only on `/` would parse
+    // `https://evil.com\@x.com` as host `x.com` while the browser sees `evil.com`.
+    const cut = host.search(/[/\\]/);
+    if (cut !== -1) host = host.slice(0, cut);
+    const at = host.lastIndexOf('@');
+    if (at !== -1) host = host.slice(at + 1);
+  }
+  // A :port never survives into `new URL(url).hostname`, so a pattern carrying
+  // one is inert — block the host regardless of port.
+  host = host.replace(/:\d+$/, '');
+  // Trim leading/trailing dots (FQDN / cookie-domain artifacts) and collapse
+  // over-long `*` runs, so the string equals what the matcher compiles.
+  host = host.replace(/^\.+|\.+$/g, '').replace(/\*{3,}/g, '**');
+
+  if (!host) return { error: badDomain };
+  if (/[/\\\s]/.test(host)) return { error: badDomain };
+  if ((host.match(/\*/g) ?? []).length > 4) return { error: tooBroad };
+
+  const labels = host.split('.');
+  // The registrable tail (last two labels) must be literal, so a wildcard can
+  // never sit on the TLD: this rejects `**`, `*`, `**.*`, `*.com`, `**.com`,
+  // `*.*.*.*` — each of which matches a public-suffix-wide swath and would brick
+  // the delegated tab — while still allowing `*.evil.com` / `**.evil.com`.
+  if (labels.length < 2 || labels.slice(-2).some((l) => l.includes('*'))) {
+    return { error: tooBroad };
+  }
+  // Every LITERAL label must be valid DNS syntax (1–63 chars, no leading/
+  // trailing hyphen, no empty label from `a..b`); `*`/`**` labels are wildcards.
+  for (const label of labels) {
+    if (label === '*' || label === '**') continue;
+    if (!/^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/.test(label)) {
+      return { error: badDomain };
+    }
+  }
+
+  if (host.includes('*')) {
+    // Explicit wildcard: respect the user's scope as typed (not inert — the
+    // literal-tail rule and label grammar above ruled that out).
+    return { patterns: [{ pattern: host, action: 'block' }] };
+  }
+  // Plain host: block the apex AND every subdomain.
+  return {
+    patterns: [
+      { pattern: host, action: 'block' },
+      { pattern: `**.${host}`, action: 'block' },
+    ],
+  };
+}
+
+/**
+ * Add a site pattern to the wizard configuration. Block patterns are normalized
+ * and validated at input time (see normalizeBlockPattern); a plain-host block
+ * expands to apex + subdomains, so one input can yield more than one pattern.
+ * Allow patterns are stored as typed — the matcher fail-CLOSES for allow, so an
+ * inert allow is a usability, not a safety, issue.
  */
 export function addSitePattern(state: WizardState, pattern: SitePattern): WizardState {
-  if (!pattern.pattern.trim()) {
+  const raw = pattern.pattern.trim();
+  if (!raw) {
     return { ...state, errors: ['Pattern cannot be empty.'] };
   }
 
-  // Check for duplicates
-  const exists = state.sitePatterns.some((p) => p.pattern === pattern.pattern);
-  if (exists) {
+  let toAdd: SitePattern[];
+  if (pattern.action === 'block') {
+    const norm = normalizeBlockPattern(raw);
+    if ('error' in norm) {
+      return { ...state, errors: [norm.error] };
+    }
+    toAdd = norm.patterns;
+  } else {
+    toAdd = [{ pattern: raw, action: 'allow' }];
+  }
+
+  const existing = new Set(state.sitePatterns.map((p) => `${p.action}:${p.pattern}`));
+  const fresh = toAdd.filter((p) => !existing.has(`${p.action}:${p.pattern}`));
+  if (fresh.length === 0) {
     return { ...state, errors: ['This pattern already exists.'] };
   }
 
   return {
     ...state,
-    sitePatterns: [...state.sitePatterns, pattern],
+    sitePatterns: [...state.sitePatterns, ...fresh],
     errors: [],
   };
 }
@@ -180,7 +285,7 @@ export function renderWizard(
   state: WizardState,
   onStateChange: (newState: WizardState) => void
 ): void {
-  container.innerHTML = '';
+  container.replaceChildren();
 
   // Error display
   if (state.errors.length > 0) {
@@ -242,7 +347,7 @@ function renderSitesStep(
 ): void {
   const heading = document.createElement('p');
   heading.style.cssText = 'font-size: 12px; color: var(--text-secondary); margin-bottom: 8px;';
-  heading.textContent = 'Add sites the agent can access (glob patterns):';
+  heading.textContent = 'Add sites the agent can access, and sites to block (glob patterns):';
   container.appendChild(heading);
 
   // Input row
@@ -255,19 +360,35 @@ function renderSitesStep(
   input.className = 'form-input';
   input.style.cssText = 'flex: 1;';
 
+  // Allow/Block selector. Block patterns are what the browser-layer (CDP)
+  // enforcement acts on — without this control no rule a user can author ever
+  // carries one, and that layer can never arm.
+  const actionSelect = document.createElement('select');
+  actionSelect.className = 'form-input';
+  actionSelect.id = 'wizard-site-action';
+  actionSelect.style.cssText = 'width: 76px;';
+  for (const action of ['allow', 'block'] as const) {
+    const opt = document.createElement('option');
+    opt.value = action;
+    opt.textContent = action === 'allow' ? 'Allow' : 'Block';
+    actionSelect.appendChild(opt);
+  }
+
   const addBtn = document.createElement('button');
   addBtn.className = 'btn btn-primary';
   addBtn.textContent = 'Add';
   addBtn.style.cssText = 'padding: 4px 12px; font-size: 12px;';
   addBtn.addEventListener('click', () => {
     const value = input.value.trim();
+    const action = actionSelect.value === 'block' ? 'block' : 'allow';
     if (value) {
-      onStateChange(addSitePattern(state, { pattern: value, action: 'allow' }));
+      onStateChange(addSitePattern(state, { pattern: value, action }));
       input.value = '';
     }
   });
 
   inputRow.appendChild(input);
+  inputRow.appendChild(actionSelect);
   inputRow.appendChild(addBtn);
   container.appendChild(inputRow);
 
@@ -330,15 +451,25 @@ function renderConfirmStep(
   const summary = document.createElement('div');
   summary.style.cssText = 'font-size: 12px; color: var(--text-secondary);';
 
-  let html = `<p><strong>Preset:</strong> ${info.title}</p>`;
+  // Built with textContent, never innerHTML: pattern text is user-typed and
+  // must not reach an HTML-parsing sink (same no-sink rule popup.ts is held to).
+  const addSummaryRow = (label: string, value: string): void => {
+    const p = document.createElement('p');
+    const strong = document.createElement('strong');
+    strong.textContent = `${label}: `;
+    p.appendChild(strong);
+    p.appendChild(document.createTextNode(value));
+    summary.appendChild(p);
+  };
+
+  addSummaryRow('Preset', info.title);
   if (state.sitePatterns.length > 0) {
-    html += `<p><strong>Sites:</strong> ${state.sitePatterns.map((p) => p.pattern).join(', ')}</p>`;
+    addSummaryRow('Sites', state.sitePatterns.map((p) => `${p.pattern} (${p.action})`).join(', '));
   }
   if (state.durationMinutes) {
     const opt = TIME_DURATION_OPTIONS.find((o) => o.minutes === state.durationMinutes);
-    html += `<p><strong>Duration:</strong> ${opt?.label ?? state.durationMinutes + ' minutes'}</p>`;
+    addSummaryRow('Duration', opt?.label ?? state.durationMinutes + ' minutes');
   }
-  summary.innerHTML = html;
   container.appendChild(summary);
 
   // Label input

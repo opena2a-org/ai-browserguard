@@ -22,6 +22,22 @@ import type { AiSafetyLookupResult } from './types';
 const CACHE_KEY = 'aiSafetyDeclarationCache';
 
 /**
+ * On-disk format version. Bump whenever the stored shape changes so an
+ * entry written by a different build is DROPPED rather than half-parsed.
+ *
+ * Version history:
+ *   (unversioned) — 0.6.x: a bare `Record<origin, CacheEntry>` under CACHE_KEY.
+ *   2 — `{ v: 2, entries: Record<origin, CacheEntry> }`; entries gained the
+ *       optional `failures` counter for unreachable-refetch backoff.
+ *
+ * The cost of a version mismatch is one refetch per origin on the next agent
+ * detection — the same as a TTL expiry — which is cheap. The alternative,
+ * per-field migration of a stale format, is exactly the "partially-written
+ * object handed to the popup" failure isValidEntry exists to prevent.
+ */
+export const CACHE_FORMAT_VERSION = 2;
+
+/**
  * Maximum number of origins retained. Generous relative to real use (an origin
  * only enters the cache when an agent was detected on it) while bounding
  * worst-case storage at roughly a few hundred KB.
@@ -31,6 +47,14 @@ export const MAX_CACHE_ENTRIES = 50;
 interface CacheEntry {
   result: AiSafetyLookupResult;
   expiresAt: number;
+  /**
+   * Consecutive `unreachable` settles for this origin, absent for `ok`/`none`.
+   * Drives the client's exponential refetch backoff; kept on the entry (not in
+   * a module variable) so it survives the MV3 worker unload like everything
+   * else here, and read back even from an EXPIRED entry — an expired negative
+   * entry is precisely the "we are about to retry" moment the count exists for.
+   */
+  failures?: number;
   /**
    * Write ordinal. Eviction order, kept separate from `expiresAt` because the
    * two disagree: entries have different TTLs, so "expires soonest" is not
@@ -117,6 +141,8 @@ function isValidEntry(value: unknown): value is CacheEntry {
   const entry = value as Record<string, unknown>;
   if (typeof entry.expiresAt !== 'number' || !Number.isFinite(entry.expiresAt)) return false;
   if (typeof entry.seq !== 'number' || !Number.isFinite(entry.seq)) return false;
+  if (entry.failures !== undefined
+    && (typeof entry.failures !== 'number' || !Number.isFinite(entry.failures))) return false;
 
   const result = entry.result;
   if (typeof result !== 'object' || result === null) return false;
@@ -136,6 +162,16 @@ async function readCache(): Promise<CacheShape> {
   } catch {
     return {};
   }
+  if (typeof raw !== 'object' || raw === null) return {};
+
+  // Format gate: only the current version is trusted. A pre-versioning (0.6.x)
+  // bare record, a future version, or garbage all read as empty — the entries
+  // are refetched, never reinterpreted. The stale bytes themselves are
+  // overwritten by the next write and remain covered by the opt-out delete
+  // (getStoredEntryCount counts them).
+  const wrapper = raw as Record<string, unknown>;
+  if (wrapper.v !== CACHE_FORMAT_VERSION) return {};
+  raw = wrapper.entries;
   if (typeof raw !== 'object' || raw === null) return {};
 
   // Prototype-less, so the cache has no inherited keys at all.
@@ -227,11 +263,16 @@ async function commitEntry(
   origin: string,
   result: AiSafetyLookupResult,
   ttlMs: number,
+  meta?: { failures?: number },
 ): Promise<void> {
   const now = Date.now();
   const cache = await readCache();
-  cache[origin] = { result, expiresAt: now + ttlMs, seq: nextSeq(cache) };
-  await chrome.storage.local.set({ [CACHE_KEY]: evict(cache, now) });
+  const entry: CacheEntry = { result, expiresAt: now + ttlMs, seq: nextSeq(cache) };
+  if (meta?.failures !== undefined) entry.failures = meta.failures;
+  cache[origin] = entry;
+  await chrome.storage.local.set({
+    [CACHE_KEY]: { v: CACHE_FORMAT_VERSION, entries: evict(cache, now) },
+  });
 }
 
 /**
@@ -248,10 +289,11 @@ export async function writeCachedLookup(
   origin: string,
   result: AiSafetyLookupResult,
   ttlMs: number,
+  meta?: { failures?: number },
 ): Promise<void> {
   await withCacheLock(async () => {
     try {
-      await commitEntry(origin, result, ttlMs);
+      await commitEntry(origin, result, ttlMs, meta);
     } catch {
       /* Cache writes are best-effort. */
     }
@@ -289,16 +331,32 @@ export async function writeCachedLookupUnlessCleared(
   result: AiSafetyLookupResult,
   ttlMs: number,
   sinceGeneration: number,
+  meta?: { failures?: number },
 ): Promise<GuardedWriteOutcome> {
   return withCacheLock(async () => {
     if (clearGeneration !== sinceGeneration) return 'revoked';
     try {
-      await commitEntry(origin, result, ttlMs);
+      await commitEntry(origin, result, ttlMs, meta);
       return 'written';
     } catch {
       return 'error';
     }
   });
+}
+
+/**
+ * Consecutive `unreachable` settles recorded for an origin, EXPIRED entries
+ * included — an expired negative entry is exactly the "about to retry" moment
+ * the count exists for (readCachedLookup would answer null there). 0 for a
+ * missing origin or one whose last settle was `ok`/`none`. Feeds the client's
+ * exponential refetch backoff.
+ */
+export async function getUnreachableFailureCount(origin: string): Promise<number> {
+  const cache = await readCache();
+  const entry = cache[origin];
+  if (!entry || entry.result.status !== 'unreachable') return 0;
+  // A pre-backoff unreachable entry (no counter) still represents one failure.
+  return entry.failures ?? 1;
 }
 
 /**
@@ -372,5 +430,16 @@ export async function getStoredEntryCount(): Promise<number> {
   // "serve nothing" as the DELETER's "nothing to delete".
   if (raw === undefined) return 0;
   if (typeof raw !== 'object' || raw === null) return 1;
-  return Object.keys(raw as Record<string, unknown>).length;
+  const wrapper = raw as Record<string, unknown>;
+  if (wrapper.v === CACHE_FORMAT_VERSION) {
+    // Current format: the origins live under `entries`. A wrapper whose
+    // `entries` is not an object is still unexplained bytes — count it.
+    const entries = wrapper.entries;
+    if (typeof entries !== 'object' || entries === null) return 1;
+    return Object.keys(entries as Record<string, unknown>).length;
+  }
+  // Pre-versioning (0.6.x) record or any other shape: every key is potentially
+  // an origin written by an older build. The reader won't serve these, but the
+  // opt-out promise is about bytes on disk, so the deleter must still see them.
+  return Object.keys(wrapper).length;
 }

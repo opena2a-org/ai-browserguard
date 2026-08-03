@@ -70,6 +70,41 @@ Stating this plainly prevents the overclaim the #29 narrowing (PR #44) was
 written to avoid: "browser-layer enforcement" must not be read as "we can stop
 Playwright." We cannot, by construction, and we will not say we can.
 
+> **Correction 2 (post-validation, 2026-08-03).** The one-client-per-tab premise
+> above is stale on current Chrome: multi-client DevTools protocol support means
+> `chrome.debugger.attach()` **succeeds** alongside an external CDP client, and
+> with DevTools open (measured on Chrome 145: attach + `Fetch.enable` +
+> `Fetch.requestPaused` all function while a puppeteer client drives the tab).
+> Two consequences, neither of which widens the claim: (1) blocked-domain egress
+> enforcement usually applies on externally-driven tabs too — a strengthening,
+> not a promise, because a browser-level adversary can detach us, relaunch, or
+> drive another profile, so the external-framework population's defense remains
+> detection + the ISOLATED gates + posture guidance (ADR-008 R1) + the kill
+> switch; (2) the "attach fails -> fall back to page realm" path below remains
+> the designed behavior for the attach failures that do still occur (restricted
+> targets, races with tab teardown) and is unit-covered, but DevTools-open is no
+> longer a reliable way to produce one.
+
+> **Correction 3 (post-validation, 2026-08-03) — WebSocket is NOT closed by
+> this increment.** Section 1 and the Consequences below assert the CDP layer
+> closes the WebSocket vector #50 left unwrapped. Live validation
+> (`npm run smoke:cdp`, and a focus-free mechanism harness) showed this is false:
+> the CDP `Fetch` domain does not emit `Fetch.requestPaused` for `ws://`/`wss://`
+> handshakes (measured — `pausedFetch` is always empty for ws), so
+> `decideFetchRequest` never sees them. `Network.setBlockedURLs` *can* block ws in
+> a clean debugger session with scheme-anchored patterns, but on the live
+> extension's session (Fetch + Network + detection sharing one client) it raced
+> the handshake and leaked intermittently — unreliable enough that shipping it
+> behind a "closed" claim would be an overclaim. So this increment does **not**
+> attempt WebSocket blocking. The vectors it DOES close, reliably and validated
+> end-to-end, are: `fetch`/XHR, EventSource, element-`src`, Worker and iframe
+> fetch, and navigation, for blocked domains. WebSocket to a blocked domain
+> remains open and is disclosed as such in every user-facing surface. The clean
+> fix is `declarativeNetRequest` (`resourceTypes: ['websocket']`, per-tab session
+> rules block ws deterministically), which needs a new permission and belongs to
+> ADR-008 R2 (DNR complement), not this increment. Wherever this document below
+> lists "WebSocket" among the closed vectors, read it as superseded here.
+
 ## Decision
 
 Add an **opt-in, delegation-scoped, per-tab CDP enforcement layer** that mediates
@@ -85,8 +120,8 @@ design; see "Deferred").
 the page cannot re-patch, with **per-request, agent-attributable** decisions.
 
 - **`Fetch.enable` → `Fetch.requestPaused` → `continueRequest` / `failRequest`.**
-  Mediates the full network stack (including the WebSocket/EventSource/element-src/
-  Worker vectors #50 left open) below the page realm.
+  Mediates the full network stack (EventSource/element-src/Worker vectors #50
+  left open — **NOT WebSocket, see Correction 3**) below the page realm.
 
   **Correction (post-implementation, supersedes the original attribution claim
   in this section):** the CDP `Fetch` domain pauses EVERY request on the tab and
@@ -185,8 +220,8 @@ section 1, the first increment enforces site block patterns — not the
 `network-request` capability withhold, which the CDP layer cannot attribute and
 which stays page-realm. Chosen because it (a) closes the #32 page-realm re-patch
 bypass for explicitly-blocked domains, (b) closes the concrete
-WebSocket/EventSource/element-src/Worker vectors #50 left open *for those
-domains*, and (c) reuses the site patterns and `matchUrlPattern` shipped in #50 —
+EventSource/element-src/Worker vectors #50 left open *for those domains*
+(**NOT WebSocket — Correction 3**), and (c) reuses the site patterns and `matchUrlPattern` shipped in #50 —
 no new policy surface. The page-realm interceptor remains the enforcement point
 for the `network-request` capability.
 
@@ -205,8 +240,8 @@ for the `network-request` capability.
 - Closes the #32 page-realm re-patch bypass for network egress against the
   in-page/injected-agent population it actually applies to, at a layer the page
   cannot restore.
-- Closes the WebSocket/EventSource/element-src/Worker egress vectors #50 left
-  open, via one network-layer mediator instead of wrapping each global.
+- Closes the EventSource/element-src/Worker egress vectors #50 left open (**NOT
+  WebSocket — see Correction 3**), via one network-layer mediator.
 - No new install-time permission or CWS warning (already paid).
 - Default behavior unchanged: opt-in, fresh install attaches nothing, shows no
   banner.

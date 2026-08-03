@@ -160,21 +160,29 @@ export function evaluateRule(
 
 /**
  * Check if a URL matches any site pattern in the scope.
- * First match wins.
+ *
+ * A matching `block` pattern is a HARD DENY and wins regardless of order — a
+ * user's explicit block must not be shadowed by a broader `allow` listed before
+ * it. This also keeps this page-realm decision CONSISTENT with the CDP layer
+ * (`decideFetchRequest`), which is block-only and cannot honor an allow that
+ * carves an exception under a block; without block-precedence the two
+ * enforcement layers could return opposite verdicts for the same rule and URL.
+ * Otherwise the first matching `allow` wins; with no match, the default applies.
  */
 export function evaluateSitePatterns(
   url: string,
   patterns: SitePattern[],
   defaultAction: 'allow' | 'block'
 ): { allowed: boolean; matchedPattern: SitePattern | null } {
+  let firstAllow: SitePattern | null = null;
   for (const pattern of patterns) {
-    if (matchUrlPattern(url, pattern.pattern)) {
-      return {
-        allowed: pattern.action === 'allow',
-        matchedPattern: pattern,
-      };
+    if (!matchUrlPattern(url, pattern.pattern)) continue;
+    if (pattern.action === 'block') {
+      return { allowed: false, matchedPattern: pattern };
     }
+    if (!firstAllow) firstAllow = pattern;
   }
+  if (firstAllow) return { allowed: true, matchedPattern: firstAllow };
   return { allowed: defaultAction === 'allow', matchedPattern: null };
 }
 

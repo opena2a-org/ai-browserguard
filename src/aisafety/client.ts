@@ -28,7 +28,12 @@
  */
 
 import { parseAiSafetyTxt, isEmptyDeclaration } from './parser';
-import { readCachedLookup, writeCachedLookupUnlessCleared, getClearGeneration } from './cache';
+import {
+  readCachedLookup,
+  writeCachedLookupUnlessCleared,
+  getClearGeneration,
+  getUnreachableFailureCount,
+} from './cache';
 import { getSettings } from '../session/storage';
 import type { AiSafetyLookupResult } from './types';
 
@@ -53,6 +58,19 @@ const DEFAULT_CACHE_TTL_MS = 24 * 60 * 60 * 1000;
  * detection. Longer than AIM's 30s equivalent because nothing here is urgent.
  */
 const UNREACHABLE_CACHE_TTL_MS = 5 * 60 * 1000;
+
+/**
+ * Ceiling for the unreachable-refetch backoff. Consecutive failures double the
+ * negative TTL from 5 minutes up to here, then hold. Well under the 24h
+ * positive TTL so a recovered origin is noticed the same day, while a
+ * persistently broken origin generates at most ~6 requests/day instead of ~288
+ * — each one being a fingerprintable signal to a third party (ADR-009 counts
+ * this as a privacy control, not a latency knob).
+ */
+const UNREACHABLE_BACKOFF_CAP_MS = 4 * 60 * 60 * 1000;
+
+/** Doublings beyond this cannot change the capped TTL; also bounds 2**n. */
+const MAX_BACKOFF_DOUBLINGS = 10;
 
 /**
  * Maximum bytes read from the response body. The one known real declaration is
@@ -223,6 +241,7 @@ export async function lookupAiSafetyDeclaration(
   const settle = async (
     result: AiSafetyLookupResult,
     ttlMs: number,
+    meta?: { failures?: number },
   ): Promise<AiSafetyLookupResult> => {
     // Re-check consent before storing anything. Two guards, closing different
     // halves of the same revoke-during-lookup race:
@@ -251,11 +270,33 @@ export async function lookupAiSafetyDeclaration(
       result,
       ttlMs,
       generationAtLookupStart,
+      meta,
     );
     if (outcome === 'revoked') return { status: 'unreachable' };
     // 'written', or 'error' (a best-effort cache miss with consent intact): both
     // display the freshly fetched result. Only a revoked lookup is suppressed.
     return result;
+  };
+
+  /**
+   * Settle an `unreachable` outcome with exponential backoff: each consecutive
+   * failure doubles the negative TTL (5m, 10m, 20m, ... capped at 4h), so a
+   * persistently broken origin is not re-contacted every 5 minutes for as long
+   * as an agent keeps being detected there. Any `ok`/`none` settle resets the
+   * count by overwriting the entry without a `failures` field.
+   */
+  const settleUnreachable = async (): Promise<AiSafetyLookupResult> => {
+    let priorFailures = 0;
+    try {
+      priorFailures = await getUnreachableFailureCount(origin);
+    } catch {
+      /* Unknown history reads as none; the base TTL still applies. */
+    }
+    const ttlMs = Math.min(
+      UNREACHABLE_CACHE_TTL_MS * 2 ** Math.min(priorFailures, MAX_BACKOFF_DOUBLINGS),
+      UNREACHABLE_BACKOFF_CAP_MS,
+    );
+    return settle({ status: 'unreachable' }, ttlMs, { failures: priorFailures + 1 });
   };
 
   let response: Response;
@@ -269,8 +310,8 @@ export async function lookupAiSafetyDeclaration(
       signal: AbortSignal.timeout(options?.timeoutMs ?? DEFAULT_TIMEOUT_MS),
     });
   } catch {
-    // Transport error or timeout. No signal — short negative cache.
-    return settle({ status: 'unreachable' }, UNREACHABLE_CACHE_TTL_MS);
+    // Transport error or timeout. No signal — short negative cache, backed off.
+    return settleUnreachable();
   }
 
   // A redirect is never followed. Draft section 4 requires the file to be at
@@ -293,7 +334,7 @@ export async function lookupAiSafetyDeclaration(
   // though no declaration exists, which we do — but these can be transient, so
   // they are recorded as `unreachable` and retried sooner.
   if (!response.ok) {
-    return settle({ status: 'unreachable' }, UNREACHABLE_CACHE_TTL_MS);
+    return settleUnreachable();
   }
 
   if (!isPlainText(response)) {
@@ -304,7 +345,7 @@ export async function lookupAiSafetyDeclaration(
   try {
     text = await readCappedText(response, maxBytes);
   } catch {
-    return settle({ status: 'unreachable' }, UNREACHABLE_CACHE_TTL_MS);
+    return settleUnreachable();
   }
   // Over the size cap: a stable property of what this origin serves, not a
   // transient fault.
