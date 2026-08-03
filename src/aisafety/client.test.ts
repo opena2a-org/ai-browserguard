@@ -491,7 +491,7 @@ describe('consent revoked while a lookup is in flight', () => {
 
     expect(result.status).toBe('ok');
     const stored = await chrome.storage.local.get('aiSafetyDeclarationCache');
-    expect(Object.keys(stored.aiSafetyDeclarationCache)).toEqual(['https://example.com']);
+    expect(Object.keys(stored.aiSafetyDeclarationCache.entries)).toEqual(['https://example.com']);
   });
 
   it('does not store the result when the cache is cleared mid-lookup, even while the setting still reads ON', async () => {
@@ -529,5 +529,126 @@ describe('consent revoked while a lookup is in flight', () => {
     const stored = await chrome.storage.local.get('aiSafetyDeclarationCache');
     expect(stored.aiSafetyDeclarationCache).toBeUndefined();
     expect(result).toEqual({ status: 'unreachable' });
+  });
+});
+
+describe('unreachable refetch backoff', () => {
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it('doubles the negative TTL on consecutive failures', async () => {
+    vi.useFakeTimers();
+    const FIVE_MIN = 5 * 60 * 1000;
+
+    // 1st failure: cached for 5 minutes.
+    mockFetch.mockRejectedValueOnce(new Error('refused'));
+    expect((await lookupAiSafetyDeclaration('https://down.example/')).status).toBe('unreachable');
+    expect(mockFetch).toHaveBeenCalledTimes(1);
+
+    // Still inside the 5-minute window: served from cache, no request.
+    vi.advanceTimersByTime(FIVE_MIN - 1000);
+    await lookupAiSafetyDeclaration('https://down.example/');
+    expect(mockFetch).toHaveBeenCalledTimes(1);
+
+    // Window lapsed: retried. 2nd failure doubles the TTL to 10 minutes.
+    vi.advanceTimersByTime(2000);
+    mockFetch.mockRejectedValueOnce(new Error('refused'));
+    await lookupAiSafetyDeclaration('https://down.example/');
+    expect(mockFetch).toHaveBeenCalledTimes(2);
+
+    // 5+ minutes later the flat TTL would have expired — the doubled one has not.
+    vi.advanceTimersByTime(FIVE_MIN + 1000);
+    await lookupAiSafetyDeclaration('https://down.example/');
+    expect(mockFetch).toHaveBeenCalledTimes(2);
+
+    // Past 10 minutes: retried again. 3rd failure -> 20 minutes.
+    vi.advanceTimersByTime(FIVE_MIN);
+    mockFetch.mockRejectedValueOnce(new Error('refused'));
+    await lookupAiSafetyDeclaration('https://down.example/');
+    expect(mockFetch).toHaveBeenCalledTimes(3);
+  });
+
+  it('a success resets the backoff', async () => {
+    vi.useFakeTimers();
+    const FIVE_MIN = 5 * 60 * 1000;
+
+    mockFetch.mockRejectedValueOnce(new Error('refused'));
+    await lookupAiSafetyDeclaration('https://flaky.example/');
+    vi.advanceTimersByTime(FIVE_MIN + 1000);
+
+    // Recovery: the origin answers.
+    mockFetch.mockResolvedValueOnce(textResponse(DECLARATION));
+    expect((await lookupAiSafetyDeclaration('https://flaky.example/')).status).toBe('ok');
+
+    // If it breaks again much later, the FIRST failure's TTL applies (5 min,
+    // not a remembered doubled window).
+    vi.advanceTimersByTime(25 * 60 * 60 * 1000); // past the 24h positive TTL
+    mockFetch.mockRejectedValueOnce(new Error('refused'));
+    await lookupAiSafetyDeclaration('https://flaky.example/');
+    const callsAfterBreak = mockFetch.mock.calls.length;
+
+    vi.advanceTimersByTime(FIVE_MIN + 1000); // one flat window, not a doubled one
+    mockFetch.mockRejectedValueOnce(new Error('refused'));
+    await lookupAiSafetyDeclaration('https://flaky.example/');
+    expect(mockFetch.mock.calls.length).toBe(callsAfterBreak + 1);
+  });
+
+  it('caps the backoff at 4 hours', async () => {
+    vi.useFakeTimers();
+    // Drive the counter far past the cap's doubling count.
+    for (let i = 0; i < 12; i++) {
+      mockFetch.mockRejectedValueOnce(new Error('refused'));
+      await lookupAiSafetyDeclaration('https://dead.example/');
+      vi.advanceTimersByTime(4 * 60 * 60 * 1000 + 1000); // step past even the cap
+    }
+    const calls = mockFetch.mock.calls.length;
+    expect(calls).toBe(12); // every step retried: the TTL never exceeded 4h + 1s
+
+    // And 4h - 1s after the last failure it is still cached (the cap held both ways).
+    mockFetch.mockRejectedValueOnce(new Error('refused'));
+    await lookupAiSafetyDeclaration('https://dead.example/');
+    vi.advanceTimersByTime(4 * 60 * 60 * 1000 - 1000);
+    await lookupAiSafetyDeclaration('https://dead.example/');
+    expect(mockFetch.mock.calls.length).toBe(calls + 1);
+  });
+});
+
+describe('hostile page URLs cannot widen the fetch target', () => {
+  // The fetch URL is always `origin + /.well-known/ai-safety.txt` where origin
+  // comes from WHATWG URL parsing. These pin the parser against the classic
+  // confusion shapes so a refactor to string handling cannot reintroduce them.
+  it('backslash ends the authority — the host is the part BEFORE it', () => {
+    // In special schemes `\` is a path separator: everything after it is path,
+    // so a naive "up to the @" reading would invert the actual host.
+    expect(declarationOriginFor('https://good.example\\@evil.example/')).toBe('https://good.example');
+    expect(declarationOriginFor('https://good.example\\evil.example/x')).toBe('https://good.example');
+  });
+
+  it('rejects a %00 in the hostname outright', () => {
+    expect(declarationOriginFor('https://good.example%00.evil.example/')).toBeNull();
+  });
+
+  it('path traversal cannot reach the origin', () => {
+    expect(declarationOriginFor('https://good.example/..%2f..%2fetc/passwd')).toBe('https://good.example');
+    expect(declarationOriginFor('https://good.example/../../.well-known/other')).toBe('https://good.example');
+  });
+
+  it('normalizes scheme and host case', () => {
+    expect(declarationOriginFor('HTTPS://EXAMPLE.COM/Page')).toBe('https://example.com');
+  });
+
+  it('rejects non-http(s) schemes that URL parses happily', () => {
+    expect(declarationOriginFor('javascript:alert(1)')).toBeNull();
+    expect(declarationOriginFor('file:///etc/passwd')).toBeNull();
+    expect(declarationOriginFor('data:text/html,x')).toBeNull();
+    expect(declarationOriginFor('ftp://example.com/x')).toBeNull();
+  });
+
+  it('rejects whitespace-wrapped and embedded-newline URLs the parser strips', () => {
+    // WHATWG strips leading/trailing C0 controls and tabs/newlines INSIDE the
+    // URL, so these parse — the origin must still be the real host.
+    expect(declarationOriginFor('  https://example.com/  ')).toBe('https://example.com');
+    expect(declarationOriginFor('https://exam\nple.com/')).toBe('https://example.com');
   });
 });
