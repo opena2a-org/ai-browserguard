@@ -120,8 +120,8 @@ design; see "Deferred").
 the page cannot re-patch, with **per-request, agent-attributable** decisions.
 
 - **`Fetch.enable` → `Fetch.requestPaused` → `continueRequest` / `failRequest`.**
-  Mediates the full network stack (including the WebSocket/EventSource/element-src/
-  Worker vectors #50 left open) below the page realm.
+  Mediates the full network stack (EventSource/element-src/Worker vectors #50
+  left open — **NOT WebSocket, see Correction 3**) below the page realm.
 
   **Correction (post-implementation, supersedes the original attribution claim
   in this section):** the CDP `Fetch` domain pauses EVERY request on the tab and
@@ -220,8 +220,8 @@ section 1, the first increment enforces site block patterns — not the
 `network-request` capability withhold, which the CDP layer cannot attribute and
 which stays page-realm. Chosen because it (a) closes the #32 page-realm re-patch
 bypass for explicitly-blocked domains, (b) closes the concrete
-WebSocket/EventSource/element-src/Worker vectors #50 left open *for those
-domains*, and (c) reuses the site patterns and `matchUrlPattern` shipped in #50 —
+EventSource/element-src/Worker vectors #50 left open *for those domains*
+(**NOT WebSocket — Correction 3**), and (c) reuses the site patterns and `matchUrlPattern` shipped in #50 —
 no new policy surface. The page-realm interceptor remains the enforcement point
 for the `network-request` capability.
 
@@ -240,8 +240,8 @@ for the `network-request` capability.
 - Closes the #32 page-realm re-patch bypass for network egress against the
   in-page/injected-agent population it actually applies to, at a layer the page
   cannot restore.
-- Closes the WebSocket/EventSource/element-src/Worker egress vectors #50 left
-  open, via one network-layer mediator instead of wrapping each global.
+- Closes the EventSource/element-src/Worker egress vectors #50 left open (**NOT
+  WebSocket — see Correction 3**), via one network-layer mediator.
 - No new install-time permission or CWS warning (already paid).
 - Default behavior unchanged: opt-in, fresh install attaches nothing, shows no
   banner.

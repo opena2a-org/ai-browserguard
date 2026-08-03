@@ -49,22 +49,110 @@ export function selectPreset(state: WizardState, preset: DelegationPreset): Wiza
 }
 
 /**
- * Add a site pattern to the wizard configuration.
+ * Normalize + validate a user-typed BLOCK pattern into the effective pattern
+ * set to store, or an error string.
+ *
+ * `url/match-pattern.ts` states in binding language that callers "MUST validate
+ * block patterns at input time so a malformed block pattern is never silently
+ * inert" — because the matcher fail-CLOSES (returns false) on a non-match, and
+ * for a *block* a non-match is fail-OPEN (the request the user meant to block
+ * sails through). This is the input-time gate the wizard is the first and only
+ * author of block patterns, so it owns:
+ *
+ *  - **Host-level, not URL-level.** A browser-layer block is tab-wide and
+ *    host-scoped. A `scheme://host` pattern with no path matches NO real request
+ *    (`https://evil.com` never matches `https://evil.com/steal`), and a
+ *    path-scoped block is not meaningfully enforceable off-realm — so any URL is
+ *    reduced to its host (scheme, userinfo, port, path stripped).
+ *  - **Reject the inert / over-broad.** Empty, a lone `*`/`**` (would block the
+ *    tab's own resources), a path/whitespace, or more wildcards than the matcher
+ *    will compile (all silently inert or catastrophic) are refused with a
+ *    plain-language reason instead of being stored as a false sense of safety.
+ *  - **Cover subdomains for a plain host.** A bare `evil.com` matches only the
+ *    apex; the store copy promises the domain is blocked and users expect
+ *    `www.evil.com` blocked too. A plain host expands to `evil.com` + the
+ *    cross-label `**.evil.com`. An explicit wildcard is respected as typed.
+ */
+export function normalizeBlockPattern(input: string): { patterns: SitePattern[] } | { error: string } {
+  let host = input.trim();
+  if (!host) return { error: 'Pattern cannot be empty.' };
+
+  const schemeIdx = host.indexOf('://');
+  if (schemeIdx !== -1) {
+    host = host.slice(schemeIdx + 3);
+    const slash = host.indexOf('/');
+    if (slash !== -1) host = host.slice(0, slash);
+    const at = host.lastIndexOf('@');
+    if (at !== -1) host = host.slice(at + 1);
+    const colon = host.lastIndexOf(':');
+    if (colon !== -1) host = host.slice(0, colon);
+  }
+  // Strip a trailing :port even without a scheme — the matcher tests
+  // `new URL(url).hostname`, which never carries a port, so `evil.com:8080`
+  // would be inert. Block the host regardless of port.
+  host = host.replace(/:\d+$/, '');
+  // Collapse runs of `*` the matcher would collapse anyway, so the wildcard cap
+  // is measured on the same string it compiles.
+  host = host.replace(/\*{3,}/g, '**');
+
+  if (!host) return { error: 'Enter a domain to block, e.g. tracker.example.com.' };
+  if (/[/\s]/.test(host)) return { error: 'Enter a domain to block, not a path or full URL (e.g. ads.example.com).' };
+  if (host === '*' || host === '**') return { error: 'That would block every site. Name a specific domain to block.' };
+  if ((host.match(/\*/g) ?? []).length > 4) return { error: 'Too many wildcards — name a specific domain to block.' };
+  // A host is ASCII letters/digits/dot/hyphen plus the glob `*` (the matcher
+  // documents ASCII/punycode patterns only). Anything else — `:`, `@`, unicode,
+  // control chars — cannot match a normalized hostname and would be inert.
+  if (!/^[a-zA-Z0-9.*-]+$/.test(host)) {
+    return { error: 'Enter a plain domain (letters, digits, dots, and hyphens), e.g. ads.example.com.' };
+  }
+
+  if (host.includes('*')) {
+    // Explicit wildcard: respect the user's scope as typed (it is not inert —
+    // the caps above rule that out).
+    return { patterns: [{ pattern: host, action: 'block' }] };
+  }
+  // Plain host: block the apex AND every subdomain.
+  return {
+    patterns: [
+      { pattern: host, action: 'block' },
+      { pattern: `**.${host}`, action: 'block' },
+    ],
+  };
+}
+
+/**
+ * Add a site pattern to the wizard configuration. Block patterns are normalized
+ * and validated at input time (see normalizeBlockPattern); a plain-host block
+ * expands to apex + subdomains, so one input can yield more than one pattern.
+ * Allow patterns are stored as typed — the matcher fail-CLOSES for allow, so an
+ * inert allow is a usability, not a safety, issue.
  */
 export function addSitePattern(state: WizardState, pattern: SitePattern): WizardState {
-  if (!pattern.pattern.trim()) {
+  const raw = pattern.pattern.trim();
+  if (!raw) {
     return { ...state, errors: ['Pattern cannot be empty.'] };
   }
 
-  // Check for duplicates
-  const exists = state.sitePatterns.some((p) => p.pattern === pattern.pattern);
-  if (exists) {
+  let toAdd: SitePattern[];
+  if (pattern.action === 'block') {
+    const norm = normalizeBlockPattern(raw);
+    if ('error' in norm) {
+      return { ...state, errors: [norm.error] };
+    }
+    toAdd = norm.patterns;
+  } else {
+    toAdd = [{ pattern: raw, action: 'allow' }];
+  }
+
+  const existing = new Set(state.sitePatterns.map((p) => `${p.action}:${p.pattern}`));
+  const fresh = toAdd.filter((p) => !existing.has(`${p.action}:${p.pattern}`));
+  if (fresh.length === 0) {
     return { ...state, errors: ['This pattern already exists.'] };
   }
 
   return {
     ...state,
-    sitePatterns: [...state.sitePatterns, pattern],
+    sitePatterns: [...state.sitePatterns, ...fresh],
     errors: [],
   };
 }

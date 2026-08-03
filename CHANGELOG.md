@@ -30,11 +30,17 @@ submission.
   hard-blocks the user's own browsing. It carries no agent-vs-user attribution,
   so the per-action `network-request` *capability* withhold stays in the page
   realm — the CDP layer enforces only the deliberate, tab-wide domain blocks.
-- **Block patterns are authorable in the delegation wizard.** The Limited-preset
-  sites step now offers an Allow/Block choice per site (it previously created
-  allow patterns only, so no rule a user could build ever carried a block
-  pattern — the browser-layer enforcement above had nothing to act on). The
-  confirm step shows each pattern's action.
+- **Block patterns are authorable in the delegation wizard, and validated at
+  input time.** The Limited-preset sites step now offers an Allow/Block choice
+  per site (it previously created allow patterns only, so no rule a user could
+  build ever carried a block pattern — the browser-layer enforcement above had
+  nothing to act on). Block patterns are normalized and validated where they are
+  entered (as the URL matcher's contract requires), so a user-typed block cannot
+  be silently inert: a full URL is reduced to its host (a bare `https://evil.com`
+  would otherwise match no real request), a plain host blocks the apex *and* its
+  subdomains (`evil.com` also blocks `www.evil.com`), and empty / path / lone-`*`
+  / over-broad inputs are refused with a plain-language reason instead of a false
+  sense of safety. The confirm step shows each pattern's action.
 - **`npm run smoke:cdp` — real-browser release gate.** A headful Chrome exercise
   on the built `dist/` that proves, against a receipt-logging fixture server,
   that each CDP-closable egress vector is blocked only while enforcement is armed
