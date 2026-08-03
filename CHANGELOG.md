@@ -40,7 +40,18 @@ submission.
   would otherwise match no real request), a plain host blocks the apex *and* its
   subdomains (`evil.com` also blocks `www.evil.com`), and empty / path / lone-`*`
   / over-broad inputs are refused with a plain-language reason instead of a false
-  sense of safety. The confirm step shows each pattern's action.
+  sense of safety. The host is canonicalized to exactly what the matcher compares
+  against — lowercased and trailing-dot-stripped (so `Evil.Com` and `evil.com.`
+  are not silently inert), with a backslash authority folded the way the browser
+  folds it, and a wildcard on the registrable tail (`*.com`, `**.com`) refused so
+  a block cannot swallow a whole public suffix. The confirm step shows each
+  pattern's action.
+- **A `block` site pattern is now a hard deny that wins over any `allow`,** in
+  both enforcement layers. Previously the page-realm evaluator was first-match-
+  wins, so a broad allow listed before a specific block shadowed it — the monitor
+  and download paths permitted a host the CDP layer blocked, i.e. the two layers
+  disagreed on the same rule. A matching block now denies regardless of order,
+  matching the CDP layer (which is block-only).
 - **`npm run smoke:cdp` — real-browser release gate.** A headful Chrome exercise
   on the built `dist/` that proves, against a receipt-logging fixture server,
   that each CDP-closable egress vector is blocked only while enforcement is armed

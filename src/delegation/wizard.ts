@@ -74,41 +74,58 @@ export function selectPreset(state: WizardState, preset: DelegationPreset): Wiza
  *    cross-label `**.evil.com`. An explicit wildcard is respected as typed.
  */
 export function normalizeBlockPattern(input: string): { patterns: SitePattern[] } | { error: string } {
-  let host = input.trim();
+  const badDomain = 'Enter a plain domain to block, e.g. ads.example.com.';
+  const tooBroad = 'That would block almost every site. Name a specific domain, e.g. ads.example.com.';
+
+  // Canonicalize to exactly what the matcher will COMPARE against, not just
+  // check the shape: the matcher lowercases and trailing-dot-strips the request
+  // HOST but never the pattern, so a pattern that differs in case or a trailing
+  // dot is silently inert (fail-open for a block). Lowercase up front.
+  let host = input.trim().toLowerCase();
   if (!host) return { error: 'Pattern cannot be empty.' };
 
   const schemeIdx = host.indexOf('://');
   if (schemeIdx !== -1) {
     host = host.slice(schemeIdx + 3);
-    const slash = host.indexOf('/');
-    if (slash !== -1) host = host.slice(0, slash);
+    // Authority ends at the first path separator. WHATWG folds `\` to `/` for
+    // special schemes, so BOTH end it — cutting only on `/` would parse
+    // `https://evil.com\@x.com` as host `x.com` while the browser sees `evil.com`.
+    const cut = host.search(/[/\\]/);
+    if (cut !== -1) host = host.slice(0, cut);
     const at = host.lastIndexOf('@');
     if (at !== -1) host = host.slice(at + 1);
-    const colon = host.lastIndexOf(':');
-    if (colon !== -1) host = host.slice(0, colon);
   }
-  // Strip a trailing :port even without a scheme — the matcher tests
-  // `new URL(url).hostname`, which never carries a port, so `evil.com:8080`
-  // would be inert. Block the host regardless of port.
+  // A :port never survives into `new URL(url).hostname`, so a pattern carrying
+  // one is inert — block the host regardless of port.
   host = host.replace(/:\d+$/, '');
-  // Collapse runs of `*` the matcher would collapse anyway, so the wildcard cap
-  // is measured on the same string it compiles.
-  host = host.replace(/\*{3,}/g, '**');
+  // Trim leading/trailing dots (FQDN / cookie-domain artifacts) and collapse
+  // over-long `*` runs, so the string equals what the matcher compiles.
+  host = host.replace(/^\.+|\.+$/g, '').replace(/\*{3,}/g, '**');
 
-  if (!host) return { error: 'Enter a domain to block, e.g. tracker.example.com.' };
-  if (/[/\s]/.test(host)) return { error: 'Enter a domain to block, not a path or full URL (e.g. ads.example.com).' };
-  if (host === '*' || host === '**') return { error: 'That would block every site. Name a specific domain to block.' };
-  if ((host.match(/\*/g) ?? []).length > 4) return { error: 'Too many wildcards — name a specific domain to block.' };
-  // A host is ASCII letters/digits/dot/hyphen plus the glob `*` (the matcher
-  // documents ASCII/punycode patterns only). Anything else — `:`, `@`, unicode,
-  // control chars — cannot match a normalized hostname and would be inert.
-  if (!/^[a-zA-Z0-9.*-]+$/.test(host)) {
-    return { error: 'Enter a plain domain (letters, digits, dots, and hyphens), e.g. ads.example.com.' };
+  if (!host) return { error: badDomain };
+  if (/[/\\\s]/.test(host)) return { error: badDomain };
+  if ((host.match(/\*/g) ?? []).length > 4) return { error: tooBroad };
+
+  const labels = host.split('.');
+  // The registrable tail (last two labels) must be literal, so a wildcard can
+  // never sit on the TLD: this rejects `**`, `*`, `**.*`, `*.com`, `**.com`,
+  // `*.*.*.*` — each of which matches a public-suffix-wide swath and would brick
+  // the delegated tab — while still allowing `*.evil.com` / `**.evil.com`.
+  if (labels.length < 2 || labels.slice(-2).some((l) => l.includes('*'))) {
+    return { error: tooBroad };
+  }
+  // Every LITERAL label must be valid DNS syntax (1–63 chars, no leading/
+  // trailing hyphen, no empty label from `a..b`); `*`/`**` labels are wildcards.
+  for (const label of labels) {
+    if (label === '*' || label === '**') continue;
+    if (!/^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/.test(label)) {
+      return { error: badDomain };
+    }
   }
 
   if (host.includes('*')) {
-    // Explicit wildcard: respect the user's scope as typed (it is not inert —
-    // the caps above rule that out).
+    // Explicit wildcard: respect the user's scope as typed (not inert — the
+    // literal-tail rule and label grammar above ruled that out).
     return { patterns: [{ pattern: host, action: 'block' }] };
   }
   // Plain host: block the apex AND every subdomain.

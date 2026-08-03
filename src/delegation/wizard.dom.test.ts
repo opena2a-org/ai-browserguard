@@ -159,6 +159,43 @@ describe('block-pattern normalization (match-pattern.ts input-time contract)', (
     });
   });
 
+  it('canonicalizes case and trailing/leading dots (the matcher only lowercases the request host)', () => {
+    // `Evil.Com`, `evil.com.`, `.evil.com` would all be stored verbatim and
+    // never match the lowercased, dot-stripped request host = silent fail-open.
+    for (const input of ['Evil.Com', 'EVIL.COM', 'evil.com.', '.evil.com', 'https://Evil.Com/x']) {
+      expect(normalizeBlockPattern(input), input).toEqual({
+        patterns: [
+          { pattern: 'evil.com', action: 'block' },
+          { pattern: '**.evil.com', action: 'block' },
+        ],
+      });
+    }
+  });
+
+  it('rejects wildcards on the registrable tail (would block a public-suffix-wide swath)', () => {
+    for (const input of ['*.com', '**.com', '**.*', '*.*.*.*', '**.co']) {
+      expect(normalizeBlockPattern(input), input).toHaveProperty('error');
+    }
+  });
+
+  it('parses a backslash authority the way the browser does (folds to path)', () => {
+    // The browser's real host for `https://evil.com\@good.com` is evil.com
+    // (`\` folds to `/`, so `\@good.com` is path). A `/`-only split would wrongly
+    // yield good.com. Fold `\` too, so the intended host is what gets blocked.
+    expect(normalizeBlockPattern('https://evil.com\\@good.com')).toEqual({
+      patterns: [
+        { pattern: 'evil.com', action: 'block' },
+        { pattern: '**.evil.com', action: 'block' },
+      ],
+    });
+  });
+
+  it('rejects malformed labels that would be inert', () => {
+    for (const input of ['a..b.com', '-evil.com', 'evil-.com', 'evil.com-', '.']) {
+      expect(normalizeBlockPattern(input), input).toHaveProperty('error');
+    }
+  });
+
   it('rejects the inert and the over-broad with a plain-language reason', () => {
     expect(normalizeBlockPattern('')).toHaveProperty('error');
     expect(normalizeBlockPattern('   ')).toHaveProperty('error');
@@ -193,6 +230,9 @@ describe('block-pattern normalization (match-pattern.ts input-time contract)', (
     expect(blocksVia('evil.com', 'https://evil.com/')).toBe(true);                 // apex
     expect(blocksVia('evil.com', 'https://www.evil.com/x')).toBe(true);            // subdomain
     expect(blocksVia('evil.com', 'https://a.b.evil.com/x')).toBe(true);            // deep subdomain
+    expect(blocksVia('Evil.Com', 'https://evil.com/x')).toBe(true);                // mixed case (was FALSE pre-canon)
+    expect(blocksVia('evil.com.', 'https://evil.com/x')).toBe(true);               // trailing dot (was FALSE pre-canon)
+    expect(blocksVia('evil.com:8080', 'https://evil.com/x')).toBe(true);           // bare port
     // and it does NOT over-reach to an unrelated host
     expect(blocksVia('evil.com', 'https://notevil.com/x')).toBe(false);
     expect(blocksVia('evil.com', 'https://evilXcom.example/x')).toBe(false);

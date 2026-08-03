@@ -143,7 +143,7 @@ describe('evaluateSitePatterns', () => {
     expect(result.matchedPattern).toBeNull();
   });
 
-  it('matches first pattern (first-match-wins)', () => {
+  it('matches first pattern (first-match-wins for a leading block)', () => {
     const patterns = [
       { pattern: '*.bank.com', action: 'block' as const },
       { pattern: '*.example.com', action: 'allow' as const },
@@ -151,6 +151,21 @@ describe('evaluateSitePatterns', () => {
     const result = evaluateSitePatterns('https://my.bank.com', patterns, 'allow');
     expect(result.allowed).toBe(false);
     expect(result.matchedPattern?.pattern).toBe('*.bank.com');
+  });
+
+  it('a block wins even when a broader allow is listed BEFORE it', () => {
+    // A user's explicit block must not be shadowed by an earlier allow, and the
+    // verdict must match the CDP layer (decideFetchRequest is block-only). Under
+    // the old first-match-wins this returned allowed=true, so the page-realm
+    // monitor/download path permitted the very host the user blocked while the
+    // CDP layer blocked it — the two layers disagreed on the same rule.
+    const patterns = [
+      { pattern: '*.example.com', action: 'allow' as const },
+      { pattern: 'ads.example.com', action: 'block' as const },
+    ];
+    const result = evaluateSitePatterns('https://ads.example.com/track', patterns, 'block');
+    expect(result.allowed).toBe(false);
+    expect(result.matchedPattern?.pattern).toBe('ads.example.com');
   });
 
   it('blocks by default when default is block', () => {
