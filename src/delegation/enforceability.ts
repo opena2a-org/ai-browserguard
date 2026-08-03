@@ -7,13 +7,18 @@
  *
  * Ground truth (see docs/adr/007 and 008, and the enforcement audit):
  *  - An EXTERNAL driver (Playwright/Puppeteer/Selenium/Computer-Use/Operator/raw
- *    CDP/WebDriver) owns the tab's sole debugger slot and acts via NATIVE input
- *    (`Input.dispatchMouseEvent`/`insertText`), which the browser marks
- *    `isTrusted:true`. The MAIN-world interceptor only wraps page-JS globals and
- *    only reacts to untrusted/synthetic events, and `chrome.debugger.attach`
- *    fails against a slot we don't own. So per-action enforcement is
- *    IMPOSSIBLE for this population — ABG can detect + alert + kill the tab, not
- *    block individual actions.
+ *    CDP/WebDriver) acts via NATIVE input (`Input.dispatchMouseEvent`/
+ *    `insertText`), which the browser marks `isTrusted:true`. The MAIN-world
+ *    interceptor only wraps page-JS globals and only reacts to untrusted/
+ *    synthetic events, so it never sees these actions — and no attribution
+ *    signal exists that could tell the driver's native input from the human's.
+ *    So per-ACTION enforcement is IMPOSSIBLE for this population — ABG can
+ *    detect + alert + kill the tab, not block individual actions. (This is an
+ *    attribution limit, not a debugger-slot limit: on current multi-client
+ *    Chrome our `chrome.debugger.attach` typically SUCCEEDS alongside an
+ *    external driver, which is why the tab-wide blocked-domain egress layer
+ *    (ADR-007) can still mediate network on such tabs — it needs no
+ *    attribution. It does not change the per-action verdict here.)
  *  - An IN-PAGE / injected / page-JS agent has no external CDP session; its
  *    scripted actions run through the wrapped globals, so page-realm enforcement
  *    genuinely applies (best-effort — a hostile page can still re-patch, audit #32).

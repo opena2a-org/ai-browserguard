@@ -70,6 +70,21 @@ Stating this plainly prevents the overclaim the #29 narrowing (PR #44) was
 written to avoid: "browser-layer enforcement" must not be read as "we can stop
 Playwright." We cannot, by construction, and we will not say we can.
 
+> **Correction 2 (post-validation, 2026-08-03).** The one-client-per-tab premise
+> above is stale on current Chrome: multi-client DevTools protocol support means
+> `chrome.debugger.attach()` **succeeds** alongside an external CDP client, and
+> with DevTools open (measured on Chrome 145: attach + `Fetch.enable` +
+> `Fetch.requestPaused` all function while a puppeteer client drives the tab).
+> Two consequences, neither of which widens the claim: (1) blocked-domain egress
+> enforcement usually applies on externally-driven tabs too — a strengthening,
+> not a promise, because a browser-level adversary can detach us, relaunch, or
+> drive another profile, so the external-framework population's defense remains
+> detection + the ISOLATED gates + posture guidance (ADR-008 R1) + the kill
+> switch; (2) the "attach fails -> fall back to page realm" path below remains
+> the designed behavior for the attach failures that do still occur (restricted
+> targets, races with tab teardown) and is unit-covered, but DevTools-open is no
+> longer a reliable way to produce one.
+
 ## Decision
 
 Add an **opt-in, delegation-scoped, per-tab CDP enforcement layer** that mediates

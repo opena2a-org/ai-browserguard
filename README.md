@@ -61,12 +61,14 @@ Then open `chrome://extensions`, enable Developer mode, click Load unpacked, and
 | Preset | What the Agent Can Do |
 |--------|----------------------|
 | Read-Only | Navigate and read pages. No clicking, typing, or form submission. |
-| Limited | Interact with specific sites (user-defined allowlist), time-bounded (15min/1hr/4hr). |
+| Limited | Interact with specific sites (user-defined allowlist), with sites you explicitly block, time-bounded (15min/1hr/4hr). |
 | Full Access | Unrestricted, but all actions are logged and boundary alerts remain active. |
 
 > **These presets are enforced best-effort against in-page / injected automation only.** External CDP frameworks bypass them entirely; for those agents a preset is a recorded intent, not an enforced boundary, and the kill switch (close tab) is the hard stop. See [Scope of enforcement](#what-it-does).
 
 Site allowlists and blocklists support glob patterns (e.g., `*.bank.com`).
+
+**Browser-layer blocking (opt-in, off by default).** For the sites you explicitly *block*, an optional setting enforces the block below the page at the browser's network layer (`chrome.debugger`/CDP `Fetch`, [ADR-007](docs/adr/007-cdp-layer-enforcement.md)), for tabs under an active delegation. It closes every egress path to a blocked domain — `fetch`/XHR, WebSocket, EventSource, element-`src`, worker and iframe fetches, and navigation — and a page that re-patches the in-page wrappers cannot undo it. Chrome shows its standard "started debugging this browser" bar while a delegated tab is enforced; enforcement and the bar are torn down on delegation expiry or revoke, kill switch, tab close, or turning the setting off, and on any attach failure it falls back to the page-realm interceptor rather than ever blocking your own browsing. It makes no network requests of its own. Validated end-to-end against a real Chrome by `npm run smoke:cdp`.
 
 ## Privacy
 

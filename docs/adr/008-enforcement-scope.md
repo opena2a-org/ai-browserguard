@@ -94,6 +94,10 @@ Ordered by value/cost. None shipped; each gets its own ADR before code.
   ≥136, tell the user their default profile is already protected from remote
   debugging; for managed environments, surface a `RemoteDebuggingAllowed=false`
   explainer. Extension-only; ships next.
+  *Shipped 0.7.0 (version half):* external-agent cards state the browser's own
+  posture (`src/delegation/posture.ts`) — Chrome 136+ already refuses remote
+  debugging of the default profile; older Chrome gets the concrete fix (update).
+  Version-derived only; the managed-policy explainer half stays open with R4.
 - **R2 — declarativeNetRequest domain blocklist (opt-in).** Coarse, zero-banner
   egress blocklist, scoped honestly (no per-initiator attribution).
 - **R3 — Native-messaging companion (opt-in).** A signed host that can detect a
