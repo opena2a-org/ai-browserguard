@@ -426,7 +426,7 @@ describe('concurrent clear/write chaos', () => {
   // captured before the LAST clear never leaves bytes on disk.
   it('a stale-generation write never lands, in any enqueue order', async () => {
     const OKB: AiSafetyLookupResult = { status: 'ok', declaration: { aiSafe: false } };
-    const orders = [
+    const orders: Array<Array<'w1' | 'w2' | 'clear'>> = [
       ['w1', 'clear', 'w2'],
       ['w1', 'w2', 'clear'],
       ['clear', 'w1', 'w2'],
@@ -443,7 +443,7 @@ describe('concurrent clear/write chaos', () => {
       const outcomes = Object.fromEntries(order.map((k, i) => [k, settled[i]]));
 
       const clearIdx = order.indexOf('clear');
-      for (const key of ['w1', 'w2']) {
+      for (const key of ['w1', 'w2'] as const) {
         const expectWritten = order.indexOf(key) < clearIdx;
         expect(outcomes[key], `${key} in order [${order.join(',')}]`)
           .toBe(expectWritten ? 'written' : 'revoked');
