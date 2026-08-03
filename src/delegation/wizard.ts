@@ -180,7 +180,7 @@ export function renderWizard(
   state: WizardState,
   onStateChange: (newState: WizardState) => void
 ): void {
-  container.innerHTML = '';
+  container.replaceChildren();
 
   // Error display
   if (state.errors.length > 0) {
@@ -242,7 +242,7 @@ function renderSitesStep(
 ): void {
   const heading = document.createElement('p');
   heading.style.cssText = 'font-size: 12px; color: var(--text-secondary); margin-bottom: 8px;';
-  heading.textContent = 'Add sites the agent can access (glob patterns):';
+  heading.textContent = 'Add sites the agent can access, and sites to block (glob patterns):';
   container.appendChild(heading);
 
   // Input row
@@ -255,19 +255,35 @@ function renderSitesStep(
   input.className = 'form-input';
   input.style.cssText = 'flex: 1;';
 
+  // Allow/Block selector. Block patterns are what the browser-layer (CDP)
+  // enforcement acts on — without this control no rule a user can author ever
+  // carries one, and that layer can never arm.
+  const actionSelect = document.createElement('select');
+  actionSelect.className = 'form-input';
+  actionSelect.id = 'wizard-site-action';
+  actionSelect.style.cssText = 'width: 76px;';
+  for (const action of ['allow', 'block'] as const) {
+    const opt = document.createElement('option');
+    opt.value = action;
+    opt.textContent = action === 'allow' ? 'Allow' : 'Block';
+    actionSelect.appendChild(opt);
+  }
+
   const addBtn = document.createElement('button');
   addBtn.className = 'btn btn-primary';
   addBtn.textContent = 'Add';
   addBtn.style.cssText = 'padding: 4px 12px; font-size: 12px;';
   addBtn.addEventListener('click', () => {
     const value = input.value.trim();
+    const action = actionSelect.value === 'block' ? 'block' : 'allow';
     if (value) {
-      onStateChange(addSitePattern(state, { pattern: value, action: 'allow' }));
+      onStateChange(addSitePattern(state, { pattern: value, action }));
       input.value = '';
     }
   });
 
   inputRow.appendChild(input);
+  inputRow.appendChild(actionSelect);
   inputRow.appendChild(addBtn);
   container.appendChild(inputRow);
 
@@ -330,15 +346,25 @@ function renderConfirmStep(
   const summary = document.createElement('div');
   summary.style.cssText = 'font-size: 12px; color: var(--text-secondary);';
 
-  let html = `<p><strong>Preset:</strong> ${info.title}</p>`;
+  // Built with textContent, never innerHTML: pattern text is user-typed and
+  // must not reach an HTML-parsing sink (same no-sink rule popup.ts is held to).
+  const addSummaryRow = (label: string, value: string): void => {
+    const p = document.createElement('p');
+    const strong = document.createElement('strong');
+    strong.textContent = `${label}: `;
+    p.appendChild(strong);
+    p.appendChild(document.createTextNode(value));
+    summary.appendChild(p);
+  };
+
+  addSummaryRow('Preset', info.title);
   if (state.sitePatterns.length > 0) {
-    html += `<p><strong>Sites:</strong> ${state.sitePatterns.map((p) => p.pattern).join(', ')}</p>`;
+    addSummaryRow('Sites', state.sitePatterns.map((p) => `${p.pattern} (${p.action})`).join(', '));
   }
   if (state.durationMinutes) {
     const opt = TIME_DURATION_OPTIONS.find((o) => o.minutes === state.durationMinutes);
-    html += `<p><strong>Duration:</strong> ${opt?.label ?? state.durationMinutes + ' minutes'}</p>`;
+    addSummaryRow('Duration', opt?.label ?? state.durationMinutes + ' minutes');
   }
-  summary.innerHTML = html;
   container.appendChild(summary);
 
   // Label input
