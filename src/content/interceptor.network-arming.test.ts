@@ -32,6 +32,9 @@ let nativeFetch: typeof globalThis.fetch;
 let nativeSendBeacon: typeof navigator.sendBeacon;
 /** ISOLATED-side port: post rule/kill-switch updates to the interceptor through this. */
 let toInterceptor: MessagePort;
+/** Mirror of what we've posted, so a helper can compute the expected arming. */
+let currentRule: TestRule | null = null;
+let killSwitchActive = false;
 
 /** Run a callback from inside a frame named like a CDP utility script. */
 function asAgent<T>(fn: () => T): T {
@@ -46,14 +49,43 @@ function flush(): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, 0));
 }
 
+/**
+ * Poll until `pred()` holds or the deadline passes. MessagePort delivery in
+ * jsdom is a task whose timing is not guaranteed within a single macrotask —
+ * under CI load a fixed one-tick `flush()` intermittently asserted before the
+ * rule/kill-switch update had been delivered and the wrappers (un)installed,
+ * so the arming state was read one step early. Waiting for the OBSERVABLE
+ * effect instead of a fixed delay makes the transition deterministic.
+ */
+async function waitUntil(pred: () => boolean): Promise<void> {
+  const deadline = Date.now() + 1000;
+  while (!pred()) {
+    if (Date.now() > deadline) return; // let the assertion report the real state
+    await new Promise((resolve) => setTimeout(resolve, 2));
+  }
+}
+
+/** True once the MAIN-world fetch wrapper is installed (the global is replaced). */
+function fetchWrapped(): boolean {
+  return globalThis.fetch !== nativeFetch;
+}
+
 async function setRule(rule: TestRule | null): Promise<void> {
+  currentRule = rule;
   toInterceptor.postMessage({ type: MSG_RULE_UPDATE, rule });
   await flush();
+  // Settle on the resulting arming state (a rule with no allowance still arms;
+  // a null rule with the kill switch off disarms).
+  const shouldArm = isNetworkInterceptorArmed(rule, killSwitchActive);
+  await waitUntil(() => fetchWrapped() === shouldArm);
 }
 
 async function setKillSwitch(active: boolean): Promise<void> {
+  killSwitchActive = active;
   toInterceptor.postMessage({ type: MSG_KILL_SWITCH, active });
   await flush();
+  const shouldArm = isNetworkInterceptorArmed(currentRule, active);
+  await waitUntil(() => fetchWrapped() === shouldArm);
 }
 
 /** Active rule with no network-request allowance → isActionAllowed denies it. */
