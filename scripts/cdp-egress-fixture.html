@@ -1,0 +1,134 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>ABG CDP egress fixture</title>
+<style>
+  :root { color-scheme: light dark; }
+  body { font: 15px/1.5 system-ui, sans-serif; max-width: 820px; margin: 24px auto; padding: 0 16px; }
+  h1 { font-size: 20px; margin-bottom: 4px; }
+  #log { white-space: pre-wrap; font: 12.5px/1.45 ui-monospace, monospace;
+    background: #111; color: #d6d6d6; border-radius: 8px; padding: 12px; min-height: 120px; }
+</style>
+</head>
+<body>
+<h1>AI Browser Guard — CDP egress fixture</h1>
+<p>Driven by <code>scripts/smoke-cdp-enforcement.mjs</code>. It sprays synthetic
+input so ABG's behavioral detector registers an in-page agent, then fires
+network egress through every vector the page-realm interceptor never wrapped
+(WebSocket, EventSource, element-src, Worker fetch, iframe fetch). Whether each
+request reaches the fixture server is the ground truth for whether the
+CDP-layer enforcement (ADR-007) blocked it.</p>
+<div id="log"></div>
+
+<script>
+const logEl = document.getElementById('log');
+function log(msg) {
+  logEl.textContent += msg + '\n';
+  logEl.scrollTop = logEl.scrollHeight;
+}
+
+// ── Detection spray (same recipe as inpage-agent-fixture.html) ───────────────
+// Behavioral detector flags mouse activity when, over >=20 buffered events:
+// synthetic-ratio > 0.5, timing stddev < 15ms, integer-coord ratio > 0.95.
+let sprayTimer = null;
+function sprayBurst() {
+  for (let i = 0; i < 30; i++) {
+    const x = 100 + (i % 7);
+    const y = 200 + (i % 5);
+    document.dispatchEvent(new MouseEvent('mousemove', { clientX: x, clientY: y, bubbles: true }));
+  }
+  for (let i = 0; i < 6; i++) {
+    document.body.dispatchEvent(new MouseEvent('click', { clientX: 120, clientY: 220, bubbles: true }));
+  }
+}
+window.startSpray = () => {
+  if (sprayTimer) return;
+  sprayBurst();
+  sprayTimer = setInterval(sprayBurst, 2000);
+  log('spraying synthetic input for behavioral detection');
+};
+window.stopSpray = () => {
+  if (sprayTimer) { clearInterval(sprayTimer); sprayTimer = null; log('spray stopped'); }
+};
+
+// ── Egress battery ───────────────────────────────────────────────────────────
+// Each vector reports an in-page outcome, but the OBSERVABLE ground truth is
+// the fixture server's receipt log: a blocked request never reaches it, a
+// passed-through request does. All vectors run in parallel, all time-bounded,
+// so the battery always resolves.
+const withTimeout = (p, ms, onTimeout) =>
+  Promise.race([p, new Promise((r) => setTimeout(() => r(onTimeout), ms))]);
+
+window.runEgressBattery = async (phase, blockedBase, allowedBase) => {
+  const wsBase = blockedBase.replace(/^http/, 'ws');
+  const results = {};
+
+  const vectors = {
+    // Control: the allowed origin must remain reachable in every phase.
+    controlPost: withTimeout(
+      fetch(`${allowedBase}/${phase}/control-post`, { method: 'POST', body: phase })
+        .then((r) => `status ${r.status}`, () => 'rejected'),
+      3500, 'timeout'),
+
+    ws: withTimeout(new Promise((resolve) => {
+      const ws = new WebSocket(`${wsBase}/${phase}/ws`);
+      ws.onopen = () => { resolve('open'); ws.close(); };
+      ws.onerror = () => resolve('errored');
+    }), 3500, 'timeout'),
+
+    es: withTimeout(new Promise((resolve) => {
+      const es = new EventSource(`${blockedBase}/${phase}/es`);
+      es.onopen = () => { resolve('open'); es.close(); };
+      es.onerror = () => { resolve('errored'); es.close(); };
+    }), 3500, 'timeout'),
+
+    img: withTimeout(new Promise((resolve) => {
+      const img = new Image();
+      img.onload = () => resolve('loaded');
+      img.onerror = () => resolve('errored');
+      img.src = `${blockedBase}/${phase}/img`;
+    }), 3500, 'timeout'),
+
+    workerFetch: withTimeout(new Promise((resolve) => {
+      const src = `self.onmessage = async (e) => {
+        try { const r = await fetch(e.data); self.postMessage('status ' + r.status); }
+        catch { self.postMessage('rejected'); }
+      };`;
+      const worker = new Worker(URL.createObjectURL(new Blob([src], { type: 'text/javascript' })));
+      worker.onmessage = (e) => { resolve(e.data); worker.terminate(); };
+      worker.onerror = () => { resolve('worker-error'); worker.terminate(); };
+      worker.postMessage(`${blockedBase}/${phase}/worker-fetch`);
+    }), 3500, 'timeout'),
+
+    iframeFetch: withTimeout(new Promise((resolve) => {
+      const tag = `${phase}-iframe`;
+      const onMsg = (e) => {
+        if (typeof e.data === 'string' && e.data.startsWith(`${tag}:`)) {
+          window.removeEventListener('message', onMsg);
+          resolve(e.data.slice(tag.length + 1));
+          iframe.remove();
+        }
+      };
+      window.addEventListener('message', onMsg);
+      const iframe = document.createElement('iframe');
+      iframe.style.display = 'none';
+      iframe.srcdoc = `<script>
+        fetch('${blockedBase}/${phase}/iframe-fetch')
+          .then((r) => parent.postMessage('${tag}:status ' + r.status, '*'),
+                () => parent.postMessage('${tag}:rejected', '*'));
+      <\/script>`;
+      document.body.appendChild(iframe);
+    }), 3500, 'timeout'),
+  };
+
+  for (const [name, p] of Object.entries(vectors)) {
+    results[name] = await p;
+  }
+  log(`${phase}: ${JSON.stringify(results)}`);
+  return results;
+};
+</script>
+</body>
+</html>
