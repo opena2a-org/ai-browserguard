@@ -85,6 +85,8 @@ const chromeMock = {
     }),
     getURL: vi.fn((path: string) => `chrome-extension://test-id/${path}`),
     lastError: null as { message: string } | null,
+    onUpdateAvailable: createEventMock(),
+    reload: vi.fn(),
   },
   tabs: {
     query: vi.fn(() => Promise.resolve([])),

@@ -48,6 +48,12 @@ interface PopupState {
   pendingFullAccessAgentId: string | null;
   killSwitchActive: boolean;
   /**
+   * A staged extension update the background is holding back because a
+   * delegation is active or the kill switch is engaged (issue #68). Null when
+   * none is pending.
+   */
+  pendingUpdate: { version: string; stagedAt: string } | null;
+  /**
    * What the last emergency stop actually did (closed tabs, trigger, time).
    * Renders as "Killed · closed N tabs" so the most disruptive action the
    * extension takes is attributed where the user looks first (field-test F-D).
@@ -88,6 +94,7 @@ let popupState: PopupState = {
   delegationRules: [],
   pendingFullAccessAgentId: null,
   killSwitchActive: false,
+  pendingUpdate: null,
   killSwitchLastEvent: null,
   recentViolations: [],
   sessions: [],
@@ -144,6 +151,8 @@ async function queryBackgroundStatus(): Promise<void> {
         (data as { killSwitchLastEvent?: KillSwitchEvent | null }).killSwitchLastEvent ?? null;
       popupState.recentViolations = data.recentViolations ?? [];
       popupState.lifetimeStats = (data as { lifetimeStats?: LifetimeStats }).lifetimeStats ?? null;
+      popupState.pendingUpdate =
+        (data as { pendingUpdate?: { version: string; stagedAt: string } | null }).pendingUpdate ?? null;
     }
   } catch {
     // Background may not be available
@@ -325,6 +334,7 @@ function renderWizardUI(): void {
 }
 
 function renderAll(): void {
+  renderUpdateCallout();
   renderContributeTip();
   renderRecentBlockCallout();
   renderDetectionPanel();
@@ -337,6 +347,40 @@ function renderAll(): void {
   renderMetricsPanel();
   renderSettingsPanel();
   renderStatusBadge();
+}
+
+/**
+ * Staged-update call-out (issue #68). The background applies an update on its
+ * own only when no delegation is active and the kill switch is not engaged;
+ * otherwise it waits, and this is where the user sees it and can apply it now.
+ * A path forward, not a badge: the button is the action.
+ */
+function renderUpdateCallout(): void {
+  const callout = document.getElementById('update-callout');
+  const text = document.getElementById('update-callout-text');
+  const button = document.getElementById('update-apply-btn') as HTMLButtonElement | null;
+  if (!callout || !text || !button) return;
+
+  const pending = popupState.pendingUpdate;
+  if (!pending) {
+    callout.classList.add('hidden');
+    return;
+  }
+  callout.classList.remove('hidden');
+  const current = chrome.runtime.getManifest().version;
+  const next = pending.version ? `Version ${pending.version}` : 'A new version';
+  text.textContent =
+    `${next} is downloaded and waiting (running ${current}). It applies on its own once no `
+    + 'delegation is active and the kill switch is off. Reloading now restarts the extension; '
+    + 'open tabs pick up in-page monitoring again when they next load.';
+  button.onclick = () => {
+    button.disabled = true;
+    sendToBackground('UPDATE_APPLY', {}).catch(() => {
+      // The reload closes the popup, so a rejection here is the normal path
+      // when it worked. Re-enable only if the popup is still open.
+      button.disabled = false;
+    });
+  };
 }
 
 /**

@@ -1177,3 +1177,10 @@ kbd {
   padding: 4px 10px;
   font-size: var(--font-size-xs);
 }
+
+/* Staged update call-out (issue #68) */
+.update-callout-text {
+  margin: 4px 0 8px;
+  font-size: 12px;
+  line-height: 1.4;
+}
