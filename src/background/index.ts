@@ -21,6 +21,7 @@ import { setupNotificationHandlers, clearAllNotifications, showBoundaryNotificat
 import type { BoundaryAlert } from '../alerts/boundary';
 import { processBoundaryViolation, handleAllowOnce } from './handlers';
 import { isValidSender } from './sender-validation';
+import { createUpdateController } from './update-policy';
 import { computeBadge, BLOCK_BADGE_TTL_MS } from './badge';
 import { monitorDebuggerAttachment, detectDebuggerAttachment } from '../detection/cdp-debugger';
 import type { DebuggerDetectionResult } from '../detection/cdp-debugger';
@@ -140,6 +141,20 @@ function ensureReady(): Promise<void> {
 }
 
 /**
+ * Staged-update handling (issue #68). The policy and its load-order guard live
+ * in update-policy.ts; this binds it to the worker's state. A delegation counts
+ * while `isActive`, the same predicate STATUS_QUERY and the badge use.
+ */
+const updateController = createUpdateController({
+  ready: ensureReady,
+  gate: () => ({
+    killSwitchActive: state.killSwitch.isActive,
+    hasActiveDelegation: state.delegationRules.some((r) => r.isActive),
+  }),
+  reload: () => chrome.runtime.reload(),
+});
+
+/**
  * Kill-switch mutations (ACTIVATE / RESET) run strictly one at a time, in
  * arrival order. Without this, an ACTIVATE still executing its await-chain
  * while a RESET completes would resume and re-latch state the user just
@@ -181,6 +196,12 @@ function initialize(): void {
     handleTabRemoved(tabId).catch(() => { /* ignore */ });
   });
 
+  // A staged update applies only while idle (update-policy.ts); otherwise it
+  // waits for the delegation-check tick below or the popup's reload button.
+  chrome.runtime.onUpdateAvailable.addListener((details) => {
+    updateController.onUpdateAvailable(details).catch(() => { /* deferred */ });
+  });
+
   // Delegation expiration alarm
   chrome.alarms.create('delegation-check', { periodInMinutes: 1 });
   // Service worker keepalive — MV3 workers are torn down after ~30s idle.
@@ -196,7 +217,14 @@ function initialize(): void {
   chrome.alarms.create('cdp-monitor', { periodInMinutes: 0.5 });
   chrome.alarms.onAlarm.addListener((alarm) => {
     if (alarm.name === 'delegation-check') {
-      checkDelegationExpiration().catch(() => { /* ignore */ });
+      // Expiry first, then a pending update: it applies on the first tick after
+      // the last delegation ends. Not re-checked inline in the RESET or
+      // DELEGATION_UPDATE handlers, because a reload there would cut off their
+      // fan-out to open tabs (the reset broadcast lifts the in-page hard-block).
+      checkDelegationExpiration()
+        .catch(() => { /* ignore */ })
+        .then(() => updateController.applyIfIdle())
+        .catch(() => { /* deferred to the next tick */ });
     }
     if (alarm.name === 'cdp-monitor') {
       runCdpDebuggerCheck().catch(() => { /* ignore */ });
@@ -528,6 +556,9 @@ function handleMessage(
         recentViolations: state.recentAlerts,
         delegationRules: state.delegationRules,
         lifetimeStats: state.lifetimeStats,
+        // A staged update held back by an active delegation or the kill switch;
+        // the popup offers a user-triggered reload for it.
+        pendingUpdate: updateController.getPending(),
       });
       // The popup is now open; the user has seen the block alert.
       // Clear the transient block badge so the icon returns to its
@@ -576,6 +607,16 @@ function handleMessage(
         sendResponse({ success: false });
       });
       return true;
+    }
+
+    case 'UPDATE_APPLY': {
+      // The user chose to apply a pending update now (popup button). Popup-only
+      // by sender validation, so a page cannot force a reload. Reply first:
+      // the reload ends this worker and the popup with it.
+      const applying = updateController.getPending() !== null;
+      sendResponse({ success: applying });
+      if (applying) updateController.applyNow();
+      return false;
     }
 
     case 'AI_SAFETY_CLEAR': {
