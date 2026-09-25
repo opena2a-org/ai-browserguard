@@ -788,11 +788,14 @@ function handleMessage(
     }
 
     case 'DOMAIN_WHITELIST': {
-      const { domain } = message.data as { domain: string };
-      handleDomainWhitelist(tabId, domain).then(() => {
-        sendResponse({ success: true });
+      // Popup-only (sender-validation), so there is never a sender tab: the
+      // popup names the rule to write to. The reply says whether anything was
+      // written, so the popup never shows a success that did not happen (#69).
+      const { domain, ruleId } = message.data as { domain: string; ruleId?: string };
+      handleDomainWhitelist(domain, ruleId).then((result) => {
+        sendResponse(result.written ? { success: true } : { success: false, reason: result.reason });
       }).catch(() => {
-        sendResponse({ success: false });
+        sendResponse({ success: false, reason: 'The site could not be saved.' });
       });
       return true;
     }
@@ -1193,30 +1196,47 @@ async function handleDelegationUpdate(rule: DelegationRule): Promise<void> {
   await reconcileCdpEnforcement();
 }
 
+/** A bare hostname as the popup derives it from `new URL(...).hostname`. */
+const WHITELIST_HOST = /^(?=.{1,253}$)[a-z0-9](?:[a-z0-9-]*[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]*[a-z0-9])?)*$/i;
+
+type WhitelistResult = { written: true } | { written: false; reason: string };
+
 /**
- * Add a *.domain allow pattern to the rule governing the requesting tab.
- * Called when the user clicks "Allow on [domain]" in a blocked-action toast,
- * which originates from a specific tab — so the whitelist is applied to that
- * tab's effective rule, not to some other agent's grant.
+ * Add an allow pattern for exactly `domain` to a delegation rule, from the
+ * popup's "Allow" / "Whitelist" buttons.
+ *
+ * The popup has no sender tab, so the rule is the one the popup names: the
+ * rule that blocked the action (`ruleId`, an active rule), else the
+ * session-wide rule. Never another agent's per-agent grant by default, which
+ * keeps the cross-agent isolation #27 added. The pattern is the plain host: a
+ * `*.host` pattern matches subdomains only, so it never covered the host that
+ * was blocked. A site pattern cannot lift a capability-level block (for
+ * example `download-file`); the popup does not offer this for those.
  */
-async function handleDomainWhitelist(tabId: number | undefined, domain: string): Promise<void> {
-  const activeRule = tabId !== undefined ? getEffectiveRuleForTab(tabId) : null;
-  if (!activeRule) return;
+async function handleDomainWhitelist(domain: string, ruleId: string | undefined): Promise<WhitelistResult> {
+  await ensureReady();
+  if (typeof domain !== 'string' || !WHITELIST_HOST.test(domain)) {
+    return { written: false, reason: 'Not a site name that can be allowed.' };
+  }
+  const named = typeof ruleId === 'string'
+    ? state.delegationRules.find((r) => r.id === ruleId && r.isActive) ?? null
+    : null;
+  const rule = named ?? getActiveSessionRule();
+  if (!rule) {
+    return { written: false, reason: 'No active delegation to add the site to.' };
+  }
 
-  const pattern = `*.${domain}`;
-
-  // Avoid duplicates
-  const exists = activeRule.scope.sitePatterns.some(
-    (p) => p.pattern === pattern || p.pattern === domain
-  );
+  const pattern = domain.toLowerCase();
+  const exists = rule.scope.sitePatterns.some((p) => p.pattern === pattern && p.action === 'allow');
   if (!exists) {
-    activeRule.scope.sitePatterns.push({ pattern, action: 'allow' });
+    rule.scope.sitePatterns.push({ pattern, action: 'allow' });
   }
 
   await saveDelegationRules(state.delegationRules);
 
   // Re-route each tab its effective rule (this one now has the new pattern).
   await broadcastEffectiveRules();
+  return { written: true };
 }
 
 async function executeKillSwitch(
@@ -1372,9 +1392,14 @@ async function handleDownloadCreated(item: chrome.downloads.DownloadItem): Promi
   const label = describeDownload(info);
   const rule = getEffectiveRuleForTab(tabId);
 
-  // Under a delegation that does not permit download-file, cancel the download.
+  // Under a delegation that does not permit download-file, cancel the download,
+  // but only when it is attributed with certainty (a referrer / final / url host
+  // equal to the agent's origin host). The fallback attribution is a guess: a
+  // download has no tabId, so with any agent active the user's own download in
+  // another tab lands on it, and cancelling on that guess destroyed the user's
+  // downloads browser-wide (#69). An uncertain download is recorded, not cancelled.
   let blocked = false;
-  if (rule && !evaluateRule(rule, 'download-file', downloadUrl).allowed) {
+  if (rule && matchedByReferrer && !evaluateRule(rule, 'download-file', downloadUrl).allowed) {
     blocked = true;
     try {
       chrome.downloads.cancel(item.id, () => {

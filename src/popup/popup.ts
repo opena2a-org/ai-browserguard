@@ -27,6 +27,7 @@ import {
 } from '../aisafety/opt-out-response';
 import { renderAiSafetyDeclaration } from './ai-safety-row';
 import { triggerJsonDownload } from './download';
+import { CAPABILITY_BLOCK_HINT, blockingRuleIdOf, isCapabilityBlock } from './block-actions';
 
 interface PopupState {
   detectedAgents: AgentIdentity[];
@@ -395,6 +396,26 @@ function renderUpdateCallout(): void {
 const RECENT_BLOCK_WINDOW_MS = 5 * 60 * 1000;
 const RECENT_BLOCK_MAX_ITEMS = 3;
 
+/**
+ * Ask the background to allow `domain` on the rule that blocked it, and show
+ * the real outcome: a refresh on success, "Not added" with the reason if
+ * nothing was written.
+ */
+function sendWhitelist(button: HTMLButtonElement, domain: string, ruleId: string | undefined): void {
+  button.disabled = true;
+  sendToBackground('DOMAIN_WHITELIST', { domain, ruleId }).then((response) => {
+    const result = response as { success?: boolean; reason?: string } | undefined;
+    if (result?.success) {
+      queryBackgroundStatus();
+      return;
+    }
+    button.textContent = 'Not added';
+    button.title = result?.reason ?? 'The site was not added.';
+  }).catch(() => {
+    button.disabled = false;
+  });
+}
+
 function renderRecentBlockCallout(): void {
   const callout = document.getElementById('recent-block-callout');
   const list = document.getElementById('recent-block-list');
@@ -447,16 +468,18 @@ function renderRecentBlockCallout(): void {
       domain = new URL(alert.violation.url).hostname;
     } catch { /* skip if malformed */ }
 
-    if (domain) {
+    if (isCapabilityBlock(alert)) {
+      const hint = document.createElement('div');
+      hint.className = 'recent-block-hint';
+      hint.textContent = CAPABILITY_BLOCK_HINT;
+      actions.appendChild(hint);
+    } else if (domain) {
       const whitelistBtn = document.createElement('button');
       whitelistBtn.className = 'btn btn-secondary recent-block-btn';
       whitelistBtn.textContent = `Whitelist ${domain}`;
-      whitelistBtn.addEventListener('click', () => {
-        const d = domain as string;
-        sendToBackground('DOMAIN_WHITELIST', { domain: d }).then(() => {
-          queryBackgroundStatus();
-        }).catch(() => { /* ignore */ });
-      });
+      const d = domain;
+      const ruleId = blockingRuleIdOf(alert);
+      whitelistBtn.addEventListener('click', () => sendWhitelist(whitelistBtn, d, ruleId));
       actions.appendChild(whitelistBtn);
     }
 
@@ -938,12 +961,19 @@ function renderViolationsPanel(): void {
   panel.classList.remove('hidden');
   container.replaceChildren();
 
-  // Quick-whitelist: show recently blocked domains with one-click allow
-  const blockedDomains = new Map<string, number>();
+  // Quick-whitelist: show recently blocked domains with one-click allow. Each
+  // domain remembers the rule that last blocked it (the Allow writes there) and
+  // whether every block on it was capability-level (then there is no Allow).
+  const blockedDomains = new Map<string, { count: number; ruleId: string | undefined; capabilityOnly: boolean }>();
   for (const alert of popupState.recentViolations) {
     try {
       const domain = new URL(alert.violation.url).hostname;
-      blockedDomains.set(domain, (blockedDomains.get(domain) ?? 0) + 1);
+      const prev = blockedDomains.get(domain);
+      blockedDomains.set(domain, {
+        count: (prev?.count ?? 0) + 1,
+        ruleId: blockingRuleIdOf(alert) ?? prev?.ruleId,
+        capabilityOnly: (prev?.capabilityOnly ?? true) && isCapabilityBlock(alert),
+      });
     } catch { /* skip invalid URLs */ }
   }
   if (blockedDomains.size > 0 && popupState.activeDelegation) {
@@ -955,7 +985,8 @@ function renderViolationsPanel(): void {
     whitelistHeader.textContent = 'Recently Blocked Domains';
     whitelistSection.appendChild(whitelistHeader);
 
-    for (const [domain, count] of blockedDomains) {
+    for (const [domain, entry] of blockedDomains) {
+      const count = entry.count;
       const row = document.createElement('div');
       row.style.cssText = 'display: flex; justify-content: space-between; align-items: center; padding: 4px 0;';
 
@@ -963,18 +994,21 @@ function renderViolationsPanel(): void {
       domainLabel.style.cssText = 'font-size: 12px; color: var(--text-primary);';
       domainLabel.textContent = `${domain} (${count})`;
 
-      const allowBtn = document.createElement('button');
-      allowBtn.className = 'btn btn-secondary';
-      allowBtn.style.cssText = 'padding: 2px 10px; font-size: 11px; color: #06b6d4; border-color: rgba(6, 182, 212, 0.3);';
-      allowBtn.textContent = 'Allow';
-      allowBtn.addEventListener('click', () => {
-        sendToBackground('DOMAIN_WHITELIST', { domain }).then(() => {
-          queryBackgroundStatus();
-        }).catch(() => { /* ignore */ });
-      });
-
       row.appendChild(domainLabel);
-      row.appendChild(allowBtn);
+      if (entry.capabilityOnly) {
+        const hint = document.createElement('span');
+        hint.style.cssText = 'font-size: 11px; color: var(--text-secondary);';
+        hint.textContent = 'Download blocked by the delegation';
+        hint.title = CAPABILITY_BLOCK_HINT;
+        row.appendChild(hint);
+      } else {
+        const allowBtn = document.createElement('button');
+        allowBtn.className = 'btn btn-secondary';
+        allowBtn.style.cssText = 'padding: 2px 10px; font-size: 11px; color: #06b6d4; border-color: rgba(6, 182, 212, 0.3);';
+        allowBtn.textContent = 'Allow';
+        allowBtn.addEventListener('click', () => sendWhitelist(allowBtn, domain, entry.ruleId));
+        row.appendChild(allowBtn);
+      }
       whitelistSection.appendChild(row);
     }
     container.appendChild(whitelistSection);
