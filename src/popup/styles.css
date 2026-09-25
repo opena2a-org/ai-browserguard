@@ -1177,3 +1177,11 @@ kbd {
   padding: 4px 10px;
   font-size: var(--font-size-xs);
 }
+
+/* Capability-level block: no site allow, name the real recovery (#69) */
+.recent-block-hint {
+  font-size: 11px;
+  line-height: 1.35;
+  color: var(--text-secondary);
+  max-width: 180px;
+}

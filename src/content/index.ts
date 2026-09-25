@@ -59,10 +59,10 @@ function postToMainWorld(message: BridgeMessage): void {
 }
 
 /**
- * Show an inline toast for a blocked action. Routes the three quick-action
+ * Show an inline toast for a blocked action. Routes the two quick-action
  * callbacks back to the right surface: ALLOW_ONCE goes to the MAIN world
- * interceptor (via the private bridge port), DOMAIN_WHITELIST and OPEN_POPUP
- * go to the background.
+ * interceptor (via the private bridge port), OPEN_POPUP goes to the
+ * background.
  */
 function showBlockedActionToast(capability: string, url: string, reason: string): void {
   showBlockedToast({
@@ -78,9 +78,10 @@ function showBlockedActionToast(capability: string, url: string, reason: string)
       postToMainWorld({ type: MSG_ALLOW_ONCE, capability, url });
       grantMonitorAllowOnce(capability, url);
     },
-    onWhitelist: (domain: string) => {
-      sendToBackground('DOMAIN_WHITELIST', { domain }).catch(() => { /* ignore */ });
-    },
+    // No "Whitelist" action here: DOMAIN_WHITELIST is popup-only, so a content
+    // sender is refused and the button was inert (#69). Accepting it from page-
+    // side code would add a write path pages can reach; the popup's Allow is
+    // the supported route.
     onOpenSettings: () => {
       sendToBackground('OPEN_POPUP', {}).catch(() => { /* ignore */ });
     },
