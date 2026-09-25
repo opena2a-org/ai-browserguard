@@ -29,6 +29,13 @@
       </div>
     </header>
 
+    <!-- Staged update call-out (hidden unless an update waits on the user) -->
+    <section id="update-callout" class="panel hidden" role="status">
+      <h2 class="panel-title-sm" id="update-callout-title">Update ready</h2>
+      <p class="update-callout-text" id="update-callout-text"></p>
+      <button id="update-apply-btn" class="btn btn-secondary">Reload to apply</button>
+    </section>
+
     <!-- Recent block call-out (hidden when no fresh block) -->
     <section id="recent-block-callout" class="panel panel-danger hidden">
       <h2 class="panel-title-sm">Recently blocked</h2>

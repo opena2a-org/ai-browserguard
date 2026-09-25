@@ -55,6 +55,7 @@ const POPUP_ONLY_TYPES: ReadonlySet<MessageType> = new Set([
   'CONTRIBUTE_TIP_DISMISS',
   'DOMAIN_WHITELIST',
   'AI_SAFETY_CLEAR',
+  'UPDATE_APPLY',
 ]);
 
 export function isValidSender(

@@ -198,6 +198,8 @@ export const ALL_MESSAGE_TYPES = [
   'OPEN_POPUP',
   /** Retry deleting stored ai-safety.txt declarations after a failed opt-out. */
   'AI_SAFETY_CLEAR',
+  /** Apply a staged extension update now (popup button, issue #68). */
+  'UPDATE_APPLY',
 ] as const;
 
 /**
