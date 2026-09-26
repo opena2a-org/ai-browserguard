@@ -6,7 +6,7 @@
 
 import type { MessagePayload, DetectionEvent, KillSwitchEvent, AgentEvent, BoundaryViolation } from '../types/events';
 import type { AgentIdentity } from '../types/agent';
-import type { DelegationRule } from '../types/delegation';
+import type { DelegationRule, DelegationPreset } from '../types/delegation';
 import type { AgentSession } from '../session/types';
 import { getStorageState, saveSession, updateSession, saveDelegationRules, appendDetectionLog, updateSettings, getSettings, getLifetimeStats, updateLifetimeStats, getKillSwitchState, saveKillSwitchState, getActiveAgentRegistry, updateActiveAgentRegistry } from '../session/storage';
 import type { LifetimeStats } from '../session/types';
@@ -16,7 +16,7 @@ import { executeBackgroundKillSwitch, createInitialKillSwitchState } from '../ki
 import type { KillSwitchState } from '../killswitch/index';
 import { isTimeBoundExpired, evaluateRule } from '../delegation/rules';
 import { selectEffectiveRule, applyDelegationUpdate } from '../delegation/effective';
-import { shouldIgnoreDownload, attributeDownload, describeDownload } from './download-monitor';
+import { shouldIgnoreDownload, attributeDownload, describeDownload, hostOf } from './download-monitor';
 import { setupNotificationHandlers, clearAllNotifications, showBoundaryNotification } from '../alerts/notification';
 import type { BoundaryAlert } from '../alerts/boundary';
 import { processBoundaryViolation, handleAllowOnce } from './handlers';
@@ -259,9 +259,12 @@ function initialize(): void {
     handleAllowOnce(notificationId).catch(() => { /* ignore */ });
   });
 
-  // Monitor agent-initiated downloads (exfiltration / drive-by vector). Only
-  // downloads that occur while an agent is active are treated as agent
-  // activity; the user's own downloads are never flagged.
+  // Monitor downloads while an agent is registered (exfiltration / drive-by
+  // vector). Downloads made while no agent is registered are ignored. While one
+  // is, every download is recorded on an agent's session, and a download whose
+  // referrer, final URL or URL host equals an agent's origin host is cancelled
+  // under a delegation that does not permit download-file, whoever started it
+  // (the user's own downloads from that host included).
   try {
     chrome.downloads.onCreated.addListener((item) => {
       handleDownloadCreated(item).catch((err) => {
@@ -1348,14 +1351,19 @@ async function handleCdpDebuggerDetection(result: DebuggerDetectionResult): Prom
 }
 
 /**
- * Record (and, under a blocking delegation, cancel) an agent-initiated
- * download.
+ * Record a download made while an agent is registered and, under a blocking
+ * delegation, cancel it when it is attributed to an agent with certainty.
  *
- * A download is agent activity only when an agent is active. If none is yet
- * registered we run a fresh CDP check: a live debugger attachment means the
- * browser is being driven, so we register those tabs (creating sessions) before
- * attributing. With no active agent and no live attachment, the download is the
- * user's own action and is ignored — normal browsing is never flagged.
+ * A download has no tab id, so who started it is unknown: a download whose
+ * referrer, final URL or URL host equals an agent's origin host is attributed
+ * to that agent and treated as its download, including one the user started
+ * from that host. Any other download is attributed to the first agent as a
+ * guess, recorded as uncertain and never cancelled.
+ *
+ * If no agent is yet registered we run a fresh CDP check: a live debugger
+ * attachment means the browser is being driven, so we register those tabs
+ * (creating sessions) before attributing. With no active agent and no live
+ * attachment, the download is ignored.
  */
 async function handleDownloadCreated(item: chrome.downloads.DownloadItem): Promise<void> {
   const info = {
@@ -1412,10 +1420,15 @@ async function handleDownloadCreated(item: chrome.downloads.DownloadItem): Promi
   }
 
   const uncertain = matchedByReferrer ? '' : ' (attribution uncertain)';
+  const timelineLabel = blocked
+    ? `Blocked download from the agent's host: ${label}`
+    : matchedByReferrer
+      ? `Download from the agent's host: ${label}`
+      : `Download while an agent was detected: ${label} (attribution uncertain)`;
   const event = createTimelineEvent(
     'download',
     downloadUrl,
-    blocked ? `Blocked agent download: ${label}${uncertain}` : `Agent download: ${label}${uncertain}`,
+    timelineLabel,
     {
       attemptedAction: 'download-file',
       outcome: blocked ? 'blocked' : 'informational',
@@ -1457,12 +1470,15 @@ async function handleDownloadCreated(item: chrome.downloads.DownloadItem): Promi
       userOverride: false,
     };
     // Bound what a page-controlled string can put into an OS notification.
-    const shortLabel = label.length > 80 ? `${label.slice(0, 77)}...` : label;
+    const shortLabel = boundForNotification(label);
+    // A cancel requires a host match, so the agent's origin host is never empty here.
+    const agentHost = boundForNotification(hostOf(state.activeAgents.get(tabId)?.originUrl) ?? '');
+    const ruleName = rule ? (rule.label || PRESET_DISPLAY_NAMES[rule.preset]) : '';
     const alert: BoundaryAlert = {
       violation,
       severity: 'high',
       title: 'Download blocked',
-      message: `Cancelled an agent download: ${shortLabel}. Your delegation (${rule?.label ?? rule?.preset ?? 'active rule'}) does not permit downloads. Downloads you start yourself are never blocked — save the file yourself if you want it.`,
+      message: `Cancelled a download: ${shortLabel}. An agent was detected on ${agentHost}, and your delegation (${ruleName}) blocks downloads from there, yours included. To get it, close that agent's tab, then retry.`,
       allowOneTimeOverride: false,
       acknowledged: false,
     };
@@ -1480,6 +1496,18 @@ async function handleDownloadCreated(item: chrome.downloads.DownloadItem): Promi
     }
   }
   updateBadge();
+}
+
+/** The preset names the popup shows, used when a rule carries no label. */
+const PRESET_DISPLAY_NAMES: Record<DelegationPreset, string> = {
+  readOnly: 'Read-Only',
+  limited: 'Limited',
+  fullAccess: 'Full Access',
+};
+
+/** Bound a page-controlled string to 80 characters for an OS notification. */
+function boundForNotification(text: string): string {
+  return text.length > 80 ? `${text.slice(0, 77)}...` : text;
 }
 
 /** Minimum gap between blocked-download OS notifications (burst coalescing). */

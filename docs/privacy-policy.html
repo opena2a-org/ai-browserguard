@@ -29,7 +29,7 @@
 </head>
 <body>
   <h1>AI Browser Guard - Privacy Policy</h1>
-  <p class="last-updated">Last updated: June 6, 2026</p>
+  <p class="last-updated">Last updated: September 26, 2026</p>
 
   <div class="highlight">
     <p><strong>Summary:</strong> By default, AI Browser Guard processes all data locally on your device and makes zero network requests. There is no analytics, telemetry, or tracking. The extension also offers optional network features (trust lookups, anonymized contribution, and site safety declarations) that are turned <strong>off by default</strong> and act only after you explicitly opt in. When enabled, they transmit only a detected agent type and anonymized detection summaries -- never your URLs, page content, keystrokes, or identity. One of them, site safety declarations, requests a public file from the website your agent is on; it sends no cookies and nothing about you, but that website can see the request was made. See section 2a.</p>
@@ -50,7 +50,8 @@
   <p>The extension processes the following information entirely on your local device. By default none of it leaves your browser:</p>
   <ul>
     <li><strong>Detection signals:</strong> Browser automation indicators such as <code>navigator.webdriver</code> flags, CDP markers, and event timing patterns. These are analyzed locally.</li>
-    <li><strong>Session logs:</strong> A chronological record of detected agent actions (timestamps, action types, target URLs, CSS selectors, and outcomes). The last 5 sessions are stored locally.</li>
+    <li><strong>Session logs:</strong> A chronological record of detected agent actions (timestamps, action types, target URLs, CSS selectors, and outcomes), including the address of each download made while an agent is detected, and its file name when Chrome provides one, whoever started it. The last 5 sessions are stored locally.</li>
+    <li><strong>Session reports:</strong> a summary saved when a session ends (agent type, start and end times, action and violation counts, the host names of up to five most-visited sites, network request counts, and the delegation preset). Up to 20 are kept on your device; a report older than 30 days is removed when the next report is saved.</li>
     <li><strong>Delegation rules:</strong> Access control rules you configure (presets, site patterns, time bounds). Stored locally in <code>chrome.storage.local</code>.</li>
     <li><strong>Violation records:</strong> Logs of boundary violations (what was attempted, which rule blocked it). Stored locally, limited to the 100 most recent entries.</li>
   </ul>
@@ -106,7 +107,7 @@
     <li><strong>alarms:</strong> Schedule periodic checks for delegation rule expiration and detection sweeps.</li>
     <li><strong>notifications:</strong> Display boundary violation alerts when an agent attempts unauthorized actions.</li>
     <li><strong>debugger:</strong> Detect when an automation framework (Playwright, Puppeteer) attaches a Chrome DevTools Protocol debugger to the browser -- a core detection signal -- and, for tabs you have delegated to an agent with restricted boundaries, attach a CDP session to block network requests that violate those boundaries. The extension does not use the debugger to read page content or inject code, and detaches when delegation ends.</li>
-    <li><strong>downloads:</strong> Monitor downloads created while an AI agent is active so agent-initiated downloads can be detected and cancelled per your delegation rules (your own downloads are never flagged), and save a session report as a JSON file when you choose to export it.</li>
+    <li><strong>downloads:</strong> Save a session report as a JSON file when you choose to export it, and monitor the other downloads created while an agent is detected. Downloads created while no agent is detected are ignored. While an agent is detected, each download's address, and its file name when Chrome provides one, is recorded in the session log on your device, including downloads you start yourself. If your delegation does not permit downloads, a download made while an agent is detected can be cancelled, including one you start yourself.</li>
     <li><strong>host_permissions (&lt;all_urls&gt;):</strong> The content script must run on all pages to detect automation frameworks, since AI agents can operate on any website. Detection cannot be limited to specific domains without losing coverage. Page content is analyzed locally and is never transmitted.</li>
   </ul>
 

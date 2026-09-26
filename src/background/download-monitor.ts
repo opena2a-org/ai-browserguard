@@ -1,11 +1,14 @@
 /**
- * Agent-initiated download monitoring (pure decision layer).
+ * Download monitoring while an agent is registered (pure decision layer).
  *
- * A download is only of interest when an agent is currently active — otherwise
- * it is the user downloading a file and must not be flagged. When an agent IS
- * active, we attribute the download to the agent's tab (by referrer host, then
- * single-agent fallback) so it can be recorded on that session and, under a
- * delegation that blocks `download-file`, cancelled.
+ * A download is only of interest when an agent is currently registered;
+ * otherwise it is ignored. When an agent IS registered, we attribute the
+ * download to an agent's tab so it can be recorded on that session. A download
+ * whose referrer, final URL or URL host equals an agent's origin host is
+ * attributed with certainty and, under a delegation that blocks
+ * `download-file`, cancelled by the caller, whoever started it (a download the
+ * user starts from that host included). Any other download falls back to the
+ * first agent, is marked uncertain, and is never cancelled.
  *
  * This module is pure so attribution and the block decision are unit-testable
  * without a live chrome.downloads event.
@@ -34,7 +37,8 @@ export interface DownloadAttribution {
   matchedByReferrer: boolean;
 }
 
-function hostOf(url: string | undefined): string | null {
+/** The hostname of `url`, or null when it is missing or unparseable. */
+export function hostOf(url: string | undefined): string | null {
   if (!url) return null;
   try {
     return new URL(url).hostname;

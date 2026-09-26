@@ -12,8 +12,11 @@ import {
   enforcementReality,
   nativeInputObservable,
   presentAgent,
+  downloadsEnforced,
+  EXTERNAL_DRIVER_DOWNLOADS_ENFORCED_LABEL,
   type AgentLike,
 } from './enforceability';
+import { createRuleFromPreset } from './rules';
 import type { DelegationRule } from '../types/delegation';
 import type { AgentType, DetectionMethod } from '../types/agent';
 
@@ -62,12 +65,13 @@ describe('enforcementReality / nativeInputObservable', () => {
 
 describe('presentAgent — the enforceability contract', () => {
   it('regression: an external driver under a Read-Only rule is NEVER "Managed" and is not enforceable', () => {
-    const p = presentAgent(agent('playwright', ['cdp-connection']), READ_ONLY);
+    const p = presentAgent(agent('playwright', ['cdp-connection']), createRuleFromPreset('readOnly'));
     expect(p.enforceable).toBe(false);
-    expect(p.badge).not.toBe('Managed');
+    expect(p.badge).not.toMatch(/Managed/);
+    // No origin host: no download can be tied to this agent, so nothing is enforced.
     expect(p.badge).toBe('Monitor only');
     expect(p.ruleCaveat).toBeTruthy();
-    expect(p.ruleCaveat).toMatch(/kill switch|not enforced/i);
+    expect(p.ruleCaveat).toMatch(/kill switch/i);
   });
 
   it('external driver with no rule still shows monitor-only, no caveat', () => {
@@ -86,5 +90,83 @@ describe('presentAgent — the enforceability contract', () => {
   it('in-page agent with no rule is just "Detected"', () => {
     const p = presentAgent(agent('unknown', ['synthetic-event']), null);
     expect(p.badge).toBe('Detected');
+  });
+});
+
+describe('presentAgent — external-driver downloads (#69, one predicate for pill and caveat)', () => {
+  const driverOn = (originUrl: string): AgentLike => ({
+    type: 'anthropic-computer-use',
+    detectionMethods: ['cdp-connection'],
+    originUrl,
+  });
+  const VARIANT_B =
+    'Page-level policy does not stop this agent: it drives the browser directly. The kill switch (close tab) is the hard stop.';
+
+  it('Read-Only on an agent with a host: downloads from that host are cancelled, stated with the host', () => {
+    const a = driverOn('https://shop.example.com/cart');
+    const rule = createRuleFromPreset('readOnly');
+    const p = presentAgent(a, rule);
+    expect(downloadsEnforced(a, rule)).toBe(true);
+    expect(p.enforceable).toBe(false);
+    expect(p.badge).toBe(EXTERNAL_DRIVER_DOWNLOADS_ENFORCED_LABEL);
+    expect(p.ruleCaveat).toBe(
+      'Page-level policy does not stop this agent: it drives the browser directly. Under this delegation, downloads from shop.example.com are cancelled, yours included. The kill switch (close tab) is the hard stop.',
+    );
+  });
+
+  it('Limited blocks downloads too', () => {
+    const a = driverOn('https://shop.example.com/');
+    const rule = createRuleFromPreset('limited');
+    expect(downloadsEnforced(a, rule)).toBe(true);
+    expect(presentAgent(a, rule).badge).toBe(EXTERNAL_DRIVER_DOWNLOADS_ENFORCED_LABEL);
+  });
+
+  it('Full Access permits downloads: the short caveat and "Monitor only"', () => {
+    const a = driverOn('https://shop.example.com/');
+    const rule = createRuleFromPreset('fullAccess');
+    const p = presentAgent(a, rule);
+    expect(downloadsEnforced(a, rule)).toBe(false);
+    expect(p.badge).toBe('Monitor only');
+    expect(p.ruleCaveat).toBe(VARIANT_B);
+  });
+
+  it('a host-less origin (about:blank, file://) ties no download to the agent: the short caveat and "Monitor only"', () => {
+    for (const origin of ['about:blank', 'file:///Users/me/page.html', '']) {
+      const a = driverOn(origin);
+      const rule = createRuleFromPreset('readOnly');
+      const p = presentAgent(a, rule);
+      expect(downloadsEnforced(a, rule)).toBe(false);
+      expect(p.badge).toBe('Monitor only');
+      expect(p.ruleCaveat).toBe(VARIANT_B);
+    }
+  });
+
+  it('no rule: "Monitor only" and no caveat', () => {
+    const a = driverOn('https://shop.example.com/');
+    expect(downloadsEnforced(a, null)).toBe(false);
+    const p = presentAgent(a, null);
+    expect(p.badge).toBe('Monitor only');
+    expect(p.ruleCaveat).toBeNull();
+  });
+
+  it('the pill shows the downloads state exactly when the caveat names the host', () => {
+    const cases: Array<[string, DelegationRule | null]> = [
+      ['https://a.example/', createRuleFromPreset('readOnly')],
+      ['https://a.example/', createRuleFromPreset('limited')],
+      ['https://a.example/', createRuleFromPreset('fullAccess')],
+      ['https://a.example/', null],
+      ['about:blank', createRuleFromPreset('readOnly')],
+    ];
+    for (const [origin, rule] of cases) {
+      const p = presentAgent(driverOn(origin), rule);
+      const namesHost = (p.ruleCaveat ?? '').includes('downloads from a.example are cancelled');
+      expect(p.badge === EXTERNAL_DRIVER_DOWNLOADS_ENFORCED_LABEL).toBe(namesHost);
+    }
+  });
+
+  it('the tooltip no longer says every action is unblockable', () => {
+    const p = presentAgent(driverOn('https://a.example/'), createRuleFromPreset('readOnly'));
+    expect(p.badgeTitle).toContain('cannot block the actions it takes in the page');
+    expect(p.badgeTitle).not.toMatch(/individual actions/);
   });
 });

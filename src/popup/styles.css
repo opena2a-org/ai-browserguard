@@ -1178,6 +1178,92 @@ kbd {
   font-size: var(--font-size-xs);
 }
 
+/* One recovery block for capability (download) blocks: a visible hint plus a
+   native disclosure. Never carried in a title attribute. */
+.capability-recovery {
+  margin-top: 8px;
+  padding-top: 8px;
+  border-top: 1px solid var(--border-default);
+}
+
+.capability-recovery-hint {
+  margin: 0;
+  font-size: var(--font-size-sm);
+  line-height: 1.45;
+  color: var(--text-primary);
+}
+
+.capability-recovery-more {
+  margin-top: 6px;
+  font-size: var(--font-size-sm);
+  line-height: 1.45;
+  color: var(--text-secondary);
+}
+
+.capability-recovery-more > summary {
+  cursor: pointer;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.capability-recovery-more > summary:focus-visible {
+  outline: 2px solid var(--color-accent-hover);
+  outline-offset: 2px;
+  border-radius: 2px;
+}
+
+.capability-recovery-more > p {
+  margin: 4px 0 0;
+}
+
+/* Agent detection card: header row, trust pills and the scope caveat. */
+.detection-card-header {
+  display: flex;
+  flex-wrap: wrap;
+  row-gap: 4px;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 2px;
+}
+
+/* Filled pills carry --text-primary text: white on these fills fails WCAG AA
+   at 11 px. */
+.agent-pill {
+  display: inline-block;
+  font-size: var(--font-size-xs);
+  font-weight: 600;
+  padding: 1px 6px;
+  border-radius: 3px;
+  color: var(--text-primary);
+  white-space: nowrap;
+  margin-left: 4px;
+}
+
+.agent-pill-amber {
+  background: #f59e0b;
+}
+
+.agent-pill-cyan {
+  background: #06b6d4;
+}
+
+.agent-pill-green {
+  background: #22c55e;
+}
+
+.agent-pill-red {
+  background: #ef4444;
+}
+
+.agent-scope-caveat {
+  margin-top: 6px;
+  padding-left: 8px;
+  border-left: 2px solid var(--color-warning);
+  font-size: var(--font-size-xs);
+  line-height: 1.45;
+  color: var(--text-primary);
+}
+
 /* Staged update call-out (issue #68) */
 .update-callout-text {
   margin: 4px 0 8px;

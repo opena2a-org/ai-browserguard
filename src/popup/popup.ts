@@ -27,7 +27,13 @@ import {
 } from '../aisafety/opt-out-response';
 import { renderAiSafetyDeclaration } from './ai-safety-row';
 import { triggerJsonDownload } from './download';
-import { CAPABILITY_BLOCK_HINT, blockingRuleIdOf, isCapabilityBlock } from './block-actions';
+import {
+  CAPABILITY_BLOCK_HINT,
+  CAPABILITY_BLOCK_DETAIL_LABEL,
+  CAPABILITY_BLOCK_DETAIL_BODY,
+  blockingRuleIdOf,
+  isCapabilityBlock,
+} from './block-actions';
 
 interface PopupState {
   detectedAgents: AgentIdentity[];
@@ -416,18 +422,55 @@ function sendWhitelist(button: HTMLButtonElement, domain: string, ruleId: string
   });
 }
 
+/**
+ * The alerts the "Recently blocked" callout shows at `now`: those newer than
+ * RECENT_BLOCK_WINDOW_MS, the last RECENT_BLOCK_MAX_ITEMS of them, newest first.
+ * Shared with the Violations panel so exactly one recovery block is on screen.
+ */
+function calloutAlerts(now: number): BoundaryAlert[] {
+  const fresh = popupState.recentViolations.filter((alert) => {
+    const ts = Date.parse(alert.violation.timestamp);
+    return Number.isFinite(ts) && now - ts < RECENT_BLOCK_WINDOW_MS;
+  });
+  return fresh.slice(-RECENT_BLOCK_MAX_ITEMS).reverse();
+}
+
+/**
+ * The one recovery block for capability (download) blocks: the visible hint
+ * and a native disclosure holding the other controls. Never sets `title`: a
+ * tooltip is unreachable by keyboard and not reliably announced, and this text
+ * is what the user needs to get the file back.
+ */
+function renderCapabilityRecovery(): HTMLElement {
+  const block = document.createElement('div');
+  block.className = 'capability-recovery';
+
+  const hint = document.createElement('p');
+  hint.className = 'capability-recovery-hint';
+  hint.textContent = CAPABILITY_BLOCK_HINT;
+
+  const more = document.createElement('details');
+  more.className = 'capability-recovery-more';
+  const summary = document.createElement('summary');
+  summary.textContent = CAPABILITY_BLOCK_DETAIL_LABEL;
+  const body = document.createElement('p');
+  body.textContent = CAPABILITY_BLOCK_DETAIL_BODY;
+  more.appendChild(summary);
+  more.appendChild(body);
+
+  block.appendChild(hint);
+  block.appendChild(more);
+  return block;
+}
+
 function renderRecentBlockCallout(): void {
   const callout = document.getElementById('recent-block-callout');
   const list = document.getElementById('recent-block-list');
   if (!callout || !list) return;
 
-  const now = Date.now();
-  const fresh = popupState.recentViolations.filter((alert) => {
-    const ts = Date.parse(alert.violation.timestamp);
-    return Number.isFinite(ts) && now - ts < RECENT_BLOCK_WINDOW_MS;
-  });
+  const recent = calloutAlerts(Date.now());
 
-  if (fresh.length === 0) {
+  if (recent.length === 0) {
     callout.classList.add('hidden');
     return;
   }
@@ -436,7 +479,6 @@ function renderRecentBlockCallout(): void {
   // Clear with textContent so we don't accumulate listeners between renders.
   list.textContent = '';
 
-  const recent = fresh.slice(-RECENT_BLOCK_MAX_ITEMS).reverse();
   for (const alert of recent) {
     const row = document.createElement('div');
     row.className = 'recent-block-row';
@@ -468,12 +510,9 @@ function renderRecentBlockCallout(): void {
       domain = new URL(alert.violation.url).hostname;
     } catch { /* skip if malformed */ }
 
-    if (isCapabilityBlock(alert)) {
-      const hint = document.createElement('div');
-      hint.className = 'recent-block-hint';
-      hint.textContent = CAPABILITY_BLOCK_HINT;
-      actions.appendChild(hint);
-    } else if (domain) {
+    // A capability block has no row action: the recovery text renders once,
+    // below the rows, however many download rows there are.
+    if (!isCapabilityBlock(alert) && domain) {
       const whitelistBtn = document.createElement('button');
       whitelistBtn.className = 'btn btn-secondary recent-block-btn';
       whitelistBtn.textContent = `Whitelist ${domain}`;
@@ -484,8 +523,14 @@ function renderRecentBlockCallout(): void {
     }
 
     row.appendChild(meta);
-    row.appendChild(actions);
+    // Only a non-empty actions column takes width, so the meta column keeps
+    // the full row when there is no button.
+    if (actions.childElementCount > 0) row.appendChild(actions);
     list.appendChild(row);
+  }
+
+  if (recent.some(isCapabilityBlock)) {
+    list.appendChild(renderCapabilityRecovery());
   }
 }
 
@@ -573,7 +618,7 @@ function renderDetectionPanel(): void {
     card.className = 'detection-card';
 
     const headerRow = document.createElement('div');
-    headerRow.style.cssText = 'display: flex; justify-content: space-between; align-items: center; margin-bottom: 2px;';
+    headerRow.className = 'detection-card-header';
 
     const name = document.createElement('strong');
     name.textContent = formatAgentType(agent.type);
@@ -599,38 +644,39 @@ function renderDetectionPanel(): void {
 
     const trustBadge = document.createElement('span');
     if (!presentation.enforceable) {
-      // External driver: monitor-only. Amber (informational), never the teal
-      // "Managed" pill that would imply governance we cannot deliver.
-      trustBadge.style.cssText = 'font-size: 11px; font-weight: 600; padding: 1px 6px; border-radius: 3px; color: white; background: #f59e0b; margin-left: 4px;';
+      // External driver: amber (informational) in both of its states, never the
+      // teal "Managed" pill that would imply governance we cannot deliver. The
+      // label, chosen by the same predicate as the caveat, tells them apart.
+      trustBadge.className = 'agent-pill agent-pill-amber';
       trustBadge.textContent = presentation.badge;
       trustBadge.title = presentation.badgeTitle;
     } else if (agentRule) {
       // In-page agent under a rule — page-realm enforcement genuinely applies (best-effort).
-      trustBadge.style.cssText = 'font-size: 11px; font-weight: 600; padding: 1px 6px; border-radius: 3px; color: white; background: #06b6d4; margin-left: 4px;';
+      trustBadge.className = 'agent-pill agent-pill-cyan';
       trustBadge.textContent = presentation.badge;
       trustBadge.title = presentation.badgeTitle;
     } else if (agent.trustScore !== undefined && agent.trustScore !== null) {
       const score = agent.trustScore;
-      let trustColor: string;
+      let trustClass: string;
       let trustLabel: string;
       if (score > 0.7) {
-        trustColor = '#22c55e'; // green
+        trustClass = 'agent-pill-green';
         trustLabel = 'Trusted';
       } else if (score >= 0.3) {
-        trustColor = '#f59e0b'; // yellow/amber
+        trustClass = 'agent-pill-amber';
         trustLabel = 'Known';
       } else if (isKnownTool) {
-        trustColor = '#f59e0b'; // amber for known tools not in registry
+        trustClass = 'agent-pill-amber'; // known tools not in registry
         trustLabel = 'Known Tool';
       } else {
-        trustColor = '#ef4444'; // red
+        trustClass = 'agent-pill-red';
         trustLabel = 'Untrusted';
       }
-      trustBadge.style.cssText = `font-size: 11px; font-weight: 600; padding: 1px 6px; border-radius: 3px; color: white; background: ${trustColor}; margin-left: 4px;`;
+      trustBadge.className = `agent-pill ${trustClass}`;
       trustBadge.textContent = `${trustLabel} (${score.toFixed(1)})`;
       trustBadge.title = agent.label ?? `Trust: ${score}`;
     } else if (isKnownTool) {
-      trustBadge.style.cssText = 'font-size: 11px; font-weight: 600; padding: 1px 6px; border-radius: 3px; color: white; background: #f59e0b; margin-left: 4px;';
+      trustBadge.className = 'agent-pill agent-pill-amber';
       trustBadge.textContent = 'Known Tool';
       trustBadge.title = `${agent.type} is a recognized automation framework`;
     } else {
@@ -659,6 +705,7 @@ function renderDetectionPanel(): void {
     urlRow.title = agent.originUrl;
 
     const quickAllowRow = document.createElement('div');
+    quickAllowRow.className = 'agent-grant-row';
     quickAllowRow.style.cssText = 'display: flex; gap: 6px; margin-top: 6px; align-items: center;';
 
     if (agentRule) {
@@ -732,20 +779,21 @@ function renderDetectionPanel(): void {
     card.appendChild(metaRow);
     card.appendChild(urlRow);
     card.appendChild(quickAllowRow);
+    // ADR-008: when a policy is set on an agent we cannot enforce against, state
+    // the scope so "Read-Only" is not read as an enforced boundary. It qualifies
+    // the grant row, so it sits directly under it.
+    if (presentation.ruleCaveat) {
+      const caveat = document.createElement('div');
+      caveat.className = 'agent-scope-caveat';
+      caveat.textContent = presentation.ruleCaveat;
+      card.appendChild(caveat);
+    }
     // What the SITE says about itself, kept visually separate from the agent
     // trust badge above it. The badge is about the agent and is partly derived
     // from AIM/registry data; this is an unverified claim by the page's origin
     // (ADR-009). Conflating the two would be the overclaim ADR-008 removed.
     const aiSafetyBlock = renderAiSafetyDeclaration(popupState.aiSafetyDeclarations[agent.id]);
     if (aiSafetyBlock) card.appendChild(aiSafetyBlock);
-    // ADR-008: when a policy is set on an agent we cannot enforce against, state
-    // the scope so "Read-Only" is not read as an enforced boundary.
-    if (presentation.ruleCaveat) {
-      const caveat = document.createElement('div');
-      caveat.style.cssText = 'font-size: 11px; color: #b45309; font-weight: 600; margin-top: 6px; line-height: 1.35;';
-      caveat.textContent = presentation.ruleCaveat;
-      card.appendChild(caveat);
-    }
     // ADR-008 R1: pair the detect-only reality with the browser's own posture,
     // so the caveat ends in something the user can act on (or already has).
     if (!presentation.enforceable) {
@@ -999,7 +1047,6 @@ function renderViolationsPanel(): void {
         const hint = document.createElement('span');
         hint.style.cssText = 'font-size: 11px; color: var(--text-secondary);';
         hint.textContent = 'Download blocked by the delegation';
-        hint.title = CAPABILITY_BLOCK_HINT;
         row.appendChild(hint);
       } else {
         const allowBtn = document.createElement('button');
@@ -1012,6 +1059,16 @@ function renderViolationsPanel(): void {
       whitelistSection.appendChild(row);
     }
     container.appendChild(whitelistSection);
+  }
+
+  // Once the callout no longer shows a capability block (its window closed),
+  // the recovery block moves here so it stays reachable. Exactly one is on
+  // screen at any time.
+  if (
+    !calloutAlerts(Date.now()).some(isCapabilityBlock) &&
+    popupState.recentViolations.some(isCapabilityBlock)
+  ) {
+    container.appendChild(renderCapabilityRecovery());
   }
 
   for (const alert of popupState.recentViolations.slice(-10).reverse()) {
