@@ -1488,7 +1488,11 @@ async function handleDownloadCreated(item: chrome.downloads.DownloadItem): Promi
     const now = Date.now();
     if (now - lastDownloadBlockNotificationAt >= DOWNLOAD_NOTIFICATION_COALESCE_MS) {
       lastDownloadBlockNotificationAt = now;
-      showBoundaryNotification(alert, { enabled: state.notificationsEnabled });
+      // A cancelled download cannot be undone, and the popup's record of it is
+      // in memory only, so this notification is not cleared after 10 s: its
+      // lifetime is left to the OS. It carries no button, so a long life cannot
+      // offer a stale action. Allow-once alerts keep the shared 10 s default.
+      showBoundaryNotification(alert, { enabled: state.notificationsEnabled, autoDismissMs: 0 });
     }
     state.recentAlerts.push(alert);
     if (state.recentAlerts.length > 20) {
