@@ -12,8 +12,13 @@
  *    interceptor only wraps page-JS globals and only reacts to untrusted/
  *    synthetic events, so it never sees these actions — and no attribution
  *    signal exists that could tell the driver's native input from the human's.
- *    So per-ACTION enforcement is IMPOSSIBLE for this population — ABG can
- *    detect + alert + kill the tab, not block individual actions. (This is an
+ *    So per-ACTION enforcement of page actions is IMPOSSIBLE for this
+ *    population — ABG can detect + alert + kill the tab, not block the actions
+ *    it takes in the page. Downloads are the exception: they are cancelled by
+ *    the service worker through `chrome.downloads`, which needs no input
+ *    attribution, so under a delegation that blocks `download-file` a download
+ *    from the host the agent was detected on is cancelled for every agent type
+ *    (see `downloadsEnforced` below). (This is an
  *    attribution limit, not a debugger-slot limit: on current multi-client
  *    Chrome our `chrome.debugger.attach` typically SUCCEEDS alongside an
  *    external driver, which is why the tab-wide blocked-domain egress layer
@@ -58,8 +63,13 @@ const PAGE_REALM_METHODS: ReadonlySet<DetectionMethod> = new Set<DetectionMethod
   'framework-fingerprint',
 ]);
 
-/** Minimal shape this module needs — accepts a full AgentIdentity or a stub. */
-export type AgentLike = Pick<AgentIdentity, 'type' | 'detectionMethods'>;
+/**
+ * Minimal shape this module needs — accepts a full AgentIdentity or a stub.
+ * `originUrl` is the page the agent was detected on; without it (or when it
+ * has no host name) no download is tied to the agent.
+ */
+export type AgentLike = Pick<AgentIdentity, 'type' | 'detectionMethods'> &
+  Partial<Pick<AgentIdentity, 'originUrl'>>;
 
 /**
  * True when ABG cannot see or enforce against the agent's actions from the page
@@ -82,7 +92,11 @@ export function isExternalDriver(agent: AgentLike): boolean {
 }
 
 export type EnforcementReality =
-  /** External driver: detection + alert + kill-tab only; no per-action enforcement. */
+  /**
+   * External driver: detection + alert + kill-tab only; no enforcement of the
+   * actions it takes in the page. Downloads are handled outside the page and
+   * are not covered by this value (see `presentAgent`).
+   */
   | 'none'
   /** In-page/injected agent: page-realm interception applies (best-effort). */
   | 'page-realm-best-effort';
@@ -107,7 +121,11 @@ export const UNOBSERVABLE_SCOPE_NOTE =
 
 /** Ready-to-render presentation for a detected agent and its rule (if any). */
 export interface AgentPresentation {
-  /** Can ABG enforce action policy on this agent at all? */
+  /**
+   * Can ABG enforce page-action policy on this agent? False for external
+   * drivers even when their downloads are cancelled, because page actions are
+   * still not enforced (ADR-008).
+   */
   enforceable: boolean;
   /** Trust-pill text. Never "Managed" for an agent we cannot manage. */
   badge: string;
@@ -121,6 +139,33 @@ export interface AgentPresentation {
   ruleCaveat: string | null;
 }
 
+/** Pill text for an external driver whose downloads the delegation cancels. */
+export const EXTERNAL_DRIVER_DOWNLOADS_ENFORCED_LABEL = 'Partly enforced';
+
+/** The hostname of `url`, or '' when it is missing, unparseable or host-less. */
+function hostOf(url: string | undefined): string {
+  if (!url) return '';
+  try {
+    return new URL(url).hostname;
+  } catch {
+    return '';
+  }
+}
+
+/**
+ * Whether downloads tied to this agent are cancelled under `rule`: a rule is
+ * set, the agent's origin has a host name for a download to match, and the
+ * rule blocks `download-file`. The ONE predicate that picks both the pill and
+ * the caveat variant, so they can never disagree.
+ */
+export function downloadsEnforced(agent: AgentLike, rule: DelegationRule | null): boolean {
+  return (
+    rule !== null &&
+    hostOf(agent.originUrl) !== '' &&
+    rule.scope.actionRestrictions.some((r) => r.capability === 'download-file' && r.action === 'block')
+  );
+}
+
 /**
  * Decide what to show for a detected agent. This replaces the inline popup logic
  * that showed "Managed" whenever a rule existed — which asserted governance ABG
@@ -128,14 +173,19 @@ export interface AgentPresentation {
  */
 export function presentAgent(agent: AgentLike, rule: DelegationRule | null): AgentPresentation {
   if (isExternalDriver(agent)) {
+    const enforcedDownloads = downloadsEnforced(agent, rule);
+    let ruleCaveat: string | null = null;
+    if (rule) {
+      ruleCaveat = enforcedDownloads
+        ? `Page-level policy does not stop this agent: it drives the browser directly. Under this delegation, downloads from ${hostOf(agent.originUrl)} are cancelled, yours included. The kill switch (close tab) is the hard stop.`
+        : 'Page-level policy does not stop this agent: it drives the browser directly. The kill switch (close tab) is the hard stop.';
+    }
     return {
       enforceable: false,
-      badge: 'Monitor only',
+      badge: enforcedDownloads ? EXTERNAL_DRIVER_DOWNLOADS_ENFORCED_LABEL : 'Monitor only',
       badgeTitle:
-        'This agent drives the browser directly (CDP/WebDriver). AI Browser Guard can detect and alert on it, but cannot block its individual actions. Use the kill switch to close the tab it controls.',
-      ruleCaveat: rule
-        ? 'Not enforced. This agent bypasses page-level policy — the kill switch (close tab) is the hard stop.'
-        : null,
+        'This agent drives the browser directly (CDP/WebDriver). AI Browser Guard can detect and alert on it, but cannot block the actions it takes in the page. Use the kill switch to close the tab it controls.',
+      ruleCaveat,
     };
   }
   return {

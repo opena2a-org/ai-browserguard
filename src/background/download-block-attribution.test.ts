@@ -101,12 +101,15 @@ describe('F-A: blocked agent download is attributed, not silent', () => {
     expect(downloads.cancel).toHaveBeenCalledWith(7, expect.any(Function));
 
     // ...and the user can tell: an in-the-moment notification with a
-    // plain-language why (pre-fix: notifications.create never called here)...
+    // plain-language why (pre-fix: notifications.create never called here)
+    // that names the agent's host, the delegation by its display name (not the
+    // raw preset id), and a remedy that works...
     expect(chromeMock.notifications.create).toHaveBeenCalledWith(
       expect.any(String),
       expect.objectContaining({
         title: expect.stringContaining('Download blocked'),
-        message: expect.stringContaining('Cancelled an agent download'),
+        message:
+          "Cancelled a download: exfil.zip. An agent was detected on example.test, and your delegation (Read-Only) blocks downloads from there, yours included. To get it, close that agent's tab, then retry.",
       }),
     );
     // ...with no "Allow once" button — the download cannot be resumed, and an

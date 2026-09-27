@@ -143,7 +143,7 @@ async function main() {
       rec('PASS', '3. file download produced a download-attributable event');
     } else {
       rec('FLAG', '3. file download produced NO download-attributable event',
-        'agent-initiated download recorded nothing referencing the download: incoming downloads are not monitored (downloads permission is export-only, src/background/index.ts:306; no `download` AgentEventType exists)');
+        'agent-initiated download recorded nothing referencing the download, although downloads are monitored while an agent is registered (chrome.downloads.onCreated -> handleDownloadCreated, src/background/index.ts:269; AgentEventType includes `download`): check that the agent was registered before the download started');
     }
 
     // --- Scenario 4: kill switch ---

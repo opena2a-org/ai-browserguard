@@ -5,7 +5,15 @@
 import { describe, it, expect } from 'vitest';
 import { readFileSync } from 'fs';
 import { resolve } from 'path';
-import { blockingRuleIdOf, isCapabilityBlock, CAPABILITY_BLOCK_HINT } from './block-actions';
+import {
+  blockingRuleIdOf,
+  isCapabilityBlock,
+  CAPABILITY_BLOCK_HINT,
+  CAPABILITY_BLOCK_DETAIL,
+  CAPABILITY_BLOCK_DETAIL_BODY,
+  CAPABILITY_BLOCK_DETAIL_LABEL,
+} from './block-actions';
+import { FULL_ACCESS_MAX_MINUTES } from '../delegation/rules';
 import type { BoundaryAlert } from '../alerts/boundary';
 
 function alert(attemptedAction: string, blockingRuleId: string): BoundaryAlert {
@@ -17,7 +25,25 @@ function alert(attemptedAction: string, blockingRuleId: string): BoundaryAlert {
 describe('block-actions', () => {
   it('treats a download block as capability-level (no site Allow offered)', () => {
     expect(isCapabilityBlock(alert('download-file', 'r1'))).toBe(true);
-    expect(CAPABILITY_BLOCK_HINT).toMatch(/Full Access permits downloads/);
+    // The hint leads with the one remedy that neither widens the agent's
+    // authority nor ends every delegation, and never claims the user's own
+    // downloads are exempt.
+    expect(CAPABILITY_BLOCK_HINT).toMatch(/close that agent's tab, then retry\.$/);
+    expect(CAPABILITY_BLOCK_HINT).toMatch(/yours included/);
+    expect(CAPABILITY_BLOCK_HINT).not.toMatch(/never|save the file yourself/i);
+  });
+
+  it('names the other controls with their conditions, the Full Access limit rendered from rules.ts', () => {
+    expect(CAPABILITY_BLOCK_DETAIL_LABEL).toBe('Other controls');
+    expect(CAPABILITY_BLOCK_DETAIL).toBe(`${CAPABILITY_BLOCK_DETAIL_LABEL}: ${CAPABILITY_BLOCK_DETAIL_BODY}`);
+    // The label and body split must not change a word: joined, they are the
+    // ruled detail string byte for byte.
+    expect(CAPABILITY_BLOCK_DETAIL).toBe(
+      `Other controls: Revoke on the agent's card frees downloads if no session delegation blocks them. Full Access permits downloads but gives the agent every capability for up to ${FULL_ACCESS_MAX_MINUTES} minutes, and a grant on the agent's card overrides a session one. The kill switch frees them but closes agent tabs and ends every delegation.`,
+    );
+    expect(CAPABILITY_BLOCK_DETAIL_BODY).toContain(`for up to ${FULL_ACCESS_MAX_MINUTES} minutes`);
+    expect(CAPABILITY_BLOCK_DETAIL_BODY).toMatch(/^Revoke on the agent's card frees downloads if no session delegation blocks them\./);
+    expect(CAPABILITY_BLOCK_DETAIL_BODY).toMatch(/The kill switch frees them but closes agent tabs and ends every delegation\.$/);
   });
 
   it('offers a site Allow for site-level blocks', () => {

@@ -2,6 +2,14 @@
 
 All notable changes to AI Browser Guard are documented here.
 
+## [Unreleased]
+
+### Fixed
+- **A download is cancelled only when it shares a host name with an agent's page (#69).** Under a delegation that does not permit downloads, a download is now cancelled only when its URL, final URL or referrer has the same host name as the page where an agent was detected. Before this change, with any agent detected, a download from any site could be attributed to it and cancelled, including the user's own downloads in other tabs. Other downloads made while an agent is detected are recorded in the session log as attribution uncertain and are not cancelled. A download the user starts from an agent's host is still cancelled; closing that agent's tab and retrying lets it through when no other agent was detected on that host.
+
+### Changed
+- The download notification, the session log labels and the external-agent card now say which host a cancellation is tied to, and that downloads you start from that host are cancelled too.
+
 ## 0.7.0 - 2026-08-03
 
 Browser-layer (CDP/debugger) enforcement of blocked domains — the repatch-immune
