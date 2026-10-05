@@ -8,7 +8,7 @@ import type { MessagePayload, DetectionEvent, KillSwitchEvent, AgentEvent, Bound
 import type { AgentIdentity } from '../types/agent';
 import type { DelegationRule, DelegationPreset } from '../types/delegation';
 import type { AgentSession } from '../session/types';
-import { getStorageState, saveSession, updateSession, saveDelegationRules, appendDetectionLog, updateSettings, getSettings, getLifetimeStats, updateLifetimeStats, getKillSwitchState, saveKillSwitchState, getActiveAgentRegistry, updateActiveAgentRegistry } from '../session/storage';
+import { getStorageState, saveSession, updateSession, saveDelegationRules, appendDetectionLog, updateSettings, getSettings, getLifetimeStats, updateLifetimeStats, getKillSwitchState, saveKillSwitchState, getActiveAgentRegistry, updateActiveAgentRegistry, getGuardPauseState, saveGuardPauseState } from '../session/storage';
 import type { LifetimeStats } from '../session/types';
 import { DEFAULT_LIFETIME_STATS } from '../session/types';
 import { createTimelineEvent, appendEventToSession } from '../session/timeline';
@@ -16,6 +16,20 @@ import { executeBackgroundKillSwitch, createInitialKillSwitchState } from '../ki
 import type { KillSwitchState } from '../killswitch/index';
 import { isTimeBoundExpired, evaluateRule } from '../delegation/rules';
 import { selectEffectiveRule, applyDelegationUpdate } from '../delegation/effective';
+import type { GuardPause, PauseLogEntry, PauseEndReason } from '../delegation/pause';
+import {
+  createPause,
+  applyPause,
+  pauseCovering,
+  isPauseLive,
+  splitExpiredPauses,
+  nextPauseExpiry,
+  logPauseStarted,
+  logPauseEnded,
+  describePauseScope,
+  describePauseDuration,
+  PAUSE_END_REASON_LABELS,
+} from '../delegation/pause';
 import { shouldIgnoreDownload, attributeDownload, describeDownload, hostOf } from './download-monitor';
 import { setupNotificationHandlers, clearAllNotifications, showBoundaryNotification } from '../alerts/notification';
 import type { BoundaryAlert } from '../alerts/boundary';
@@ -70,6 +84,16 @@ interface BackgroundState {
    * when the popup is opened or after BLOCK_BADGE_TTL_MS.
    */
   lastBlockAt: number | null;
+  /** The owner's pauses (#71), live or not yet settled as expired. */
+  guardPauses: GuardPause[];
+  /** History of pauses: what was unguarded, and when. Newest first. */
+  guardPauseLog: PauseLogEntry[];
+  /**
+   * Hostname of the page in each tab, as the tab last reported it. A site pause
+   * is matched against this, so a tab that navigates off the paused site is
+   * guarded again from its next message.
+   */
+  tabHosts: Map<number, string>;
 }
 
 const state: BackgroundState = {
@@ -82,6 +106,9 @@ const state: BackgroundState = {
   notificationsEnabled: true,
   cdpEnforcementEnabled: false,
   lastBlockAt: null,
+  guardPauses: [],
+  guardPauseLog: [],
+  tabHosts: new Map(),
 };
 
 /**
@@ -174,6 +201,9 @@ function enqueueKillSwitchMutation<T>(op: () => Promise<T>): Promise<T> {
 function initialize(): void {
   ensureReady().then(() => {
     updateBadge();
+    // A pause that ended while the worker was down: log it and re-arm the
+    // tabs it covered, which still hold the pass-through it gave them.
+    return expireGuardPauses();
   }).catch((err) => {
     console.error('[AI Browser Guard] Failed to load state:', err);
   });
@@ -223,8 +253,16 @@ function initialize(): void {
       // fan-out to open tabs (the reset broadcast lifts the in-page hard-block).
       checkDelegationExpiration()
         .catch(() => { /* ignore */ })
+        // Safety net for the exact-time pause alarm below.
+        .then(() => expireGuardPauses())
+        .catch(() => { /* ignore */ })
         .then(() => updateController.applyIfIdle())
         .catch(() => { /* deferred to the next tick */ });
+    }
+    if (alarm.name === PAUSE_EXPIRY_ALARM) {
+      ensureReady()
+        .then(() => expireGuardPauses())
+        .catch(() => { /* the delegation-check tick retries */ });
     }
     if (alarm.name === 'cdp-monitor') {
       runCdpDebuggerCheck().catch(() => { /* ignore */ });
@@ -313,6 +351,11 @@ async function loadPersistedState(): Promise<void> {
   state.killSwitch = await getKillSwitchState();
   state.notificationsEnabled = stored.settings.notificationsEnabled;
   state.cdpEnforcementEnabled = stored.settings.cdpEnforcementEnabled;
+  // Owner pauses (#71). Expired ones are inert (every check is against the
+  // clock) and are settled into the history by expireGuardPauses after load.
+  const pauses = await getGuardPauseState();
+  state.guardPauses = pauses.pauses;
+  state.guardPauseLog = pauses.log;
 
   // Rehydrate detected agents whose tabs still exist (F-P). The in-memory
   // agent/session maps die with every worker restart, and this loop used to
@@ -400,6 +443,14 @@ function handleMessage(
   }
 
   const tabId = sender.tab?.id;
+  if (tabId !== undefined) {
+    // Track the page each tab is on, so a site pause covers exactly that site.
+    // A host change can move a tab in or out of a pause; converge the CDP layer.
+    const pageUrl = sender.tab?.url ?? (sender.frameId === 0 ? sender.url : undefined);
+    if (pageUrl !== undefined && noteTabHost(tabId, pageUrl) && state.guardPauses.length > 0) {
+      reconcileCdpEnforcement().catch(() => { /* re-run on the cdp-monitor tick */ });
+    }
+  }
 
   switch (message.type) {
     case 'DETECTION_RESULT': {
@@ -562,6 +613,10 @@ function handleMessage(
         // A staged update held back by an active delegation or the kill switch;
         // the popup offers a user-triggered reload for it.
         pendingUpdate: updateController.getPending(),
+        // Owner pauses (#71): the live ones drive the popup countdown, the log
+        // shows afterwards what was unguarded and when.
+        guardPauses: state.guardPauses.filter((p) => isPauseLive(p, Date.now())),
+        guardPauseLog: state.guardPauseLog,
       });
       // The popup is now open; the user has seen the block alert.
       // Clear the transient block badge so the icon returns to its
@@ -608,6 +663,22 @@ function handleMessage(
         return undefined;
       }).catch(() => {
         sendResponse({ success: false });
+      });
+      return true;
+    }
+
+    case 'GUARD_PAUSE': {
+      // Serialized with the kill switch, so a pause and an emergency stop issued
+      // together settle in the order the user issued them.
+      enqueueKillSwitchMutation(() => handleGuardPause(message.data)).then(sendResponse).catch(() => {
+        sendResponse({ success: false, reason: 'The pause could not be saved.' });
+      });
+      return true;
+    }
+
+    case 'GUARD_RESUME': {
+      enqueueKillSwitchMutation(() => handleGuardResume(message.data)).then(sendResponse).catch(() => {
+        sendResponse({ success: false, reason: 'The pause could not be ended.' });
       });
       return true;
     }
@@ -1148,8 +1219,14 @@ function reportCdpBlock(tabId: number, url: string, reason: string): void {
 /**
  * Resolve the delegation rule in effect for a given tab: the rule bound to the
  * agent detected in this tab, else the session-wide rule, else none.
+ *
+ * A tab covered by a live owner pause (#71) resolves to none, which is the
+ * pass-through every enforcement layer already honours: the page-realm
+ * interceptor, the CDP layer and the download monitor. The kill switch is not a
+ * rule and is not lifted by a pause.
  */
 function getEffectiveRuleForTab(tabId: number): DelegationRule | null {
+  if (pauseForTab(tabId)) return null;
   const agentId = state.activeAgents.get(tabId)?.id ?? null;
   return selectEffectiveRule(state.delegationRules, agentId);
 }
@@ -1168,6 +1245,7 @@ async function broadcastEffectiveRules(): Promise<void> {
   const tabs = await chrome.tabs.query({});
   for (const tab of tabs) {
     if (tab.id === undefined) continue;
+    if (tab.url !== undefined) noteTabHost(tab.id, tab.url);
     const effective = getEffectiveRuleForTab(tab.id);
     try {
       await chrome.tabs.sendMessage(tab.id, {
@@ -1179,6 +1257,152 @@ async function broadcastEffectiveRules(): Promise<void> {
       // Tab may not have content script
     }
   }
+}
+
+// ── Owner pauses (#71) ───────────────────────────────────────────────────────
+
+/** One-shot alarm set to the next pause end, so enforcement returns on time. */
+const PAUSE_EXPIRY_ALARM = 'guard-pause-expiry';
+
+/**
+ * The hostname of the page in a tab: as the tab last reported it, else the
+ * detected agent's origin. Null when unknown, which no site pause covers.
+ */
+function hostForTab(tabId: number): string | null {
+  return state.tabHosts.get(tabId) ?? hostOf(state.activeAgents.get(tabId)?.originUrl);
+}
+
+/** Record a tab's page host. Returns true when it changed. */
+function noteTabHost(tabId: number, url: string): boolean {
+  const host = hostOf(url) || null;
+  if ((state.tabHosts.get(tabId) ?? null) === host) return false;
+  if (host === null) {
+    state.tabHosts.delete(tabId);
+  } else {
+    state.tabHosts.set(tabId, host);
+  }
+  return true;
+}
+
+/** The live pause covering a tab, or null. */
+function pauseForTab(tabId: number): GuardPause | null {
+  if (state.guardPauses.length === 0) return null;
+  return pauseCovering(state.guardPauses, hostForTab(tabId), Date.now());
+}
+
+/** Add a pause start or end to the session of every agent tab it covers. */
+function logPauseOnSessions(
+  pause: GuardPause,
+  type: 'delegation-granted' | 'delegation-revoked',
+  description: string,
+): void {
+  for (const [tabId, sessionId] of state.activeSessions) {
+    if (pause.scope === 'site' && hostForTab(tabId) !== pause.host) continue;
+    const event = createTimelineEvent(
+      type,
+      state.activeAgents.get(tabId)?.originUrl ?? '',
+      description,
+      { outcome: 'informational' },
+    );
+    updateSession(sessionId, (session) => appendEventToSession(session, event)).catch(() => {
+      /* the pause log is the durable record */
+    });
+  }
+}
+
+/** Close a pause in the history and on the timelines it covered. */
+function recordPauseEnd(pause: GuardPause, reason: PauseEndReason, now: number): void {
+  state.guardPauseLog = logPauseEnded(state.guardPauseLog, pause, reason, now);
+  logPauseOnSessions(
+    pause,
+    'delegation-revoked',
+    `Guard resumed ${describePauseScope(pause)} (${PAUSE_END_REASON_LABELS[reason]})`,
+  );
+}
+
+/** Move pauses that have run out into the history. Returns true when any did. */
+function settleExpiredPauses(now: number): boolean {
+  const { live, expired } = splitExpiredPauses(state.guardPauses, now);
+  state.guardPauses = live;
+  for (const pause of expired) recordPauseEnd(pause, 'expired', now);
+  return expired.length > 0;
+}
+
+/** Arm the alarm for the next pause end. A stale alarm fires as a no-op. */
+function scheduleNextPauseExpiry(): void {
+  const next = nextPauseExpiry(state.guardPauses, Date.now());
+  if (next === null) return;
+  try {
+    Promise.resolve(chrome.alarms.create(PAUSE_EXPIRY_ALARM, { when: next })).catch(() => {
+      /* the delegation-check tick is the safety net */
+    });
+  } catch {
+    // the delegation-check tick is the safety net
+  }
+}
+
+/**
+ * Persist the pause state, then route every tab its effective rule (paused tabs
+ * get none, resumed tabs get their rule back) and converge the CDP layer.
+ */
+async function commitGuardPauses(): Promise<void> {
+  await saveGuardPauseState(state.guardPauses, state.guardPauseLog);
+  scheduleNextPauseExpiry();
+  await broadcastEffectiveRules();
+  await reconcileCdpEnforcement();
+}
+
+/** End pauses whose time is up and re-arm the tabs they covered. */
+async function expireGuardPauses(): Promise<void> {
+  if (settleExpiredPauses(Date.now())) {
+    await commitGuardPauses();
+  } else {
+    scheduleNextPauseExpiry();
+  }
+}
+
+type GuardPauseResult = { success: true; pause: GuardPause } | { success: false; reason: string };
+
+/** Start an owner pause from the popup. */
+async function handleGuardPause(data: unknown): Promise<GuardPauseResult> {
+  await ensureReady();
+  if (state.killSwitch.isActive) {
+    return { success: false, reason: 'The kill switch is on. Resume monitoring before pausing the guard.' };
+  }
+  const now = Date.now();
+  const request = (data && typeof data === 'object' ? data : {}) as { scope?: unknown; host?: unknown; minutes?: unknown };
+  const created = createPause(request, now, crypto.randomUUID());
+  if (!created.ok) return { success: false, reason: created.reason };
+
+  settleExpiredPauses(now);
+  const { pauses, replaced } = applyPause(state.guardPauses, created.pause);
+  state.guardPauses = pauses;
+  for (const pause of replaced) recordPauseEnd(pause, 'replaced', now);
+  state.guardPauseLog = logPauseStarted(state.guardPauseLog, created.pause);
+  logPauseOnSessions(
+    created.pause,
+    'delegation-granted',
+    `You paused the guard ${describePauseScope(created.pause)} ${describePauseDuration(created.pause)}`,
+  );
+  await commitGuardPauses();
+  return { success: true, pause: created.pause };
+}
+
+/** End an owner pause before its time, from the popup. */
+async function handleGuardResume(data: unknown): Promise<{ success: boolean; reason?: string }> {
+  await ensureReady();
+  const now = Date.now();
+  const settled = settleExpiredPauses(now);
+  const id = data && typeof data === 'object' ? (data as { id?: unknown }).id : undefined;
+  const pause = typeof id === 'string' ? state.guardPauses.find((p) => p.id === id) : undefined;
+  if (!pause) {
+    if (settled) await commitGuardPauses();
+    return { success: false, reason: 'That pause has already ended.' };
+  }
+  state.guardPauses = state.guardPauses.filter((p) => p.id !== pause.id);
+  recordPauseEnd(pause, 'resumed', now);
+  await commitGuardPauses();
+  return { success: true };
 }
 
 async function handleDelegationUpdate(rule: DelegationRule): Promise<void> {
@@ -1277,6 +1501,16 @@ async function executeKillSwitch(
     rule.isActive = false;
   }
   await saveDelegationRules(state.delegationRules);
+
+  // A pause never outlives an emergency stop (#71): after a reset the guard
+  // comes back fully on, not paused.
+  if (state.guardPauses.length > 0) {
+    const now = Date.now();
+    settleExpiredPauses(now);
+    for (const pause of state.guardPauses) recordPauseEnd(pause, 'kill-switch', now);
+    state.guardPauses = [];
+    await saveGuardPauseState(state.guardPauses, state.guardPauseLog);
+  }
 
   await clearAllNotifications();
   updateBadge();
@@ -1399,6 +1633,8 @@ async function handleDownloadCreated(item: chrome.downloads.DownloadItem): Promi
   const downloadUrl = info.finalUrl ?? info.url;
   const label = describeDownload(info);
   const rule = getEffectiveRuleForTab(tabId);
+  // Under an owner pause the rule is none; say so on the timeline (#71).
+  const pausedNote = pauseForTab(tabId) ? ' (guard paused)' : '';
 
   // Under a delegation that does not permit download-file, cancel the download,
   // but only when it is attributed with certainty (a referrer / final / url host
@@ -1423,8 +1659,8 @@ async function handleDownloadCreated(item: chrome.downloads.DownloadItem): Promi
   const timelineLabel = blocked
     ? `Blocked download from the agent's host: ${label}`
     : matchedByReferrer
-      ? `Download from the agent's host: ${label}`
-      : `Download while an agent was detected: ${label} (attribution uncertain)`;
+      ? `Download from the agent's host: ${label}${pausedNote}`
+      : `Download while an agent was detected: ${label} (attribution uncertain)${pausedNote}`;
   const event = createTimelineEvent(
     'download',
     downloadUrl,
@@ -1539,6 +1775,7 @@ async function handleTabRemoved(tabId: number): Promise<void> {
     state.activeSessions.delete(tabId);
   }
   state.activeAgents.delete(tabId);
+  state.tabHosts.delete(tabId);
   await updateActiveAgentRegistry((reg) => {
     delete reg[String(tabId)];
     return reg;

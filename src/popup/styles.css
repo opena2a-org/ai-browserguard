@@ -233,6 +233,15 @@ body::-webkit-scrollbar-thumb:hover {
   background-color: var(--color-accent);
 }
 
+.status-paused {
+  background-color: var(--color-warning-bg);
+  color: var(--color-warning);
+}
+
+.status-paused .status-dot {
+  background-color: var(--color-warning);
+}
+
 @keyframes pulse {
   0%, 100% { opacity: 1; }
   50% { opacity: 0.4; }
@@ -709,6 +718,64 @@ kbd {
   display: flex;
   align-items: center;
   justify-content: space-between;
+}
+
+/* Pause the guard (#71) */
+.pause-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--spacing-xs);
+  margin-bottom: var(--spacing-xs);
+}
+
+.pause-label {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: var(--font-size-sm);
+  color: var(--text-secondary);
+}
+
+.pause-row .pause-duration {
+  width: auto;
+  padding: 2px 6px;
+  font-size: var(--font-size-sm);
+}
+
+.pause-countdown {
+  font-size: var(--font-size-sm);
+  font-weight: 500;
+  color: var(--color-warning);
+}
+
+.pause-note {
+  margin: 0 0 var(--spacing-xs);
+  font-size: var(--font-size-xs);
+  color: var(--text-secondary);
+}
+
+.pause-error {
+  margin: 0 0 var(--spacing-xs);
+  font-size: var(--font-size-xs);
+  color: var(--color-danger);
+}
+
+.pause-history-title {
+  margin-top: var(--spacing-xs);
+  font-size: var(--font-size-xs);
+  font-weight: 600;
+  color: var(--text-secondary);
+}
+
+.pause-history {
+  list-style: none;
+  margin: 2px 0 0;
+  padding: 0;
+  font-size: var(--font-size-xs);
+  color: var(--text-secondary);
 }
 
 /* Small button variant */

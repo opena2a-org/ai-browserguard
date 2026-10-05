@@ -189,6 +189,8 @@ interface MessagePayload {
 | `SESSION_QUERY` | Popup -> Background | `{}` | Yes (`{ sessions: AgentSession[] }`) |
 | `STATUS_QUERY` | Popup -> Background, Content -> Background | `{}` | Yes (returns current state snapshot) |
 | `SETTINGS_UPDATE` | Popup -> Background | `Partial<UserSettings>` | Yes |
+| `GUARD_PAUSE` | Popup -> Background | `{ scope: 'site' \| 'all', host: string \| null, minutes: number \| null }` | Yes (`{ success, pause }` or `{ success: false, reason }`) |
+| `GUARD_RESUME` | Popup -> Background | `{ id: string }` | Yes (`{ success, reason? }`) |
 
 ### Response Protocol
 
@@ -281,6 +283,10 @@ if (!rule) {
 **Glob matching**: `matchGlob()` converts glob patterns to regex. For hostname-only patterns (no `://`), `*` matches `[^.]*` (single subdomain segment) and `**` matches `.*` (any number of segments). For full URL patterns, `*` maps to `.*`.
 
 **Single active rule**: Only one delegation rule can be active at a time. When a new rule is activated via `handleDelegationUpdate()` in the background, all existing rules are deactivated first.
+
+### Owner Pause
+
+The owner can pause the guard from the popup without disabling the extension (`src/delegation/pause.ts`). A site pause covers exactly one hostname for 15 or 60 minutes or until resumed; a pause everywhere always lasts 15 or 60 minutes. The background resolves a covered tab's effective rule to `null` in `getEffectiveRuleForTab()`, the pass-through every enforcement layer already honours (page-realm interceptor, CDP layer, download monitor), and broadcasts the change to open tabs. A tab's site is the host its content script last reported, so a tab that navigates off the paused site is guarded again from its next message. A one-shot `guard-pause-expiry` alarm (with the one-minute `delegation-check` tick as a safety net) ends timed pauses and re-arms the tabs. The kill switch is not a rule and is not lifted by a pause; activating it ends every pause, and no pause can start while it is on. `GUARD_PAUSE` and `GUARD_RESUME` are popup-only under sender validation. Live pauses and a bounded history (`guardPauses`, `guardPauseLog` in `chrome.storage.local`) survive a service-worker restart; an unreadable record counts as ended.
 
 ### Delegation Token
 

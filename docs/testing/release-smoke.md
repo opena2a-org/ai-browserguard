@@ -81,6 +81,18 @@ focused OS window); the export logic itself is locked in by
    - **Opt-out clears state.** Turn the setting back off; declarations disappear
      from the popup and `chrome.storage.local` no longer holds
      `aiSafetyDeclarationCache`.
+7. Pause the guard (#71). With a Read-Only delegation active and an agent on two
+   sites in two tabs:
+   - **Pause on this site** from the first tab's popup for 15 minutes. The agent
+     can click and type on that site with no toast and no recent-block entry; the
+     second tab still blocks. The popup shows the countdown and a Resume button.
+   - Navigate the paused tab to another site: actions there are blocked again.
+   - **Resume**: blocking returns on the paused site without reloading the tab.
+   - **Pause everywhere** for 15 minutes: the header reads "Paused everywhere" and
+     neither tab blocks. Press the kill switch: the pause ends, and the panel
+     offers no pause until monitoring is resumed.
+   - The Recent pauses list shows each pause with its start, end, and how it
+     ended.
 
 ## Sign-off
 

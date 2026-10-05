@@ -26,6 +26,10 @@ import {
   declarationsWereCleared,
 } from '../aisafety/opt-out-response';
 import { renderAiSafetyDeclaration } from './ai-safety-row';
+import { renderPausePanel, updatePauseCountdowns } from './pause-panel';
+import type { PauseRequest } from './pause-panel';
+import type { GuardPause, PauseLogEntry } from '../delegation/pause';
+import { pausableHostOf } from '../delegation/pause';
 import { triggerJsonDownload } from './download';
 import {
   CAPABILITY_BLOCK_HINT,
@@ -92,6 +96,14 @@ interface PopupState {
    * were deleted while they are still on disk.
    */
   settingWarnings: Record<string, string>;
+  /** Live owner pauses (#71), as the background confirmed them. */
+  guardPauses: GuardPause[];
+  /** Pause history, newest first. */
+  guardPauseLog: PauseLogEntry[];
+  /** Hostname of the active tab's page, or null when it is not a website. */
+  currentHost: string | null;
+  /** Why the last pause or resume request failed. Cleared on the next one. */
+  pauseError: string | null;
 }
 
 let popupState: PopupState = {
@@ -118,11 +130,18 @@ let popupState: PopupState = {
   contributeStats: null,
   showContributeTip: false,
   settingWarnings: {},
+  guardPauses: [],
+  guardPauseLog: [],
+  currentHost: null,
+  pauseError: null,
 };
 
 // Holds the interval ID for the delegation countdown timer.
 // Cleared whenever the popup re-renders to avoid duplicate timers.
 let countdownIntervalId: ReturnType<typeof setInterval> | null = null;
+
+// Interval for the pause countdowns (#71); same lifecycle as the one above.
+let pauseCountdownIntervalId: ReturnType<typeof setInterval> | null = null;
 
 function initialize(): void {
   document.addEventListener('DOMContentLoaded', () => {
@@ -160,10 +179,14 @@ async function queryBackgroundStatus(): Promise<void> {
       popupState.lifetimeStats = (data as { lifetimeStats?: LifetimeStats }).lifetimeStats ?? null;
       popupState.pendingUpdate =
         (data as { pendingUpdate?: { version: string; stagedAt: string } | null }).pendingUpdate ?? null;
+      popupState.guardPauses = (data as { guardPauses?: GuardPause[] }).guardPauses ?? [];
+      popupState.guardPauseLog = (data as { guardPauseLog?: PauseLogEntry[] }).guardPauseLog ?? [];
     }
   } catch {
     // Background may not be available
   }
+
+  popupState.currentHost = await activeTabHost();
 
   // Also fetch sessions
   try {
@@ -347,6 +370,7 @@ function renderAll(): void {
   renderDetectionPanel();
   renderKillSwitchPanel();
   renderDelegationPanel();
+  renderGuardPausePanel();
   renderViolationsPanel();
   renderTimelinePanel();
   renderReportsPanel();
@@ -993,6 +1017,81 @@ function renderDelegationPanel(): void {
     empty.appendChild(placeholder);
     empty.appendChild(wizardBtn);
     content.appendChild(empty);
+  }
+}
+
+/**
+ * The site in the active tab, for "Pause on this site" (#71). Null when the
+ * tab is not a website or the tabs API is unavailable.
+ */
+async function activeTabHost(): Promise<string | null> {
+  try {
+    if (typeof chrome === 'undefined' || typeof chrome.tabs?.query !== 'function') return null;
+    const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+    return pausableHostOf(tab?.url);
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Send a pause or resume request and render only what the background
+ * confirmed: on failure the reason is shown and the panel keeps its state.
+ */
+function sendGuardPauseRequest(type: 'GUARD_PAUSE' | 'GUARD_RESUME', data: unknown, fallback: string): void {
+  popupState.pauseError = null;
+  sendToBackground(type, data).then((resp) => {
+    const result = resp as { success?: boolean; reason?: string } | null;
+    if (result?.success !== true) {
+      popupState.pauseError = result?.reason ?? fallback;
+      renderGuardPausePanel();
+      return undefined;
+    }
+    return queryBackgroundStatus();
+  }).catch(() => {
+    popupState.pauseError = fallback;
+    renderGuardPausePanel();
+  });
+}
+
+/** Pause panel (#71): live pauses with countdowns, the controls, the history. */
+function renderGuardPausePanel(): void {
+  if (pauseCountdownIntervalId !== null) {
+    clearInterval(pauseCountdownIntervalId);
+    pauseCountdownIntervalId = null;
+  }
+  const content = document.getElementById('pause-content');
+  if (!content) return;
+
+  renderPausePanel(
+    content,
+    {
+      currentHost: popupState.currentHost,
+      pauses: popupState.guardPauses,
+      log: popupState.guardPauseLog,
+      killSwitchActive: popupState.killSwitchActive,
+      error: popupState.pauseError,
+      now: Date.now(),
+    },
+    {
+      onPause: (request: PauseRequest) =>
+        sendGuardPauseRequest('GUARD_PAUSE', request, 'The pause could not be started. Try again.'),
+      onResume: (id: string) =>
+        sendGuardPauseRequest('GUARD_RESUME', { id }, 'The pause could not be ended. Try again.'),
+    },
+  );
+
+  if (popupState.guardPauses.some((p) => p.expiresAt !== null)) {
+    pauseCountdownIntervalId = setInterval(() => {
+      if (updatePauseCountdowns(content, Date.now())) {
+        if (pauseCountdownIntervalId !== null) {
+          clearInterval(pauseCountdownIntervalId);
+          pauseCountdownIntervalId = null;
+        }
+        // The background resumes enforcement on its own; fetch that state.
+        queryBackgroundStatus().catch(() => { /* ignore */ });
+      }
+    }, 1000);
   }
 }
 
@@ -1916,7 +2015,7 @@ function renderStatusBadge(): void {
   const statusText = document.getElementById('status-text');
   if (!indicator || !statusText) return;
 
-  indicator.classList.remove('status-idle', 'status-detected', 'status-killed', 'status-delegated');
+  indicator.classList.remove('status-idle', 'status-detected', 'status-killed', 'status-delegated', 'status-paused');
 
   if (popupState.killSwitchActive) {
     indicator.classList.add('status-killed');
@@ -1934,6 +2033,11 @@ function renderStatusBadge(): void {
         `Emergency stop (${ev.trigger}) at ${new Date(ev.timestamp).toLocaleString()}`,
       );
     }
+  } else if (popupState.guardPauses.some((p) => p.scope === 'all')) {
+    // A pause everywhere outranks the agent count: nothing is being blocked on
+    // any site, and the owner must see that first (#71).
+    indicator.classList.add('status-paused');
+    statusText.textContent = 'Paused everywhere';
   } else if (popupState.detectedAgents.length > 0) {
     indicator.classList.add('status-detected');
     statusText.textContent = `${popupState.detectedAgents.length} Agent(s) Detected`;
