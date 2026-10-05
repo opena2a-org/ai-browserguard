@@ -139,6 +139,51 @@ describe('pause panel (#71)', () => {
     expect(items[0]).toMatch(/^Everywhere · .+ to .+ · resumed by you$/);
   });
 
+  it('dates a history row from another day, and keeps today\'s rows to the time (#78)', () => {
+    const monthDay = (iso: string) => new Date(iso).toLocaleDateString([], { month: 'short', day: 'numeric' });
+    const time = (iso: string) => new Date(iso).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+    // 27 hours before NOW: a different calendar day in every time zone.
+    const yesterday: PauseLogEntry = {
+      ...pause({ scope: 'all', host: null, minutes: 60 }, 'p1'),
+      startedAt: '2026-10-04T09:10:00.000Z',
+      expiresAt: '2026-10-04T10:10:00.000Z',
+      endedAt: '2026-10-04T10:10:00.000Z',
+      endReason: 'expired',
+    };
+    const today: PauseLogEntry = {
+      ...pause({ scope: 'site', host: 'dashboard.example.com', minutes: 15 }, 'p2'),
+      endedAt: '2026-10-05T12:15:00.000Z',
+      endReason: 'resumed',
+    };
+    const { container } = render({ log: [today, yesterday] });
+    const items = Array.from(container.querySelectorAll('.pause-history li')).map((li) => li.textContent ?? '');
+
+    // Both ends carry their own date (in some time zones the hour crosses midnight).
+    const [start, end] = items[1].replace(/^Everywhere · | · ended on time$/g, '').split(' to ');
+    expect(start).toContain(monthDay(yesterday.startedAt));
+    expect(start).toContain(time(yesterday.startedAt));
+    expect(end).toContain(monthDay('2026-10-04T10:10:00.000Z'));
+    expect(end).toContain(time('2026-10-04T10:10:00.000Z'));
+
+    expect(items[0]).toBe(
+      `dashboard.example.com · ${time(today.startedAt)} to ${time('2026-10-05T12:15:00.000Z')} · resumed by you`,
+    );
+  });
+
+  it('dates both ends of a live pause that started on another day (#78)', () => {
+    const live: PauseLogEntry = {
+      ...pause({ scope: 'site', host: 'dashboard.example.com', minutes: null }, 'p1'),
+      startedAt: '2026-10-04T09:10:00.000Z',
+      endedAt: null,
+      endReason: null,
+    };
+    const { container } = render({ log: [live] });
+    const item = container.querySelector('.pause-history li')?.textContent ?? '';
+    const date = new Date(live.startedAt).toLocaleDateString([], { month: 'short', day: 'numeric' });
+    expect(item).toContain(date);
+    expect(item).toMatch(/ to now · still paused$/);
+  });
+
   it('writes a hostile host as text, never as markup', () => {
     const { container } = render({ currentHost: '<img src=x onerror=alert(1)>' });
     expect(container.querySelector('img')).toBeNull();
