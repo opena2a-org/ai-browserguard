@@ -6,6 +6,7 @@ All notable changes to AI Browser Guard are documented here.
 
 ### Fixed
 - **A download is cancelled only when it shares a host name with an agent's page (#69).** Under a delegation that does not permit downloads, a download is now cancelled only when its URL, final URL or referrer has the same host name as the page where an agent was detected. Before this change, with any agent detected, a download from any site could be attributed to it and cancelled, including the user's own downloads in other tabs. Other downloads made while an agent is detected are recorded in the session log as attribution uncertain and are not cancelled. A download the user starts from an agent's host is still cancelled; closing that agent's tab and retrying lets it through when no other agent was detected on that host.
+- **The popup's severity badges meet WCAG AA text contrast.** The DETECTED badge on an agent card and the severity label on each blocked action use darker text colours. Every severity level now measures at least 5:1 against the background it is shown on; the DETECTED badge measured 2.9:1 before, below the 4.5:1 minimum for its 11 px text. The popup layout smoke (`npm run smoke:popup-layout`) measures this in each panel that shows a badge.
 
 ### Changed
 - The download notification, the session log labels and the external-agent card now say which host a cancellation is tied to, and that downloads you start from that host are cancelled too.

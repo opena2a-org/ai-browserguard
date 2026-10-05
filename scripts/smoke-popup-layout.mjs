@@ -20,6 +20,10 @@
  *   - the trust pill renders on one line (height <= 20 px)
  *   - the scope caveat sits directly under the grant row
  *   - the pill label matches the caveat variant
+ *   - every severity badge's text meets WCAG AA (4.5:1) against the background
+ *     it is painted on, in each panel that shows a badge; each severity class
+ *     is also probed in each of those panels, so a class the scenario does not
+ *     render is measured too
  *
  * Usage: npm run build && npm run smoke:popup-layout
  * Exit code is non-zero if any assertion fails.
@@ -162,6 +166,73 @@ function check(name, cond, detail = '') {
   }
 }
 
+// WCAG 2.x minimum contrast for normal-size text; the badges are 11 px.
+const AA_TEXT_RATIO = 4.5;
+const SEVERITIES = ['critical', 'high', 'medium', 'low'];
+
+/**
+ * Runs in the page. Measures the text contrast of every .severity-badge, plus
+ * one probe per severity class appended next to each rendered badge, against
+ * the ancestor background colours composited over the white canvas.
+ */
+function measureSeverityBadges(levels) {
+  const parse = (s) => {
+    const m = s.match(/^rgba?\(([^)]+)\)$/);
+    if (!m) return null;
+    const [r, g, b, a = 1] = m[1].split(/[\s,/]+/).filter(Boolean).map(Number);
+    return { r, g, b, a };
+  };
+  const over = (top, under) => ({
+    r: top.r * top.a + under.r * (1 - top.a),
+    g: top.g * top.a + under.g * (1 - top.a),
+    b: top.b * top.a + under.b * (1 - top.a),
+    a: 1,
+  });
+  const lum = ({ r, g, b }) => {
+    const lin = (c) => ((c /= 255) <= 0.03928 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4);
+    return 0.2126 * lin(r) + 0.7152 * lin(g) + 0.0722 * lin(b);
+  };
+  const measure = (el) => {
+    const chain = [];
+    for (let n = el; n; n = n.parentElement) chain.unshift(n);
+    let bg = { r: 255, g: 255, b: 255, a: 1 };
+    for (const n of chain) {
+      const cs = getComputedStyle(n);
+      const where = `${n.tagName.toLowerCase()}${n.id ? `#${n.id}` : ''}`;
+      // A gradient or translucent ancestor would make the composite below wrong.
+      if (cs.backgroundImage !== 'none') return { error: `background-image on ${where}` };
+      if (cs.opacity !== '1') return { error: `opacity ${cs.opacity} on ${where}` };
+      const c = parse(cs.backgroundColor);
+      if (!c) return { error: `unparsed background "${cs.backgroundColor}" on ${where}` };
+      bg = over(c, bg);
+    }
+    const fg = parse(getComputedStyle(el).color);
+    if (!fg) return { error: `unparsed color "${getComputedStyle(el).color}"` };
+    const [hi, lo] = [lum(over(fg, bg)), lum(bg)].sort((x, y) => y - x);
+    return { ratio: (hi + 0.05) / (lo + 0.05) };
+  };
+  const panelOf = (el) => el.closest('section')?.id ?? '(no panel)';
+
+  const out = [];
+  const badges = [...document.querySelectorAll('.severity-badge')];
+  for (const badge of badges) {
+    out.push({ panel: panelOf(badge), cls: badge.className, text: badge.textContent, ...measure(badge) });
+  }
+  for (const host of new Set(badges.map((b) => b.parentElement))) {
+    for (const level of levels) {
+      for (const cls of [`severity-badge-${level}`, `severity-${level}`]) {
+        const probe = document.createElement('span');
+        probe.className = `severity-badge ${cls}`;
+        probe.textContent = level;
+        host.appendChild(probe);
+        out.push({ panel: panelOf(host), cls: probe.className, text: '(probe)', ...measure(probe) });
+        probe.remove();
+      }
+    }
+  }
+  return out;
+}
+
 const browser = await chromium.launch({ headless: true });
 try {
   for (const agentType of ['anthropic-computer-use', 'playwright']) {
@@ -240,6 +311,26 @@ try {
         check(`${label}: caveat sits directly under the grant row`, m.caveatAfterGrant === true);
       } else {
         check(`${label}: no caveat without a rule`, m.caveatText === null);
+      }
+
+      const badges = await page.evaluate(measureSeverityBadges, SEVERITIES);
+      const badgePanels = new Map();
+      for (const b of badges) badgePanels.set(b.panel, [...(badgePanels.get(b.panel) ?? []), b]);
+      const expectedPanels = ['detection-panel', ...(state.recentViolations.length > 0 ? ['violations-panel'] : [])];
+      for (const panel of expectedPanels) {
+        check(`${label}: a severity badge renders in #${panel}`, badgePanels.has(panel), JSON.stringify([...badgePanels.keys()]));
+      }
+      for (const [panel, rows] of badgePanels) {
+        const measured = rows.filter((r) => r.error === undefined).map((r) => r.ratio);
+        const lowest = measured.length > 0 ? Math.min(...measured).toFixed(2) : 'n/a';
+        const bad = rows
+          .filter((r) => r.error !== undefined || r.ratio < AA_TEXT_RATIO)
+          .map((r) => `${r.cls} "${r.text}" ${r.error ?? `${r.ratio.toFixed(2)}:1`}`);
+        check(
+          `${label}: severity badge text in #${panel} meets ${AA_TEXT_RATIO}:1 (${rows.length} measured, lowest ${lowest}:1)`,
+          bad.length === 0,
+          JSON.stringify(bad),
+        );
       }
 
       if (m.recoveryCount === 1) {
