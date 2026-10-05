@@ -77,11 +77,12 @@
   --color-info: #3b82f6;
   --color-info-bg: rgba(59, 130, 246, 0.08);
 
-  /* Severity colors */
-  --severity-critical: #dc2626;
-  --severity-high: #ea580c;
-  --severity-medium: #d97706;
-  --severity-low: #6b7280;
+  /* Severity colors. These are 11 px badge text, on a 10% tint over
+     --bg-tertiary at worst: each clears WCAG AA 4.5:1 there (lowest 5.06:1). */
+  --severity-critical: #b91c1c;
+  --severity-high: #9a3412;
+  --severity-medium: #92400e;
+  --severity-low: #4b5563;
 
   /* Typography - Inter for readability */
   --font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Noto Sans', Helvetica, Arial, sans-serif;
