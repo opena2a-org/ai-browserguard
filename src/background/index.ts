@@ -225,6 +225,14 @@ function initialize(): void {
   chrome.tabs.onRemoved.addListener((tabId) => {
     handleTabRemoved(tabId).catch(() => { /* ignore */ });
   });
+  // A tab's site follows its navigation, so a site pause stops covering a tab
+  // the moment it leaves the paused host, before the new page reports anything.
+  chrome.tabs.onUpdated.addListener((tabId, changeInfo) => {
+    if (changeInfo.url !== undefined) trackTabHost(tabId, changeInfo.url);
+  });
+  chrome.tabs.onReplaced.addListener((_addedTabId, removedTabId) => {
+    state.tabHosts.delete(removedTabId);
+  });
 
   // A staged update applies only while idle (update-policy.ts); otherwise it
   // waits for the delegation-check tick below or the popup's reload button.
@@ -445,11 +453,8 @@ function handleMessage(
   const tabId = sender.tab?.id;
   if (tabId !== undefined) {
     // Track the page each tab is on, so a site pause covers exactly that site.
-    // A host change can move a tab in or out of a pause; converge the CDP layer.
     const pageUrl = sender.tab?.url ?? (sender.frameId === 0 ? sender.url : undefined);
-    if (pageUrl !== undefined && noteTabHost(tabId, pageUrl) && state.guardPauses.length > 0) {
-      reconcileCdpEnforcement().catch(() => { /* re-run on the cdp-monitor tick */ });
-    }
+    if (pageUrl !== undefined) trackTabHost(tabId, pageUrl);
   }
 
   switch (message.type) {
@@ -1282,6 +1287,16 @@ function noteTabHost(tabId: number, url: string): boolean {
     state.tabHosts.set(tabId, host);
   }
   return true;
+}
+
+/**
+ * Record a tab's page host from its content script or its navigation. A host
+ * change can move a tab in or out of a pause; converge the CDP layer.
+ */
+function trackTabHost(tabId: number, url: string): void {
+  if (noteTabHost(tabId, url) && state.guardPauses.length > 0) {
+    reconcileCdpEnforcement().catch(() => { /* re-run on the cdp-monitor tick */ });
+  }
 }
 
 /** The live pause covering a tab, or null. */

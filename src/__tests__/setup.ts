@@ -93,6 +93,8 @@ const chromeMock = {
     sendMessage: vi.fn(() => Promise.resolve(undefined)),
     create: vi.fn(() => Promise.resolve({ id: 1 })),
     onRemoved: createEventMock(),
+    onUpdated: createEventMock(),
+    onReplaced: createEventMock(),
   },
   notifications: {
     create: vi.fn((_id: string, _options: unknown, callback?: (id: string) => void) => {

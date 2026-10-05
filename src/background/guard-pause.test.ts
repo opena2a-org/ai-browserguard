@@ -54,6 +54,28 @@ async function delegateReadOnly(handle: Listener): Promise<DelegationRule> {
   return rule;
 }
 
+/** A content-script report of an automation agent detected on `url`. */
+function agentDetectedOn(url: string) {
+  return {
+    id: 'det-1',
+    timestamp: new Date().toISOString(),
+    methods: ['cdp-connection'],
+    confidence: 'high',
+    agent: {
+      id: 'agent-1',
+      type: 'playwright',
+      detectionMethods: ['cdp-connection'],
+      confidence: 'high',
+      detectedAt: new Date().toISOString(),
+      originUrl: url,
+      observedCapabilities: [],
+      isActive: true,
+    },
+    url,
+    signals: {},
+  };
+}
+
 /** The DELEGATION_UPDATE payloads the worker pushed to one tab, in order. */
 function pushedTo(tabId: number): unknown[] {
   return chromeMock.tabs.sendMessage.mock.calls
@@ -134,31 +156,37 @@ describe('pause on this site (#71)', () => {
     expect(await ruleFor(handle, 42, OTHER_URL)).toEqual(expect.objectContaining({ preset: 'readOnly' }));
   });
 
+  it('a tab that navigates off the paused site is guarded again before its new page reports', async () => {
+    const downloads = chromeMock.downloads as unknown as Record<string, unknown>;
+    downloads.onCreated = { addListener: vi.fn(), removeListener: vi.fn() };
+    downloads.cancel = vi.fn((_id: number, cb?: () => void) => { cb?.(); });
+    const handle = await importWorker();
+
+    expect(await send(handle, 'DETECTION_RESULT', agentDetectedOn(PAUSED_URL), contentSender(42, PAUSED_URL))).toEqual({ success: true });
+    await delegateReadOnly(handle);
+    await send(handle, 'GUARD_PAUSE', { scope: 'site', host: 'dashboard.example.test', minutes: 15 }, POPUP_SENDER);
+
+    // The tab moves to another site; the page there has sent nothing yet.
+    const onUpdated = chromeMock.tabs.onUpdated.addListener.mock.calls.at(-1)?.[0] as
+      ((tabId: number, changeInfo: { url?: string }, tab: unknown) => void) | undefined;
+    onUpdated?.(42, { url: OTHER_URL }, { id: 42, url: OTHER_URL });
+
+    // A download from the agent's host in that tab is judged by the read-only
+    // rule of the site the tab is now on, not by the pause it left behind.
+    const onCreated = (downloads.onCreated as { addListener: { mock: { calls: unknown[][] } } })
+      .addListener.mock.calls[0][0] as (item: unknown) => Promise<void>;
+    await onCreated({ id: 8, url: 'https://dashboard.example.test/export.csv', referrer: OTHER_URL, filename: '/tmp/export.csv' });
+    for (let i = 0; i < 8; i++) await flush();
+    expect(downloads.cancel).toHaveBeenCalledWith(8, expect.any(Function));
+  });
+
   it('does not cancel the agent download on a paused site, and says why on the timeline', async () => {
     const downloads = chromeMock.downloads as unknown as Record<string, unknown>;
     downloads.onCreated = { addListener: vi.fn(), removeListener: vi.fn() };
     downloads.cancel = vi.fn((_id: number, cb?: () => void) => { cb?.(); });
     const handle = await importWorker();
 
-    const detection = {
-      id: 'det-1',
-      timestamp: new Date().toISOString(),
-      methods: ['cdp-connection'],
-      confidence: 'high',
-      agent: {
-        id: 'agent-1',
-        type: 'playwright',
-        detectionMethods: ['cdp-connection'],
-        confidence: 'high',
-        detectedAt: new Date().toISOString(),
-        originUrl: PAUSED_URL,
-        observedCapabilities: [],
-        isActive: true,
-      },
-      url: PAUSED_URL,
-      signals: {},
-    };
-    expect(await send(handle, 'DETECTION_RESULT', detection, contentSender(42, PAUSED_URL))).toEqual({ success: true });
+    expect(await send(handle, 'DETECTION_RESULT', agentDetectedOn(PAUSED_URL), contentSender(42, PAUSED_URL))).toEqual({ success: true });
     await delegateReadOnly(handle);
     await send(handle, 'GUARD_PAUSE', { scope: 'site', host: 'dashboard.example.test', minutes: 15 }, POPUP_SENDER);
 
