@@ -32,7 +32,8 @@ import pw from '../node_modules/playwright/index.js';
 import { createServer } from 'http';
 import { readFileSync, existsSync, statSync } from 'fs';
 import { fileURLToPath } from 'url';
-import { dirname, join, extname, normalize } from 'path';
+import { dirname, join, extname } from 'path';
+import { resolveStaticPath } from './static-path.mjs';
 
 const { chromium } = pw;
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -81,9 +82,8 @@ const MIME = {
   '.json': 'application/json',
 };
 const server = createServer((req, res) => {
-  const rel = normalize(decodeURIComponent((req.url ?? '/').split('?')[0])).replace(/^([/\\])+/, '');
-  const file = join(DIST, rel);
-  if (!file.startsWith(DIST) || !existsSync(file) || statSync(file).isDirectory()) {
+  const file = resolveStaticPath(DIST, req.url);
+  if (!file || !existsSync(file) || statSync(file).isDirectory()) {
     res.writeHead(404);
     res.end();
     return;
