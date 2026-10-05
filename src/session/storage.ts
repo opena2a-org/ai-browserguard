@@ -11,6 +11,8 @@ import type { DelegationRule } from '../types/delegation';
 import type { DetectionEvent } from '../types/events';
 import type { KillSwitchState } from '../killswitch/index';
 import type { AgentIdentity } from '../types/agent';
+import type { GuardPause, PauseLogEntry } from '../delegation/pause';
+import { isGuardPause, MAX_PAUSE_LOG_ENTRIES } from '../delegation/pause';
 
 const DEFAULT_KILL_SWITCH_STATE: KillSwitchState = {
   isActive: false,
@@ -571,4 +573,43 @@ export async function updateActiveAgentRegistry(
       console.error('[AI Browser Guard] Failed to persist agent registry:', err);
     }
   });
+}
+
+// ── Guard pauses (#71) ───────────────────────────────────────────────────────
+
+const GUARD_PAUSES_KEY = 'guardPauses';
+const GUARD_PAUSE_LOG_KEY = 'guardPauseLog';
+
+/**
+ * The owner's live pauses and the pause history.
+ *
+ * Failure semantics: a missing, malformed or failed read yields no pauses. That
+ * is the fail-closed direction for a pause: enforcement stays on, and the owner
+ * sees the pause gone from the popup and can start it again. Entries are
+ * shape-checked because they cross a persistence boundary.
+ */
+export async function getGuardPauseState(): Promise<{ pauses: GuardPause[]; log: PauseLogEntry[] }> {
+  try {
+    const result = await chrome.storage.local.get([GUARD_PAUSES_KEY, GUARD_PAUSE_LOG_KEY]);
+    const rawPauses = result[GUARD_PAUSES_KEY];
+    const rawLog = result[GUARD_PAUSE_LOG_KEY];
+    const pauses = Array.isArray(rawPauses) ? rawPauses.filter(isGuardPause) : [];
+    const log = Array.isArray(rawLog)
+      ? (rawLog.filter((e) => isGuardPause(e)
+        && ((e as PauseLogEntry).endedAt === null || typeof (e as PauseLogEntry).endedAt === 'string')) as PauseLogEntry[])
+        .slice(0, MAX_PAUSE_LOG_ENTRIES)
+      : [];
+    return { pauses, log };
+  } catch {
+    return { pauses: [], log: [] };
+  }
+}
+
+/** Persist the live pauses and the pause history together. */
+export async function saveGuardPauseState(pauses: GuardPause[], log: PauseLogEntry[]): Promise<void> {
+  try {
+    await chrome.storage.local.set({ [GUARD_PAUSES_KEY]: pauses, [GUARD_PAUSE_LOG_KEY]: log });
+  } catch (err) {
+    console.error('[AI Browser Guard] Failed to persist guard pauses:', err);
+  }
 }

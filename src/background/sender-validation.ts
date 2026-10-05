@@ -56,6 +56,9 @@ const POPUP_ONLY_TYPES: ReadonlySet<MessageType> = new Set([
   'DOMAIN_WHITELIST',
   'AI_SAFETY_CLEAR',
   'UPDATE_APPLY',
+  // Owner-only: a page must never be able to stand the guard down on itself.
+  'GUARD_PAUSE',
+  'GUARD_RESUME',
 ]);
 
 export function isValidSender(

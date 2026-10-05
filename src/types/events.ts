@@ -200,6 +200,10 @@ export const ALL_MESSAGE_TYPES = [
   'AI_SAFETY_CLEAR',
   /** Apply a staged extension update now (popup button, issue #68). */
   'UPDATE_APPLY',
+  /** Pause the guard on one site or everywhere for a bounded time (popup, issue #71). */
+  'GUARD_PAUSE',
+  /** End a pause before its time (popup, issue #71). */
+  'GUARD_RESUME',
 ] as const;
 
 /**
