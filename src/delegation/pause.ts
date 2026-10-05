@@ -222,6 +222,19 @@ export function isGuardPause(value: unknown): value is GuardPause {
 }
 
 /**
+ * Shape-check a stored history entry. The end reason must be one the history
+ * has a label for, so a damaged record is dropped instead of being listed with
+ * no description of how the pause ended.
+ */
+export function isPauseLogEntry(value: unknown): value is PauseLogEntry {
+  if (!isGuardPause(value)) return false;
+  const { endedAt, endReason } = value as unknown as Record<string, unknown>;
+  if (!(endedAt === null || typeof endedAt === 'string')) return false;
+  return endReason === null
+    || (typeof endReason === 'string' && Object.prototype.hasOwnProperty.call(PAUSE_END_REASON_LABELS, endReason));
+}
+
+/**
  * The hostname a site pause would cover for a page URL, or null when the page
  * is not a website (chrome://, file:, about:blank, the new-tab page).
  */

@@ -12,9 +12,11 @@ import {
   logPauseStarted,
   logPauseEnded,
   isGuardPause,
+  isPauseLogEntry,
   pausableHostOf,
   describePauseDuration,
   MAX_PAUSE_LOG_ENTRIES,
+  PAUSE_END_REASON_LABELS,
 } from './pause';
 import type { GuardPause } from './pause';
 
@@ -165,6 +167,30 @@ describe('isGuardPause (stored shape)', () => {
     expect(isGuardPause({ ...allPause(15), expiresAt: null })).toBe(false);
     expect(isGuardPause({ ...allPause(15), host: 'example.com' })).toBe(false);
     expect(isGuardPause({ ...allPause(15), scope: 'tab' })).toBe(false);
+  });
+});
+
+describe('isPauseLogEntry (stored shape)', () => {
+  const ended = { ...allPause(15), endedAt: new Date(NOW + 15 * MIN).toISOString() };
+
+  it('accepts a live entry and every end reason the history has a label for', () => {
+    expect(isPauseLogEntry(logPauseStarted([], allPause(15))[0])).toBe(true);
+    for (const endReason of Object.keys(PAUSE_END_REASON_LABELS)) {
+      expect(isPauseLogEntry({ ...ended, endReason })).toBe(true);
+    }
+  });
+
+  it('rejects an end reason the history has no label for', () => {
+    expect(isPauseLogEntry({ ...ended, endReason: 'x' })).toBe(false);
+    expect(isPauseLogEntry({ ...ended, endReason: 'toString' })).toBe(false);
+    expect(isPauseLogEntry({ ...ended, endReason: 7 })).toBe(false);
+    expect(isPauseLogEntry(ended)).toBe(false);
+  });
+
+  it('rejects a damaged pause or end time', () => {
+    expect(isPauseLogEntry({ ...ended, endReason: 'expired', endedAt: 7 })).toBe(false);
+    expect(isPauseLogEntry({ ...ended, endReason: 'expired', scope: 'tab' })).toBe(false);
+    expect(isPauseLogEntry(null)).toBe(false);
   });
 });
 

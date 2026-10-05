@@ -12,7 +12,7 @@ import type { DetectionEvent } from '../types/events';
 import type { KillSwitchState } from '../killswitch/index';
 import type { AgentIdentity } from '../types/agent';
 import type { GuardPause, PauseLogEntry } from '../delegation/pause';
-import { isGuardPause, MAX_PAUSE_LOG_ENTRIES } from '../delegation/pause';
+import { isGuardPause, isPauseLogEntry, MAX_PAUSE_LOG_ENTRIES } from '../delegation/pause';
 
 const DEFAULT_KILL_SWITCH_STATE: KillSwitchState = {
   isActive: false,
@@ -594,11 +594,7 @@ export async function getGuardPauseState(): Promise<{ pauses: GuardPause[]; log:
     const rawPauses = result[GUARD_PAUSES_KEY];
     const rawLog = result[GUARD_PAUSE_LOG_KEY];
     const pauses = Array.isArray(rawPauses) ? rawPauses.filter(isGuardPause) : [];
-    const log = Array.isArray(rawLog)
-      ? (rawLog.filter((e) => isGuardPause(e)
-        && ((e as PauseLogEntry).endedAt === null || typeof (e as PauseLogEntry).endedAt === 'string')) as PauseLogEntry[])
-        .slice(0, MAX_PAUSE_LOG_ENTRIES)
-      : [];
+    const log = Array.isArray(rawLog) ? rawLog.filter(isPauseLogEntry).slice(0, MAX_PAUSE_LOG_ENTRIES) : [];
     return { pauses, log };
   } catch {
     return { pauses: [], log: [] };
