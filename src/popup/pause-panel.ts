@@ -59,10 +59,21 @@ function durationLabel(minutes: number | null): string {
   return minutes === null ? 'Until I resume' : `${minutes} minutes`;
 }
 
-function clockTime(iso: string): string {
+/** True when `iso` falls on the same local calendar day as `now`. */
+function isSameDay(iso: string, now: number): boolean {
   const d = new Date(iso);
-  return Number.isNaN(d.getTime())
-    ? '?'
+  const today = new Date(now);
+  return d.getFullYear() === today.getFullYear()
+    && d.getMonth() === today.getMonth()
+    && d.getDate() === today.getDate();
+}
+
+/** "09:10", or "Oct 4, 09:10" with `withDate` for a time outside today. */
+function clockTime(iso: string, withDate: boolean): string {
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return '?';
+  return withDate
+    ? d.toLocaleString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })
     : d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
 }
 
@@ -206,9 +217,13 @@ export function renderPausePanel(
     for (const entry of history) {
       const item = document.createElement('li');
       const reach = entry.scope === 'all' ? 'Everywhere' : entry.host ?? '';
-      const end = entry.endedAt === null ? 'now' : clockTime(entry.endedAt);
+      // A row that reaches outside today is dated at both ends, so a pause
+      // from another day does not read as one from today.
+      const withDate = !isSameDay(entry.startedAt, input.now)
+        || (entry.endedAt !== null && !isSameDay(entry.endedAt, input.now));
+      const end = entry.endedAt === null ? 'now' : clockTime(entry.endedAt, withDate);
       const outcome = entry.endReason === null ? 'still paused' : PAUSE_END_REASON_LABELS[entry.endReason];
-      item.textContent = `${reach} · ${clockTime(entry.startedAt)} to ${end} · ${outcome}`;
+      item.textContent = `${reach} · ${clockTime(entry.startedAt, withDate)} to ${end} · ${outcome}`;
       list.appendChild(item);
     }
     container.appendChild(list);
