@@ -89,9 +89,11 @@ interface BackgroundState {
   /** History of pauses: what was unguarded, and when. Newest first. */
   guardPauseLog: PauseLogEntry[];
   /**
-   * Hostname of the page in each tab, as the tab last reported it. A site pause
-   * is matched against this, so a tab that navigates off the paused site is
-   * guarded again from its next message.
+   * Hostname of the page in each tab, as last recorded from the tab's
+   * navigations and its content script's messages. A site pause is matched
+   * against this, so a tab that navigates to a page on another host is guarded
+   * again from that navigation. A page with no host name (about:blank, a data:
+   * or file: URL) records nothing, so the pause keeps covering the tab there.
    */
   tabHosts: Map<number, string>;
 }
@@ -226,7 +228,8 @@ function initialize(): void {
     handleTabRemoved(tabId).catch(() => { /* ignore */ });
   });
   // A tab's site follows its navigation, so a site pause stops covering a tab
-  // the moment it leaves the paused host, before the new page reports anything.
+  // once it navigates to a page on another host, before that page reports
+  // anything. A page with no host name records nothing: the pause stays.
   chrome.tabs.onUpdated.addListener((tabId, changeInfo) => {
     if (changeInfo.url !== undefined) trackTabHost(tabId, changeInfo.url);
   });
@@ -1267,8 +1270,9 @@ async function broadcastEffectiveRules(): Promise<void> {
 const PAUSE_EXPIRY_ALARM = 'guard-pause-expiry';
 
 /**
- * The hostname of the page in a tab: as the tab last reported it, else the
- * detected agent's origin. Null when unknown, which no site pause covers.
+ * The hostname of the page in a tab: as last recorded from its navigations and
+ * its content script's messages, else the detected agent's origin. Null when
+ * unknown, which no site pause covers.
  */
 function hostForTab(tabId: number): string | null {
   return state.tabHosts.get(tabId) ?? hostOf(state.activeAgents.get(tabId)?.originUrl);
