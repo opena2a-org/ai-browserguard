@@ -230,9 +230,6 @@ function initialize(): void {
   chrome.tabs.onUpdated.addListener((tabId, changeInfo) => {
     if (changeInfo.url !== undefined) trackTabHost(tabId, changeInfo.url);
   });
-  chrome.tabs.onReplaced.addListener((_addedTabId, removedTabId) => {
-    state.tabHosts.delete(removedTabId);
-  });
 
   // A staged update applies only while idle (update-policy.ts); otherwise it
   // waits for the delegation-check tick below or the popup's reload button.
