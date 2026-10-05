@@ -9,6 +9,7 @@ import { renderPausePanel, updatePauseCountdowns, formatPauseRemaining } from '.
 import type { PausePanelInput } from './pause-panel';
 import { createPause } from '../delegation/pause';
 import type { GuardPause, PauseLogEntry } from '../delegation/pause';
+import { getGuardPauseState } from '../session/storage';
 
 const NOW = Date.parse('2026-10-05T12:00:00.000Z');
 
@@ -120,6 +121,22 @@ describe('pause panel (#71)', () => {
     expect(items).toHaveLength(2);
     expect(items[0]).toMatch(/^Everywhere · .+ to now · still paused$/);
     expect(items[1]).toMatch(/^dashboard\.example\.com · .+ to .+ · ended on time$/);
+  });
+
+  it('a stored entry with an unknown end reason is not listed, so no row reads "undefined"', async () => {
+    const at = new Date(NOW).toISOString();
+    await chrome.storage.local.set({
+      guardPauseLog: [
+        { id: 'x', scope: 'all', host: null, startedAt: at, expiresAt: at, endedAt: at, endReason: 'x' },
+        { id: 'ok', scope: 'all', host: null, startedAt: at, expiresAt: at, endedAt: at, endReason: 'resumed' },
+      ],
+    });
+    const { log } = await getGuardPauseState();
+    const { container } = render({ log });
+    const items = Array.from(container.querySelectorAll('.pause-history li')).map((li) => li.textContent);
+    expect(items.join('\n')).not.toContain('undefined');
+    expect(items).toHaveLength(1);
+    expect(items[0]).toMatch(/^Everywhere · .+ to .+ · resumed by you$/);
   });
 
   it('writes a hostile host as text, never as markup', () => {

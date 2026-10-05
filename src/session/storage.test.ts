@@ -12,6 +12,7 @@ import {
   clearAllStorage,
   getKillSwitchState,
   saveKillSwitchState,
+  getGuardPauseState,
 } from './storage';
 import { DEFAULT_SETTINGS, CURRENT_STORAGE_SCHEMA_VERSION } from './types';
 import type { AgentSession } from './types';
@@ -228,6 +229,44 @@ describe('kill-switch persistence (regression: fail-open on SW restart)', () => 
     await chrome.storage.local.set({ killSwitchState: 'not-an-object' });
     const ks = await getKillSwitchState();
     expect(ks.isActive).toBe(false);
+  });
+});
+
+describe('guard pause history load', () => {
+  const at = '2026-10-05T12:00:00.000Z';
+  const entry = (id: string, endedAt: unknown, endReason: unknown) =>
+    ({ id, scope: 'all', host: null, startedAt: at, expiresAt: at, endedAt, endReason });
+
+  it('keeps a live entry and every known end reason', async () => {
+    await clearAllStorage();
+    await chrome.storage.local.set({
+      guardPauseLog: [
+        entry('live', null, null),
+        entry('expired', at, 'expired'),
+        entry('resumed', at, 'resumed'),
+        entry('replaced', at, 'replaced'),
+        entry('kill-switch', at, 'kill-switch'),
+      ],
+    });
+    const { log } = await getGuardPauseState();
+    expect(log.map((e) => e.id)).toEqual(['live', 'expired', 'resumed', 'replaced', 'kill-switch']);
+  });
+
+  it('drops an entry whose end reason is not one the history can describe', async () => {
+    await clearAllStorage();
+    const missing: Record<string, unknown> = entry('missing', at, null);
+    delete missing.endReason;
+    await chrome.storage.local.set({
+      guardPauseLog: [
+        entry('unknown', at, 'x'),
+        entry('inherited', at, 'toString'),
+        entry('number', at, 7),
+        missing,
+        entry('ok', at, 'resumed'),
+      ],
+    });
+    const { log } = await getGuardPauseState();
+    expect(log.map((e) => e.id)).toEqual(['ok']);
   });
 });
 
