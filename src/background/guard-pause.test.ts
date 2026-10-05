@@ -180,6 +180,33 @@ describe('pause on this site (#71)', () => {
     expect(downloads.cancel).toHaveBeenCalledWith(8, expect.any(Function));
   });
 
+  it('a tab that left the paused site stays guarded when the browser replaces it', async () => {
+    const downloads = chromeMock.downloads as unknown as Record<string, unknown>;
+    downloads.onCreated = { addListener: vi.fn(), removeListener: vi.fn() };
+    downloads.cancel = vi.fn((_id: number, cb?: () => void) => { cb?.(); });
+    const handle = await importWorker();
+
+    expect(await send(handle, 'DETECTION_RESULT', agentDetectedOn(PAUSED_URL), contentSender(42, PAUSED_URL))).toEqual({ success: true });
+    await delegateReadOnly(handle);
+    await send(handle, 'GUARD_PAUSE', { scope: 'site', host: 'dashboard.example.test', minutes: 15 }, POPUP_SENDER);
+
+    // The tab left the paused site and its new page reported in.
+    expect(await ruleFor(handle, 42, OTHER_URL)).toEqual(expect.objectContaining({ preset: 'readOnly' }));
+
+    // The browser then swaps the tab for another one (chrome.tabs.onReplaced).
+    // Forgetting the tab's host here would fall back to the agent's origin, the
+    // paused site, and let the download through again.
+    const onReplaced = chromeMock.tabs.onReplaced.addListener.mock.calls.at(-1)?.[0] as
+      ((addedTabId: number, removedTabId: number) => void) | undefined;
+    onReplaced?.(99, 42);
+
+    const onCreated = (downloads.onCreated as { addListener: { mock: { calls: unknown[][] } } })
+      .addListener.mock.calls[0][0] as (item: unknown) => Promise<void>;
+    await onCreated({ id: 9, url: 'https://dashboard.example.test/export.csv', referrer: OTHER_URL, filename: '/tmp/export.csv' });
+    for (let i = 0; i < 8; i++) await flush();
+    expect(downloads.cancel).toHaveBeenCalledWith(9, expect.any(Function));
+  });
+
   it('does not cancel the agent download on a paused site, and says why on the timeline', async () => {
     const downloads = chromeMock.downloads as unknown as Record<string, unknown>;
     downloads.onCreated = { addListener: vi.fn(), removeListener: vi.fn() };
