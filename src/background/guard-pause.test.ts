@@ -207,6 +207,59 @@ describe('pause on this site (#71)', () => {
     expect(downloads.cancel).toHaveBeenCalledWith(9, expect.any(Function));
   });
 
+  it('a tab that left the paused site stays guarded when it moves to a page with no host name', async () => {
+    const downloads = chromeMock.downloads as unknown as Record<string, unknown>;
+    downloads.onCreated = { addListener: vi.fn(), removeListener: vi.fn() };
+    downloads.cancel = vi.fn((_id: number, cb?: () => void) => { cb?.(); });
+    const handle = await importWorker();
+
+    expect(await send(handle, 'DETECTION_RESULT', agentDetectedOn(PAUSED_URL), contentSender(42, PAUSED_URL))).toEqual({ success: true });
+    await delegateReadOnly(handle);
+    await send(handle, 'GUARD_PAUSE', { scope: 'site', host: 'dashboard.example.test', minutes: 15 }, POPUP_SENDER);
+
+    // The tab left the paused site and its new page reported in.
+    expect(await ruleFor(handle, 42, OTHER_URL)).toEqual(expect.objectContaining({ preset: 'readOnly' }));
+
+    // The tab then navigates to a page with no host name. Dropping the tab's
+    // record here would fall back to the agent's origin, the paused site, and
+    // let the download through again.
+    const onUpdated = chromeMock.tabs.onUpdated.addListener.mock.calls.at(-1)?.[0] as
+      (tabId: number, changeInfo: { url?: string }, tab: unknown) => void;
+    onUpdated(42, { url: 'about:blank' }, { id: 42, url: 'about:blank' });
+
+    const onCreated = (downloads.onCreated as { addListener: { mock: { calls: unknown[][] } } })
+      .addListener.mock.calls[0][0] as (item: unknown) => Promise<void>;
+    await onCreated({ id: 10, url: 'https://dashboard.example.test/export.csv', referrer: OTHER_URL, filename: '/tmp/export.csv' });
+    for (let i = 0; i < 8; i++) await flush();
+    expect(downloads.cancel).toHaveBeenCalledWith(10, expect.any(Function));
+  });
+
+  it('a tab that left the paused site stays guarded when a file: page in it reports', async () => {
+    const downloads = chromeMock.downloads as unknown as Record<string, unknown>;
+    downloads.onCreated = { addListener: vi.fn(), removeListener: vi.fn() };
+    downloads.cancel = vi.fn((_id: number, cb?: () => void) => { cb?.(); });
+    const handle = await importWorker();
+
+    expect(await send(handle, 'DETECTION_RESULT', agentDetectedOn(PAUSED_URL), contentSender(42, PAUSED_URL))).toEqual({ success: true });
+    await delegateReadOnly(handle);
+    await send(handle, 'GUARD_PAUSE', { scope: 'site', host: 'dashboard.example.test', minutes: 15 }, POPUP_SENDER);
+
+    expect(await ruleFor(handle, 42, OTHER_URL)).toEqual(expect.objectContaining({ preset: 'readOnly' }));
+
+    // A content script on a file: page in the same tab reports in. The page
+    // has no host name, so the tab's record is left alone.
+    const fileUrl = 'file:///tmp/page.html';
+    const resp = vi.fn();
+    handle({ type: 'TAB_STATE_QUERY', data: {} }, { id: 'test-id', tab: { id: 42, url: fileUrl }, frameId: 0, url: fileUrl }, resp);
+    for (let i = 0; i < 8; i++) await flush();
+
+    const onCreated = (downloads.onCreated as { addListener: { mock: { calls: unknown[][] } } })
+      .addListener.mock.calls[0][0] as (item: unknown) => Promise<void>;
+    await onCreated({ id: 11, url: 'https://dashboard.example.test/export.csv', referrer: OTHER_URL, filename: '/tmp/export.csv' });
+    for (let i = 0; i < 8; i++) await flush();
+    expect(downloads.cancel).toHaveBeenCalledWith(11, expect.any(Function));
+  });
+
   it('does not cancel the agent download on a paused site, and says why on the timeline', async () => {
     const downloads = chromeMock.downloads as unknown as Record<string, unknown>;
     downloads.onCreated = { addListener: vi.fn(), removeListener: vi.fn() };

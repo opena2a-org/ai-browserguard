@@ -1278,15 +1278,16 @@ function hostForTab(tabId: number): string | null {
   return state.tabHosts.get(tabId) ?? hostOf(state.activeAgents.get(tabId)?.originUrl);
 }
 
-/** Record a tab's page host. Returns true when it changed. */
+/**
+ * Record a tab's page host. Returns true when it changed. A URL with no host
+ * name (about:blank, a data: or file: URL) leaves the record alone: dropping
+ * it would fall back to the detected agent's origin, which puts a tab that had
+ * left a paused site back under the pause.
+ */
 function noteTabHost(tabId: number, url: string): boolean {
   const host = hostOf(url) || null;
-  if ((state.tabHosts.get(tabId) ?? null) === host) return false;
-  if (host === null) {
-    state.tabHosts.delete(tabId);
-  } else {
-    state.tabHosts.set(tabId, host);
-  }
+  if (host === null || state.tabHosts.get(tabId) === host) return false;
+  state.tabHosts.set(tabId, host);
   return true;
 }
 
