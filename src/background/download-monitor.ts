@@ -11,7 +11,8 @@
  *   there), matched to the download item by URL inside
  *   {@link TAB_DOWNLOAD_START_WINDOW_MS}. Only this level may be cancelled.
  * - `host`: the referrer, final URL or URL has the same origin (scheme, host
- *   and port) as an agent's page. A download item carries no tab id, so this
+ *   and port) as the page now open in an agent's tab (else the page the agent
+ *   was first seen on). A download item carries no tab id, so this
  *   cannot tell the agent's download from the user's own one in another tab of
  *   the same site; it is recorded, never cancelled.
  * - `none`: nothing ties it to an agent; recorded on the first agent's session.
@@ -36,7 +37,14 @@ export interface DownloadInfo {
 /** An agent currently active in a tab. */
 export interface ActiveAgentTab {
   tabId: number;
+  /** The page the agent was first seen on. */
   originUrl: string;
+  /**
+   * The origin of the page now open in the agent's tab, as last recorded from
+   * its navigations; null when that page has none (about:blank, data:, file:).
+   * Undefined when nothing has been recorded, and `originUrl` is used instead.
+   */
+  pageOrigin?: string | null;
 }
 
 /**
@@ -136,8 +144,8 @@ export function matchTabDownloadStart(
  * always returned.
  *
  * Order: a download start reported in a tab with a registered agent (`tab`) →
- * a referrer/finalUrl/url origin equal to an agent's page origin (`host`) →
- * the first active agent (`none`).
+ * a referrer/finalUrl/url origin equal to the origin of the page now open in
+ * an agent's tab (`host`) → the first active agent (`none`).
  */
 export function attributeDownload(
   info: DownloadInfo,
@@ -151,7 +159,7 @@ export function attributeDownload(
     (o): o is string => o !== null,
   );
   for (const agent of activeAgents) {
-    const agentOrigin = originOf(agent.originUrl);
+    const agentOrigin = agent.pageOrigin !== undefined ? agent.pageOrigin : originOf(agent.originUrl);
     if (agentOrigin && candidateOrigins.includes(agentOrigin)) {
       return { tabId: agent.tabId, level: 'host', matchedHost: new URL(agentOrigin).host };
     }

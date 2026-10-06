@@ -412,7 +412,10 @@ AgentSession created (handleDetection)
      - 'agent-disconnected' (at SW restart, only when the agent's tab is gone
        or no longer on the agent's origin — since 0.6.2 a persisted
        active-agent registry rehydrates agents whose tab still exists on the
-       same origin, so a worker restart alone no longer ends live sessions)
+       same origin, so a worker restart alone no longer ends live sessions;
+       and, for an agent registered from a debugger attachment on its tab,
+       when that tab has had no debugger attached for 5 s, unless the tab
+       holds the extension's own Browser-layer blocking session)
      - 'delegation-expired' (time bound reached)
 ```
 

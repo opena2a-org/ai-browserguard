@@ -527,6 +527,12 @@ export async function clearAllStorage(): Promise<void> {
 export interface ActiveAgentRegistryEntry {
   agent: AgentIdentity;
   sessionId: string;
+  /**
+   * True when the agent was registered from a debugger attachment on its tab
+   * rather than reported by its page, so it leaves when that attachment ends.
+   * Absent on entries written before this field existed.
+   */
+  fromDebugger?: boolean;
 }
 
 const AGENT_REGISTRY_KEY = 'activeAgentRegistry';

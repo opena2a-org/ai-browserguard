@@ -100,6 +100,18 @@ describe('attributeDownload', () => {
     expect(attributeDownload(info(), agents, start)).toEqual({ tabId: 8, level: 'tab', frameId: 'F1' });
   });
 
+  it("matches against the page now open in the agent's tab, falling back to the first-seen page", () => {
+    const moved: ActiveAgentTab[] = [{ tabId: 3, originUrl: 'https://a.example.com/start', pageOrigin: 'https://b.example.com' }];
+    const fromNewSite = info({ url: 'https://b.example.com/export.zip', finalUrl: undefined, referrer: undefined });
+    expect(attributeDownload(fromNewSite, moved)).toEqual({ tabId: 3, level: 'host', matchedHost: 'b.example.com' });
+    const fromOldSite = info({ url: 'https://a.example.com/x.pdf', finalUrl: undefined, referrer: undefined });
+    expect(attributeDownload(fromOldSite, moved).level).toBe('none');
+    const opaquePage: ActiveAgentTab[] = [{ tabId: 3, originUrl: 'https://a.example.com/start', pageOrigin: null }];
+    expect(attributeDownload(fromOldSite, opaquePage).level).toBe('none');
+    const unrecorded: ActiveAgentTab[] = [{ tabId: 3, originUrl: 'https://a.example.com/start' }];
+    expect(attributeDownload(fromOldSite, unrecorded).level).toBe('host');
+  });
+
   it('a download start in a tab with no registered agent is not tab-level', () => {
     const agents: ActiveAgentTab[] = [{ tabId: 4, originUrl: 'https://nomatch.example/' }];
     const start: TabDownloadStart = { tabId: 99, frameId: 'F1', guid: 'g1', url: 'https://files.example.com/a.txt', at: 0 };
