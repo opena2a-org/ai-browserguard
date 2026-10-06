@@ -10,6 +10,9 @@
  *   (`Page.downloadWillBegin` on a debugger session this extension holds
  *   there), matched to the download item by URL inside
  *   {@link TAB_DOWNLOAD_START_WINDOW_MS}. Only this level may be cancelled.
+ *   Not for a tab whose agent is an attachment seen while the built-in
+ *   DevTools was open (`devToolsOnly`): that is most likely the user
+ *   inspecting their own page, so a start there is at most a host match.
  * - `host`: the referrer, final URL or URL has the same origin (scheme, host
  *   and port) as the page now open in an agent's tab (else the page the agent
  *   was first seen on). A download item carries no tab id, so this
@@ -45,6 +48,14 @@ export interface ActiveAgentTab {
    * Undefined when nothing has been recorded, and `originUrl` is used instead.
    */
   pageOrigin?: string | null;
+  /**
+   * The agent was registered only from a debugger attachment seen while the
+   * built-in DevTools was open (`medium` confidence). An open DevTools window
+   * makes the page it inspects report an attachment, so this tab is most
+   * likely the user's own, and a download start reported in it is not
+   * tab-level attribution.
+   */
+  devToolsOnly?: boolean;
 }
 
 /**
@@ -152,7 +163,7 @@ export function attributeDownload(
   activeAgents: ActiveAgentTab[],
   tabStart: TabDownloadStart | null = null,
 ): DownloadAttribution {
-  if (tabStart && activeAgents.some((a) => a.tabId === tabStart.tabId)) {
+  if (tabStart && activeAgents.some((a) => a.tabId === tabStart.tabId && a.devToolsOnly !== true)) {
     return { tabId: tabStart.tabId, level: 'tab', frameId: tabStart.frameId };
   }
   const candidateOrigins = [originOf(info.referrer), originOf(info.finalUrl), originOf(info.url)].filter(
