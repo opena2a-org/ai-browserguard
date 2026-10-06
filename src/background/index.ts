@@ -700,6 +700,11 @@ function handleMessage(
         downloadWatchedAgentIds: Array.from(state.activeAgents.entries())
           .filter(([tabId]) => isTabDownloadWatched(tabId))
           .map(([, agent]) => agent.id),
+        // Agents whose tab a live owner pause covers, by the page now in it:
+        // no rule applies there, so a download it blocked can be retried.
+        pausedAgentIds: Array.from(state.activeAgents.entries())
+          .filter(([tabId]) => pauseForTab(tabId) !== null)
+          .map(([, agent]) => agent.id),
         // Re-keyed to agent id, and only for origins that still match. Empty
         // unless the feature is on. See aisafety/attribution.ts.
         aiSafetyDeclarations: collectAiSafetyDeclarations(state.activeAgents, getInMemoryDeclarations()),

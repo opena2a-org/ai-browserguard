@@ -68,14 +68,14 @@ async function delegateReadOnlyWithTabWatch(handle: Listener): Promise<Delegatio
 }
 
 /** A content-script report of an automation agent detected on `url`. */
-function agentDetectedOn(url: string) {
+function agentDetectedOn(url: string, agentId = 'agent-1') {
   return {
     id: 'det-1',
     timestamp: new Date().toISOString(),
     methods: ['cdp-connection'],
     confidence: 'high',
     agent: {
-      id: 'agent-1',
+      id: agentId,
       type: 'playwright',
       detectionMethods: ['cdp-connection'],
       confidence: 'high',
@@ -151,6 +151,26 @@ describe('pause on this site (#71)', () => {
     const status = await send(handle, 'STATUS_QUERY', {}, POPUP_SENDER) as { guardPauses: unknown[]; guardPauseLog: { endReason: string | null }[] };
     expect(status.guardPauses).toEqual([]);
     expect(status.guardPauseLog[0]).toEqual(expect.objectContaining({ host: 'dashboard.example.test', endReason: 'resumed' }));
+  });
+
+  it("tells the popup which agents' tabs a pause covers, following each tab's page", async () => {
+    const handle = await importWorker();
+    await delegateReadOnly(handle);
+    await send(handle, 'DETECTION_RESULT', agentDetectedOn(PAUSED_URL, 'agent-1'), contentSender(42, PAUSED_URL));
+    await send(handle, 'DETECTION_RESULT', agentDetectedOn(OTHER_URL, 'agent-2'), contentSender(43, OTHER_URL));
+    const paused = async () =>
+      (await send(handle, 'STATUS_QUERY', {}, POPUP_SENDER) as { pausedAgentIds: string[] }).pausedAgentIds;
+
+    expect(await paused()).toEqual([]);
+    await send(handle, 'GUARD_PAUSE', { scope: 'site', host: 'dashboard.example.test', minutes: 60 }, POPUP_SENDER);
+    expect(await paused()).toEqual(['agent-1']);
+
+    // The agent's tab leaves the paused site: the pause no longer covers it.
+    expect(await ruleFor(handle, 42, OTHER_URL)).toEqual(expect.objectContaining({ preset: 'readOnly' }));
+    expect(await paused()).toEqual([]);
+
+    await send(handle, 'GUARD_PAUSE', { scope: 'all', host: null, minutes: 15 }, POPUP_SENDER);
+    expect((await paused()).sort()).toEqual(['agent-1', 'agent-2']);
   });
 
   it('a page cannot pause the guard on itself', async () => {

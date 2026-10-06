@@ -47,6 +47,8 @@ interface PopupState {
    * delegation can cancel.
    */
   downloadWatchedAgentIds: string[];
+  /** Detected agents whose tab a live owner pause (#71) covers. */
+  pausedAgentIds: string[];
   /**
    * ai-safety.txt lookup result for the page each agent is on, keyed by agent
    * id. Empty unless `settings.aiSafetyTxtEnabled` is on. Display-only: this
@@ -115,6 +117,7 @@ interface PopupState {
 let popupState: PopupState = {
   detectedAgents: [],
   downloadWatchedAgentIds: [],
+  pausedAgentIds: [],
   aiSafetyDeclarations: {},
   activeDelegation: null,
   delegationRules: [],
@@ -170,6 +173,7 @@ async function queryBackgroundStatus(): Promise<void> {
       const data = response as {
         detectedAgents?: AgentIdentity[];
         downloadWatchedAgentIds?: string[];
+        pausedAgentIds?: string[];
         aiSafetyDeclarations?: Record<string, AiSafetyLookupResult>;
         activeDelegation?: DelegationRule | null;
         delegationRules?: DelegationRule[];
@@ -178,6 +182,7 @@ async function queryBackgroundStatus(): Promise<void> {
       };
       popupState.detectedAgents = data.detectedAgents ?? [];
       popupState.downloadWatchedAgentIds = data.downloadWatchedAgentIds ?? [];
+      popupState.pausedAgentIds = data.pausedAgentIds ?? [];
       popupState.aiSafetyDeclarations = data.aiSafetyDeclarations ?? {};
       popupState.activeDelegation = data.activeDelegation ?? null;
       popupState.delegationRules = data.delegationRules ?? [];
@@ -339,6 +344,9 @@ async function onKillSwitchClick(): Promise<void> {
       (resp as { event?: KillSwitchEvent } | null)?.event ?? popupState.killSwitchLastEvent;
     popupState.detectedAgents = [];
     popupState.downloadWatchedAgentIds = [];
+    popupState.pausedAgentIds = [];
+    // The stop ends every owner pause too (#71).
+    popupState.guardPauses = [];
     popupState.activeDelegation = null;
     renderAll();
   } catch {
@@ -483,7 +491,10 @@ function detectedAgentName(agentId: string): string | null {
  * is what the user needs to get the file back.
  */
 function renderCapabilityRecovery(alerts: readonly BoundaryAlert[]): HTMLElement {
-  const recovery = capabilityRecoveryFor(alerts, popupState.delegationRules, detectedAgentName);
+  const recovery = capabilityRecoveryFor(alerts, popupState.delegationRules, detectedAgentName, {
+    everywhere: popupState.guardPauses.some((p) => p.scope === 'all'),
+    agentIds: popupState.pausedAgentIds,
+  });
   const block = document.createElement('div');
   block.className = 'capability-recovery';
 

@@ -48,27 +48,53 @@ const PRESET_NAMES: Record<DelegationPreset, string> = {
 
 const GENERAL_RECOVERY: CapabilityRecovery = { hint: CAPABILITY_BLOCK_HINT, showOtherControls: true };
 
+/** Which tabs a live owner pause (#71) covers, as the background reports them. */
+export interface PauseCoverage {
+  /** A pause everywhere is live, so no rule applies in any tab. */
+  everywhere: boolean;
+  /** Detected agents whose tab a live pause covers, by the page now in it. */
+  agentIds: readonly string[];
+}
+
+const NO_PAUSE: PauseCoverage = { everywhere: false, agentIds: [] };
+
 /**
  * The recovery hint for the download blocks on screen, naming the control that
  * frees downloads under the rule now in force in the agent's tab: Revoke on
  * the card for a grant on the agent's card, End on the session delegation for
  * a session rule, both when both block. The rule is resolved and evaluated as
  * the background does for the latest block, so once Revoke or End has been
- * pressed the hint says to retry. The general hint is kept when the blocks
- * come from more than one agent or the agent is no longer detected
- * (`agentNameOf` returns null), since no single rule then applies.
+ * pressed the hint says to retry. A tab a live owner pause covers resolves to
+ * no rule in the background, so while one covers the agent's tab, or a pause
+ * everywhere is live, the hint says to retry too. The general hint is kept
+ * when the blocks come from more than one agent or the agent is no longer
+ * detected (`agentNameOf` returns null), since no single rule then applies.
  */
 export function capabilityRecoveryFor(
   alerts: readonly BoundaryAlert[],
   rules: DelegationRule[],
   agentNameOf: (agentId: string) => string | null,
+  paused: PauseCoverage = NO_PAUSE,
 ): CapabilityRecovery {
+  if (paused.everywhere) {
+    return {
+      hint: 'Cancelled, but the guard is now paused everywhere, so no delegation blocks downloads until the pause ends. Retry the download.',
+      showOtherControls: false,
+    };
+  }
+
   const blocks = alerts.filter(isCapabilityBlock);
   const agentIds = new Set(blocks.map((a) => a.violation.agentId));
   if (agentIds.size !== 1) return GENERAL_RECOVERY;
   const [agentId] = agentIds;
   const agent = agentId ? agentNameOf(agentId) : null;
   if (!agent) return GENERAL_RECOVERY;
+  if (paused.agentIds.includes(agentId)) {
+    return {
+      hint: `Cancelled, but the guard is now paused in ${agent}'s tab, so no delegation blocks downloads there until the pause ends. Retry the download.`,
+      showOtherControls: false,
+    };
+  }
 
   const latest = blocks.reduce((a, b) =>
     Date.parse(b.violation.timestamp) > Date.parse(a.violation.timestamp) ? b : a);

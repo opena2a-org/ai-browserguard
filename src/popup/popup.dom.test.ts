@@ -146,12 +146,14 @@ interface PopupStatus {
   killSwitchActive: boolean;
   recentViolations: unknown[];
   aiSafetyDeclarations: Record<string, unknown>;
+  guardPauses?: unknown[];
+  pausedAgentIds?: string[];
 }
 
 /** Every message the popup sent to the background in the current render test. */
 let sentMessages: Array<{ type: string; data: unknown }> = [];
 
-async function renderPopup(status: PopupStatus): Promise<void> {
+async function renderPopup(status: PopupStatus, extraResponses: Record<string, unknown> = {}): Promise<void> {
   vi.resetModules();
   sentMessages = [];
   const parsed = new DOMParser().parseFromString(POPUP_HTML, 'text/html');
@@ -162,6 +164,7 @@ async function renderPopup(status: PopupStatus): Promise<void> {
     SESSION_QUERY: { sessions: [] },
     REPORTS_QUERY: { reports: [] },
     CONTRIBUTE_STATS: {},
+    ...extraResponses,
   };
   (globalThis as Record<string, unknown>).chrome = {
     runtime: {
@@ -502,6 +505,45 @@ describe('popup render: the download-block hint follows the rule that blocks dow
     // End alone leaves the card grant in force, so the hint still names Revoke.
     document.querySelector<HTMLButtonElement>('#delegation-end-btn')!.click();
     expect(hintText()).toBe(CARD_GRANT_HINT);
+  });
+
+  it("says to retry while a site pause covers the agent's tab, and offers no other controls", async () => {
+    const card = agentRule('readOnly', 'a1');
+    const sitePause = { id: 'p1', scope: 'site', host: 'shop.example.com', startedAt: new Date().toISOString(), expiresAt: new Date(Date.now() + 15 * 60_000).toISOString() };
+    await renderPopup({
+      ...status({ rule: card, violations: [blockAlert('v1', 'download-file', DOWNLOAD, 2_000)] }),
+      activeDelegation: null,
+      guardPauses: [sitePause],
+      pausedAgentIds: ['a1'],
+    });
+    expect(hintText()).toBe(
+      "Cancelled, but the guard is now paused in Anthropic Computer Use's tab, so no delegation blocks downloads there until the pause ends. Retry the download.",
+    );
+    expect(otherControls()).toBeNull();
+  });
+
+  it('says to retry once Pause everywhere is pressed', async () => {
+    const card = agentRule('readOnly', 'a1');
+    const current: PopupStatus = {
+      ...status({ rule: card, violations: [blockAlert('v1', 'download-file', DOWNLOAD, 2_000)] }),
+      activeDelegation: null,
+    };
+    await renderPopup(current, { GUARD_PAUSE: { success: true } });
+    expect(hintText()).toBe(CARD_GRANT_HINT);
+
+    // What the background reports once the pause is in force.
+    current.guardPauses = [{ id: 'p1', scope: 'all', host: null, startedAt: new Date().toISOString(), expiresAt: new Date(Date.now() + 15 * 60_000).toISOString() }];
+    current.pausedAgentIds = ['a1'];
+    Array.from(document.querySelectorAll<HTMLButtonElement>('#pause-content button'))
+      .find((b) => b.textContent === 'Pause everywhere')!.click();
+
+    await vi.waitFor(() => {
+      expect(hintText()).toBe(
+        'Cancelled, but the guard is now paused everywhere, so no delegation blocks downloads until the pause ends. Retry the download.',
+      );
+    });
+    expect(sentMessages.map((m) => m.type)).toContain('GUARD_PAUSE');
+    expect(otherControls()).toBeNull();
   });
 
   it('shows the general hint once the agent behind the block is no longer detected', async () => {
