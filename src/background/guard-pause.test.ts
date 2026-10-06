@@ -462,4 +462,37 @@ describe('a tab\'s host change during a pause converges CDP enforcement', () => 
     await moveTab(handle, 43, PAUSED_URL);
     expect(debuggerMock.detach).toHaveBeenCalledWith({ tabId: 43 });
   });
+
+  // The tab the browser swaps in can hold an agent of its own before the swap,
+  // reported without a page URL, so only its agent's origin places it. The
+  // replaced tab's host then moves to it and can move it in or out of the pause.
+  it('re-attaches the tab the browser swaps in when it takes over a host off the paused site', async () => {
+    const handle = await importWorker();
+    await enforcedAgent(handle, 42, PAUSED_URL);
+    expect(await send(handle, 'DETECTION_RESULT', agentDetectedOn(PAUSED_URL), { id: 'test-id', tab: { id: 99 } })).toEqual({ success: true });
+    expect(debuggerMock.attach).toHaveBeenCalledWith({ tabId: 99 }, '1.3');
+
+    await send(handle, 'GUARD_PAUSE', { scope: 'site', host: 'dashboard.example.test', minutes: 15 }, POPUP_SENDER);
+    expect(debuggerMock.detach).toHaveBeenCalledWith({ tabId: 99 });
+    // Tab 42 leaves the paused site; tab 99 is still placed on it by its agent.
+    await send(handle, 'TAB_STATE_QUERY', {}, contentSender(42, OTHER_URL));
+
+    debuggerMock.attach.mockClear();
+    replaceTab(99, 42);
+    for (let i = 0; i < 8; i++) await flush();
+    expect(debuggerMock.attach).toHaveBeenCalledWith({ tabId: 99 }, '1.3');
+  });
+
+  it('detaches the tab the browser swaps in when it takes over the paused site', async () => {
+    const handle = await importWorker();
+    await enforcedAgent(handle, 42, PAUSED_URL);
+    expect(await send(handle, 'DETECTION_RESULT', agentDetectedOn(OTHER_URL), { id: 'test-id', tab: { id: 99 } })).toEqual({ success: true });
+    await send(handle, 'GUARD_PAUSE', { scope: 'site', host: 'dashboard.example.test', minutes: 15 }, POPUP_SENDER);
+    expect(debuggerMock.detach).toHaveBeenCalledWith({ tabId: 42 });
+    expect(debuggerMock.detach).not.toHaveBeenCalledWith({ tabId: 99 });
+
+    replaceTab(99, 42);
+    for (let i = 0; i < 8; i++) await flush();
+    expect(debuggerMock.detach).toHaveBeenCalledWith({ tabId: 99 });
+  });
 });
