@@ -252,21 +252,42 @@ describe('guard pause history load', () => {
     expect(log.map((e) => e.id)).toEqual(['live', 'expired', 'resumed', 'replaced', 'kill-switch']);
   });
 
-  it('drops an entry whose end reason is not one the history can describe', async () => {
+  it('keeps an entry whose end reason this version has no label for', async () => {
+    await clearAllStorage();
+    await chrome.storage.local.set({
+      guardPauseLog: [
+        entry('unknown', at, 'x'),
+        entry('inherited', at, 'toString'),
+        entry('ok', at, 'resumed'),
+      ],
+    });
+    const { log } = await getGuardPauseState();
+    expect(log.map((e) => e.id)).toEqual(['unknown', 'inherited', 'ok']);
+  });
+
+  it('drops an entry with a damaged end reason, or whose end time and end reason disagree', async () => {
     await clearAllStorage();
     const missing: Record<string, unknown> = entry('missing', at, null);
     delete missing.endReason;
     await chrome.storage.local.set({
       guardPauseLog: [
-        entry('unknown', at, 'x'),
-        entry('inherited', at, 'toString'),
         entry('number', at, 7),
         missing,
+        entry('ended-no-reason', at, null),
+        entry('reason-not-ended', null, 'expired'),
         entry('ok', at, 'resumed'),
       ],
     });
     const { log } = await getGuardPauseState();
     expect(log.map((e) => e.id)).toEqual(['ok']);
+  });
+
+  it('loads at most the newest 20 entries', async () => {
+    await clearAllStorage();
+    const stored = Array.from({ length: 25 }, (_, i) => entry(`p${i}`, at, 'expired'));
+    await chrome.storage.local.set({ guardPauseLog: stored });
+    const { log } = await getGuardPauseState();
+    expect(log.map((e) => e.id)).toEqual(stored.slice(0, 20).map((e) => e.id));
   });
 });
 

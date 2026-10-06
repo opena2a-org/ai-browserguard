@@ -227,6 +227,10 @@ function initialize(): void {
   chrome.tabs.onRemoved.addListener((tabId) => {
     handleTabRemoved(tabId).catch(() => { /* ignore */ });
   });
+  // A tab the browser swaps for another one (prerender, instant navigation).
+  chrome.tabs.onReplaced.addListener((addedTabId, removedTabId) => {
+    handleTabReplaced(addedTabId, removedTabId).catch(() => { /* ignore */ });
+  });
   // A tab's site follows its navigation, so a site pause stops covering a tab
   // once it navigates to a page on another host, before that page reports
   // anything. A page with no host name records nothing: the pause stays.
@@ -1801,6 +1805,20 @@ async function handleTabRemoved(tabId: number): Promise<void> {
   // Release any CDP enforcement session for the closed tab.
   detachTab(tabId).catch(() => { /* tab already gone */ });
   updateBadge();
+}
+
+/**
+ * The browser replaced a tab with another one. The old tab is gone: its session
+ * ends and its agent is dropped as for a closed tab. Its recorded host moves to
+ * the new tab, unless that tab already recorded its own, so a tab that left a
+ * paused site stays guarded when an agent reports from it again.
+ */
+async function handleTabReplaced(addedTabId: number, removedTabId: number): Promise<void> {
+  const host = state.tabHosts.get(removedTabId);
+  const moved = host !== undefined && !state.tabHosts.has(addedTabId);
+  if (moved) state.tabHosts.set(addedTabId, host);
+  await handleTabRemoved(removedTabId);
+  if (moved && state.guardPauses.length > 0) await reconcileCdpEnforcement();
 }
 
 /**

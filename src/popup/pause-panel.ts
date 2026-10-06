@@ -14,7 +14,7 @@ import type { GuardPause, PauseLogEntry, PauseScope } from '../delegation/pause'
 import {
   SITE_PAUSE_MINUTES,
   ALL_PAUSE_MINUTES,
-  PAUSE_END_REASON_LABELS,
+  pauseEndReasonLabel,
   describePauseScope,
 } from '../delegation/pause';
 
@@ -68,13 +68,16 @@ function isSameDay(iso: string, now: number): boolean {
     && d.getDate() === today.getDate();
 }
 
-/** "09:10", or "Oct 4, 09:10" with `withDate` for a time outside today. */
-function clockTime(iso: string, withDate: boolean): string {
+/**
+ * "09:10", or "Oct 4, 09:10" with `withDate` for a time outside today, with the
+ * year added for a time outside the current year.
+ */
+function clockTime(iso: string, withDate: boolean, now: number): string {
   const d = new Date(iso);
   if (Number.isNaN(d.getTime())) return '?';
-  return withDate
-    ? d.toLocaleString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })
-    : d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+  if (!withDate) return d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+  const year = d.getFullYear() === new Date(now).getFullYear() ? undefined : 'numeric';
+  return d.toLocaleString([], { year, month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
 }
 
 function durationSelect(options: readonly (number | null)[], selected: number | null, label: string): HTMLSelectElement {
@@ -221,9 +224,9 @@ export function renderPausePanel(
       // from another day does not read as one from today.
       const withDate = !isSameDay(entry.startedAt, input.now)
         || (entry.endedAt !== null && !isSameDay(entry.endedAt, input.now));
-      const end = entry.endedAt === null ? 'now' : clockTime(entry.endedAt, withDate);
-      const outcome = entry.endReason === null ? 'still paused' : PAUSE_END_REASON_LABELS[entry.endReason];
-      item.textContent = `${reach} · ${clockTime(entry.startedAt, withDate)} to ${end} · ${outcome}`;
+      const end = entry.endedAt === null ? 'now' : clockTime(entry.endedAt, withDate, input.now);
+      const outcome = entry.endReason === null ? 'still paused' : pauseEndReasonLabel(entry.endReason);
+      item.textContent = `${reach} · ${clockTime(entry.startedAt, withDate, input.now)} to ${end} · ${outcome}`;
       list.appendChild(item);
     }
     container.appendChild(list);

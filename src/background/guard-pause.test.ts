@@ -83,6 +83,14 @@ function pushedTo(tabId: number): unknown[] {
     .map((c: unknown[]) => (c[1] as { data: unknown }).data);
 }
 
+/** Fire this worker's chrome.tabs.onReplaced listener. */
+function replaceTab(addedTabId: number, removedTabId: number): void {
+  const onReplaced = chromeMock.tabs.onReplaced.addListener.mock.calls.at(-1)?.[0] as
+    ((addedTabId: number, removedTabId: number) => void) | undefined;
+  expect(onReplaced).toBeDefined();
+  onReplaced?.(addedTabId, removedTabId);
+}
+
 beforeEach(() => {
   vi.resetModules();
   chromeMock.tabs.query.mockImplementation(() => Promise.resolve([
@@ -194,17 +202,33 @@ describe('pause on this site (#71)', () => {
     expect(await ruleFor(handle, 42, OTHER_URL)).toEqual(expect.objectContaining({ preset: 'readOnly' }));
 
     // The browser then swaps the tab for another one (chrome.tabs.onReplaced).
-    // Forgetting the tab's host here would fall back to the agent's origin, the
-    // paused site, and let the download through again.
-    const onReplaced = chromeMock.tabs.onReplaced.addListener.mock.calls.at(-1)?.[0] as
-      ((addedTabId: number, removedTabId: number) => void) | undefined;
-    onReplaced?.(99, 42);
+    // The old tab's agent goes with it; the agent then reports from the new
+    // tab without a page URL. Losing the tab's host in the swap would fall back
+    // to the agent's origin, the paused site, and let the download through.
+    replaceTab(99, 42);
+    for (let i = 0; i < 8; i++) await flush();
+    await send(handle, 'DETECTION_RESULT', agentDetectedOn(PAUSED_URL), { id: 'test-id', tab: { id: 99 } });
 
     const onCreated = (downloads.onCreated as { addListener: { mock: { calls: unknown[][] } } })
       .addListener.mock.calls[0][0] as (item: unknown) => Promise<void>;
     await onCreated({ id: 9, url: 'https://dashboard.example.test/export.csv', referrer: OTHER_URL, filename: '/tmp/export.csv' });
     for (let i = 0; i < 8; i++) await flush();
     expect(downloads.cancel).toHaveBeenCalledWith(9, expect.any(Function));
+  });
+
+  it('a replaced tab\'s session ends and its agent is dropped, as for a closed tab', async () => {
+    const handle = await importWorker();
+    expect(await send(handle, 'DETECTION_RESULT', agentDetectedOn(OTHER_URL), contentSender(42, OTHER_URL))).toEqual({ success: true });
+
+    replaceTab(99, 42);
+    for (let i = 0; i < 8; i++) await flush();
+
+    const sessions = (await send(handle, 'SESSION_QUERY', {}, POPUP_SENDER) as { sessions: { endedAt?: string; endReason?: string }[] }).sessions;
+    expect(sessions).toHaveLength(1);
+    expect(sessions[0].endedAt).toEqual(expect.any(String));
+    expect(sessions[0].endReason).toBe('page-unload');
+    const status = await send(handle, 'STATUS_QUERY', {}, POPUP_SENDER) as { detectedAgents: unknown[] };
+    expect(status.detectedAgents).toEqual([]);
   });
 
   it('a tab that left the paused site stays guarded when it moves to a page with no host name', async () => {
@@ -357,5 +381,85 @@ describe('pause across a worker restart (#71)', () => {
     handle = await importWorker();
     expect(await ruleFor(handle, 42, PAUSED_URL)).toBeNull();
     expect(await ruleFor(handle, 43, OTHER_URL)).toEqual(expect.objectContaining({ preset: 'readOnly' }));
+  });
+
+  it('a stored history entry with an end reason this version has no label for survives the next pause change', async () => {
+    const at = '2026-10-05T12:00:00.000Z';
+    const later = { id: 'later', scope: 'all', host: null, startedAt: at, expiresAt: at, endedAt: at, endReason: 'x' };
+    const known = { id: 'known', scope: 'all', host: null, startedAt: at, expiresAt: at, endedAt: at, endReason: 'resumed' };
+    await chrome.storage.local.set({ guardPauseLog: [later, known] });
+    const handle = await importWorker();
+
+    const resp = await send(handle, 'GUARD_PAUSE', { scope: 'site', host: 'dashboard.example.test', minutes: 15 }, POPUP_SENDER) as { pause: { id: string } };
+    const stored = (await chrome.storage.local.get('guardPauseLog')).guardPauseLog as { id: string }[];
+    expect(stored.map((e) => e.id)).toEqual([resp.pause.id, 'later', 'known']);
+  });
+});
+
+describe('a tab\'s host change during a pause converges CDP enforcement', () => {
+  const debuggerMock = {
+    attach: vi.fn(() => Promise.resolve()),
+    detach: vi.fn(() => Promise.resolve()),
+    sendCommand: vi.fn(() => Promise.resolve()),
+    getTargets: vi.fn((cb: (targets: unknown[]) => void) => cb([])),
+    onEvent: { addListener: vi.fn() },
+    onDetach: { addListener: vi.fn() },
+  };
+  const chromeRecord = chromeMock as unknown as Record<string, unknown>;
+
+  beforeEach(() => {
+    debuggerMock.attach.mockImplementation(() => Promise.resolve());
+    debuggerMock.detach.mockImplementation(() => Promise.resolve());
+    debuggerMock.sendCommand.mockImplementation(() => Promise.resolve());
+    debuggerMock.getTargets.mockImplementation((cb: (targets: unknown[]) => void) => cb([]));
+    chromeRecord.debugger = debuggerMock;
+  });
+
+  afterEach(() => {
+    delete chromeRecord.debugger;
+  });
+
+  /** An agent on `url` in `tabId`, under a delegation the CDP layer enforces. */
+  async function enforcedAgent(handle: Listener, tabId: number, url: string): Promise<void> {
+    expect(await send(handle, 'SETTINGS_UPDATE', { cdpEnforcementEnabled: true }, POPUP_SENDER)).toEqual(expect.objectContaining({ success: true }));
+    expect(await send(handle, 'DETECTION_RESULT', agentDetectedOn(url), contentSender(tabId, url))).toEqual({ success: true });
+    const rule = createRuleFromPreset('limited', { sitePatterns: [{ pattern: '*.tracker.test', action: 'block' }] });
+    expect(await send(handle, 'DELEGATION_UPDATE', rule, POPUP_SENDER)).toEqual({ success: true });
+  }
+
+  /** Move a tab to `url` by navigation, or by its new page's content script reporting in. */
+  const movers: [string, (handle: Listener, tabId: number, url: string) => Promise<void>][] = [
+    ['navigation', async (_handle, tabId, url) => {
+      const onUpdated = chromeMock.tabs.onUpdated.addListener.mock.calls.at(-1)?.[0] as
+        (tabId: number, changeInfo: { url?: string }, tab: unknown) => void;
+      onUpdated(tabId, { url }, { id: tabId, url });
+      for (let i = 0; i < 8; i++) await flush();
+    }],
+    ['content-script report', async (handle, tabId, url) => {
+      await send(handle, 'TAB_STATE_QUERY', {}, contentSender(tabId, url));
+    }],
+  ];
+
+  it.each(movers)('re-attaches a tab that leaves the paused site (%s)', async (_name, moveTab) => {
+    const handle = await importWorker();
+    await enforcedAgent(handle, 42, PAUSED_URL);
+    expect(debuggerMock.attach).toHaveBeenCalledWith({ tabId: 42 }, '1.3');
+
+    await send(handle, 'GUARD_PAUSE', { scope: 'site', host: 'dashboard.example.test', minutes: 15 }, POPUP_SENDER);
+    expect(debuggerMock.detach).toHaveBeenCalledWith({ tabId: 42 });
+
+    debuggerMock.attach.mockClear();
+    await moveTab(handle, 42, OTHER_URL);
+    expect(debuggerMock.attach).toHaveBeenCalledWith({ tabId: 42 }, '1.3');
+  });
+
+  it.each(movers)('detaches a tab that moves onto the paused site (%s)', async (_name, moveTab) => {
+    const handle = await importWorker();
+    await enforcedAgent(handle, 43, OTHER_URL);
+    await send(handle, 'GUARD_PAUSE', { scope: 'site', host: 'dashboard.example.test', minutes: 15 }, POPUP_SENDER);
+    expect(debuggerMock.detach).not.toHaveBeenCalled();
+
+    await moveTab(handle, 43, PAUSED_URL);
+    expect(debuggerMock.detach).toHaveBeenCalledWith({ tabId: 43 });
   });
 });
