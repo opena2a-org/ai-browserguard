@@ -17,7 +17,8 @@
     "bump": "node scripts/bump-version.js",
     "smoke:arming": "node scripts/smoke-arming.mjs",
     "smoke:cdp": "node scripts/smoke-cdp-enforcement.mjs",
-    "smoke:popup-layout": "node scripts/smoke-popup-layout.mjs"
+    "smoke:popup-layout": "node scripts/smoke-popup-layout.mjs",
+    "smoke:downloads": "node scripts/smoke-downloads.mjs"
   },
   "devDependencies": {
     "@types/chrome": "^0.0.268",

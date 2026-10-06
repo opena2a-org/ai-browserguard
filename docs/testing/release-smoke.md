@@ -19,7 +19,18 @@ npm run build
 npm test                 # unit + lock-in suites (incl. no-emoji + download)
 npm run smoke:export     # real-extension: popup chrome + export download
 npm run smoke:arming     # real-popup wizard -> Read-Only rule -> block + toast
+npm run smoke:downloads  # real-extension: user downloads beside a CDP agent
 ```
+
+`npm run smoke:downloads` loads the built extension with a session delegation
+set to Read-Only and one external CDP client attached to one tab, the setup in
+#69. With Browser-layer blocking off and then on, it asserts that the user's
+own downloads in other tabs complete (one from another site, one from the
+agent's site), are recorded as uncertain and as a host match, and are not
+counted as blocked actions. It also asserts that a download the client starts
+in its own tab completes with Browser-layer blocking off, and with it on is
+cancelled, recorded as started in the agent's tab and counted once. It opens a
+browser window and needs no OS focus. It must report 0 failed.
 
 `npm run smoke:arming` closes manual step 3 below: it opens the REAL toolbar
 popup (`chrome.action.openPopup`), walks the Configure wizard to activate a
