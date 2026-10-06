@@ -31,7 +31,7 @@ import {
   PAUSE_END_REASON_LABELS,
 } from '../delegation/pause';
 import { shouldIgnoreDownload, attributeDownload, describeDownload, hostOf, originOf } from './download-monitor';
-import { setupNotificationHandlers, clearAllNotifications, showBoundaryNotification } from '../alerts/notification';
+import { setupNotificationHandlers, clearAllNotifications, showBoundaryNotification, showNoticeNotification } from '../alerts/notification';
 import type { BoundaryAlert } from '../alerts/boundary';
 import { processBoundaryViolation, handleAllowOnce } from './handlers';
 import { isValidSender } from './sender-validation';
@@ -332,7 +332,8 @@ function initialize(): void {
   // that does not permit download-file, a download is cancelled only when
   // Chrome reports it starting in that agent's tab on our own debugger session;
   // a download that merely shares the agent page's host is recorded, not
-  // cancelled, because it may be the user's own download in another tab.
+  // cancelled or paused, because it may be the user's own download in another
+  // tab; the user is told it was not stopped.
   try {
     chrome.downloads.onCreated.addListener((item) => {
       handleDownloadCreated(item).catch((err) => {
@@ -1722,6 +1723,12 @@ async function handleCdpDebuggerDetection(result: DebuggerDetectionResult): Prom
  * whose referrer, final URL or URL has the origin of an agent's page is
  * recorded as a host match: it may be the user's own download in another tab of
  * that site, so it is never cancelled and never counted as a blocked action.
+ * Under a delegation that does not permit download-file, the user gets a
+ * notice that it was left to finish. It is not held (paused, then cancelled
+ * unless kept): measured on Chrome 145, a paused download from a short-lived
+ * URL without range support is lost on resume once the server closes the idle
+ * connection, a blob: download completes while reported paused, and neither
+ * can be told apart from a resumable download when it is created.
  * Any other download is recorded on the first agent's session as uncertain.
  *
  * If no agent is yet registered we run a fresh CDP check: a live debugger
@@ -1781,8 +1788,9 @@ async function handleDownloadCreated(item: chrome.downloads.DownloadItem): Promi
   // delegation that does not permit download-file. A host match is not enough:
   // the same site open in another tab is the user's, and cancelling on it
   // destroyed the user's downloads with no way back.
+  const forbidden = rule !== null && !evaluateRule(rule, 'download-file', downloadUrl).allowed;
   let blocked = false;
-  if (rule && level === 'tab' && !evaluateRule(rule, 'download-file', downloadUrl).allowed) {
+  if (forbidden && level === 'tab') {
     blocked = true;
     try {
       chrome.downloads.cancel(item.id, () => {
@@ -1882,7 +1890,30 @@ async function handleDownloadCreated(item: chrome.downloads.DownloadItem): Promi
       state.recentAlerts.shift();
     }
   }
+
+  // A host match under a delegation that blocks downloads is left to finish.
+  // Say so: it is not a block, so it is not listed or counted as one.
+  if (rule && forbidden && level === 'host') {
+    notifyHostDownloadNotStopped(label, attribution.matchedHost ?? '', rule);
+  }
   updateBadge();
+}
+
+/**
+ * Tell the user a download from an agent's site was left to finish because it
+ * was not seen starting in the agent's tab. Bursts coalesce as block
+ * notifications do; each download is still recorded on the timeline.
+ */
+function notifyHostDownloadNotStopped(label: string, matchedHost: string, rule: DelegationRule): void {
+  const now = Date.now();
+  if (now - lastHostDownloadNoticeAt < DOWNLOAD_NOTIFICATION_COALESCE_MS) return;
+  lastHostDownloadNoticeAt = now;
+  const ruleName = rule.label || PRESET_DISPLAY_NAMES[rule.preset];
+  showNoticeNotification(
+    'Download not stopped',
+    `Did not stop a download: ${boundForNotification(label)}. It is from ${boundForNotification(matchedHost)}, where an agent was detected, but it was not seen starting in the agent's tab, so it may be yours. Your delegation (${ruleName}) stops only downloads seen starting in that tab. It is listed on the Timeline in the popup.`,
+    { enabled: state.notificationsEnabled },
+  );
 }
 
 /** The preset names the popup shows, used when a rule carries no label. */
@@ -1900,6 +1931,7 @@ function boundForNotification(text: string): string {
 /** Minimum gap between blocked-download OS notifications (burst coalescing). */
 const DOWNLOAD_NOTIFICATION_COALESCE_MS = 10_000;
 let lastDownloadBlockNotificationAt = 0;
+let lastHostDownloadNoticeAt = 0;
 
 async function handleTabRemoved(tabId: number): Promise<void> {
   state.tabHosts.delete(tabId);

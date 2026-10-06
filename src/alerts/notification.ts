@@ -72,6 +72,47 @@ export function showBoundaryNotification(
 }
 
 /**
+ * Show a notification about something the guard recorded and did not stop.
+ * It has no buttons, since there is nothing to allow or undo, and honours the
+ * same Notifications setting and auto-dismiss as a boundary alert.
+ */
+export function showNoticeNotification(
+  title: string,
+  message: string,
+  config?: Partial<Pick<NotificationConfig, 'enabled' | 'autoDismissMs'>>
+): string | null {
+  const mergedConfig = { ...DEFAULT_NOTIFICATION_CONFIG, ...config };
+  if (!mergedConfig.enabled) return null;
+
+  const notificationId = `abg-notice-${Date.now()}`;
+
+  try {
+    chrome.notifications.create(notificationId, {
+      type: 'basic' as const,
+      iconUrl: chrome.runtime.getURL('icons/icon128.png'),
+      title: `AI Browser Guard - ${title}`,
+      message,
+      priority: 0,
+    });
+
+    if (mergedConfig.autoDismissMs > 0) {
+      setTimeout(() => {
+        try {
+          chrome.notifications.clear(notificationId);
+        } catch {
+          // Notification may already be cleared
+        }
+      }, mergedConfig.autoDismissMs);
+    }
+  } catch (err) {
+    console.error('[AI Browser Guard] Failed to create notification:', err);
+    return null;
+  }
+
+  return notificationId;
+}
+
+/**
  * Map alert severity to notification priority.
  */
 export function severityToPriority(severity: AlertSeverity): number {

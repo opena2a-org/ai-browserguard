@@ -64,6 +64,8 @@ async function loadWorker() {
   downloads.onCreated = { addListener: vi.fn(), removeListener: vi.fn() };
   const cancel = vi.fn((_id: number, cb?: () => void) => { cb?.(); });
   downloads.cancel = cancel;
+  const pause = vi.fn((_id: number, cb?: () => void) => { cb?.(); });
+  downloads.pause = pause;
   (chromeMock.tabs as unknown as Record<string, unknown>).remove = vi.fn(() => Promise.resolve());
   chromeMock.notifications.create.mockClear();
   chromeMock.runtime.onMessage.addListener.mockClear();
@@ -72,7 +74,7 @@ async function loadWorker() {
   const handleMessage = calls[calls.length - 1][0] as Listener;
   const onCreated = (downloads.onCreated as { addListener: { mock: { calls: unknown[][] } } })
     .addListener.mock.calls[0][0] as (item: unknown) => void;
-  return { handleMessage, onCreated, cancel };
+  return { handleMessage, onCreated, cancel, pause };
 }
 type Worker = Awaited<ReturnType<typeof loadWorker>>;
 
@@ -193,6 +195,95 @@ describe('a host match alone no longer cancels the download', () => {
     w.onCreated({ id: 1301, url: 'https://mail.example.com/attachment/1', referrer: 'https://mail.example.com/inbox' });
     await settle();
     expect(w.cancel).not.toHaveBeenCalled();
+  });
+});
+
+/**
+ * A host match is never held. Pausing it and cancelling it unless the user
+ * kept it was measured on Chrome 145 (scripts/measure-download-hold.mjs): a
+ * short-lived URL without range support is lost on resume once the server
+ * closes the idle connection, and a blob: download ignores the pause. Under a
+ * delegation that blocks downloads the user is told it was left to finish.
+ */
+describe('a host match under a delegation that blocks downloads is left to finish, with a notice', () => {
+  const item = { url: 'https://mail.example.com/attachment/123', referrer: 'https://mail.example.com/inbox', filename: '/home/user/Downloads/invoice.pdf' };
+  const NOTICE_TITLE = 'AI Browser Guard - Download not stopped';
+
+  function notices() {
+    return chromeMock.notifications.create.mock.calls
+      .map((c: unknown[]) => c[1] as { title?: string; message?: string; buttons?: unknown[] })
+      .filter((o) => o.title === NOTICE_TITLE);
+  }
+
+  async function inPageAgentUnder(rule: DelegationRule | null): Promise<Worker> {
+    const w = await loadWorker();
+    await agent(w, 42, 'a-inpage', 'unknown', ['synthetic-event'], 'https://mail.example.com/inbox');
+    if (rule) await grant(w, rule);
+    return w;
+  }
+
+  it('neither pauses nor cancels it, shows one notice with no buttons, and lists or counts no block', async () => {
+    const w = await inPageAgentUnder(createRuleFromPreset('readOnly', { agentId: 'a-inpage' }));
+    w.onCreated({ id: 101, ...item }); await settle();
+
+    expect(w.pause).not.toHaveBeenCalled();
+    expect(w.cancel).not.toHaveBeenCalled();
+    const shown = notices();
+    expect(shown).toHaveLength(1);
+    expect(shown[0].buttons).toBeUndefined();
+    expect(shown[0].message).toBe(
+      "Did not stop a download: invoice.pdf. It is from mail.example.com, where an agent was detected, but it was not seen starting in the agent's tab, so it may be yours. Your delegation (Read-Only) stops only downloads seen starting in that tab. It is listed on the Timeline in the popup.",
+    );
+    const blockTitles = chromeMock.notifications.create.mock.calls
+      .map((c: unknown[]) => (c[1] as { title?: string }).title ?? '')
+      .filter((t: string) => t.includes('Download blocked'));
+    expect(blockTitles).toEqual([]);
+    const st = status(w);
+    expect(st.recentViolations).toEqual([]);
+    expect(st.lifetimeStats.totalActionsBlocked).toBe(0);
+    expect((await downloadEvents()).map((e) => e.outcome)).toEqual(['informational']);
+  });
+
+  it('a burst of same-site downloads gives one notice and records each download', async () => {
+    const w = await inPageAgentUnder(createRuleFromPreset('readOnly'));
+    w.onCreated({ id: 201, ...item }); await settle();
+    w.onCreated({ id: 202, ...item }); await settle();
+    w.onCreated({ id: 203, ...item }); await settle();
+
+    expect(notices()).toHaveLength(1);
+    expect(await downloadEvents()).toHaveLength(3);
+    expect(w.pause).not.toHaveBeenCalled();
+    expect(w.cancel).not.toHaveBeenCalled();
+  });
+
+  it('shows no notice with notifications turned off, and still records the download', async () => {
+    const w = await inPageAgentUnder(createRuleFromPreset('readOnly', { agentId: 'a-inpage' }));
+    send(w.handleMessage, 'SETTINGS_UPDATE', { notificationsEnabled: false });
+    await settle(4);
+    w.onCreated({ id: 301, ...item }); await settle();
+
+    expect(notices()).toHaveLength(0);
+    expect((await downloadEvents()).map((e) => e.attribution?.level)).toEqual(['host']);
+  });
+
+  it('shows no notice under a delegation that permits downloads', async () => {
+    const w = await inPageAgentUnder(createRuleFromPreset('fullAccess', { agentId: 'a-inpage' }));
+    w.onCreated({ id: 401, ...item }); await settle();
+    expect(notices()).toHaveLength(0);
+  });
+
+  it('shows no notice with no delegation', async () => {
+    const w = await inPageAgentUnder(null);
+    w.onCreated({ id: 501, ...item }); await settle();
+    expect(notices()).toHaveLength(0);
+  });
+
+  it('shows no notice for a download that matches no agent page', async () => {
+    const w = await inPageAgentUnder(createRuleFromPreset('readOnly', { agentId: 'a-inpage' }));
+    w.onCreated({ id: 601, url: 'https://mail.example.com:8443/export.csv', referrer: 'https://other.example.org/', filename: '/home/user/Downloads/export.csv' });
+    await settle();
+    expect((await downloadEvents()).map((e) => e.attribution)).toEqual([{ level: 'none' }]);
+    expect(notices()).toHaveLength(0);
   });
 });
 
