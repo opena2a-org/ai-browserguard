@@ -13,7 +13,11 @@ import {
   getAttachedTabs,
   _resetForTest,
   CDP_PROTOCOL_VERSION,
+  takeTabDownloadStart,
+  awaitTabDownloadStart,
+  isTabDownloadWatched,
 } from './cdp-enforcement';
+import { TAB_DOWNLOAD_START_WINDOW_MS } from './download-monitor';
 
 function makeRule(overrides?: Partial<DelegationRule>): DelegationRule {
   return {
@@ -305,5 +309,86 @@ describe('CDP enforcement orchestration', () => {
     expect(isTabAttached(12)).toBe(true);
     onDetach._fire({ tabId: 12 }, 'target_closed');
     expect(isTabAttached(12)).toBe(false);
+    expect(isTabDownloadWatched(12)).toBe(false);
+  });
+});
+
+describe('download starts reported on our sessions (Page.downloadWillBegin)', () => {
+  let sendCommand: ReturnType<typeof vi.fn>;
+  let onEvent: ReturnType<typeof createEventMock>;
+  const item = { url: 'https://files.example.com/report.pdf' };
+  const willBegin = (tabId: number, guid: string, url = item.url) =>
+    onEvent._fire({ tabId }, 'Page.downloadWillBegin', { frameId: `F-${tabId}`, guid, url, suggestedFilename: 'report.pdf' });
+
+  beforeEach(() => {
+    _resetForTest();
+    sendCommand = vi.fn(() => Promise.resolve({}));
+    onEvent = createEventMock();
+    vi.stubGlobal('chrome', {
+      debugger: { attach: vi.fn(() => Promise.resolve()), detach: vi.fn(() => Promise.resolve()), sendCommand, onEvent, onDetach: createEventMock() },
+      runtime: { lastError: null, id: 'self' },
+    });
+    initCdpEnforcement({ getRuleForTab: () => makeRule() });
+  });
+
+  afterEach(() => {
+    _resetForTest();
+    vi.unstubAllGlobals();
+    vi.useRealTimers();
+  });
+
+  it('attachTab enables the Page domain on the same session, after Fetch', async () => {
+    await attachTab(42);
+    const methods = sendCommand.mock.calls.map((c: unknown[]) => c[1]);
+    expect(methods).toEqual(['Fetch.enable', 'Page.enable']);
+    expect(isTabDownloadWatched(42)).toBe(true);
+  });
+
+  it('a failed Page.enable keeps the blocked-site session and leaves downloads there unwatched', async () => {
+    sendCommand.mockImplementation((_t: unknown, method: string) =>
+      method === 'Page.enable' ? Promise.reject(new Error('not allowed')) : Promise.resolve({}));
+    expect(await attachTab(43)).toBe(true);
+    expect(isTabAttached(43)).toBe(true);
+    expect(isTabDownloadWatched(43)).toBe(false);
+  });
+
+  it('a start on an attached tab is matched to its download item once', async () => {
+    await attachTab(42);
+    willBegin(42, 'g1');
+    expect(takeTabDownloadStart(item)).toEqual(expect.objectContaining({ tabId: 42, frameId: 'F-42', guid: 'g1' }));
+    expect(takeTabDownloadStart(item)).toBeNull();
+  });
+
+  it('a start reported for a tab we hold no session on is dropped', async () => {
+    await attachTab(42);
+    willBegin(77, 'g-other');
+    expect(takeTabDownloadStart(item)).toBeNull();
+  });
+
+  it('a start older than the window is not matched', async () => {
+    vi.useFakeTimers();
+    await attachTab(42);
+    willBegin(42, 'g1');
+    vi.advanceTimersByTime(TAB_DOWNLOAD_START_WINDOW_MS + 1);
+    expect(takeTabDownloadStart(item)).toBeNull();
+  });
+
+  it('a download item waits for a start reported after it, inside the window', async () => {
+    await attachTab(42);
+    const pending = awaitTabDownloadStart(item);
+    willBegin(42, 'g-late');
+    await expect(pending).resolves.toEqual(expect.objectContaining({ tabId: 42, guid: 'g-late' }));
+  });
+
+  it('a download item with no start resolves null at the end of the window', async () => {
+    vi.useFakeTimers();
+    await attachTab(42);
+    const pending = awaitTabDownloadStart(item);
+    vi.advanceTimersByTime(TAB_DOWNLOAD_START_WINDOW_MS);
+    await expect(pending).resolves.toBeNull();
+  });
+
+  it('with no watched tab, a download item resolves null at once', async () => {
+    await expect(awaitTabDownloadStart(item)).resolves.toBeNull();
   });
 });

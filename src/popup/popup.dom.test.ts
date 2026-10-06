@@ -140,6 +140,7 @@ afterEach(() => {
 
 interface PopupStatus {
   detectedAgents: unknown[];
+  downloadWatchedAgentIds?: string[];
   activeDelegation: DelegationRule | null;
   delegationRules: DelegationRule[];
   killSwitchActive: boolean;
@@ -213,9 +214,12 @@ function status(opts: {
   origin?: string;
   rule?: DelegationRule | null;
   violations?: unknown[];
+  /** Whether the agent's tab holds the extension's debugger session (default: yes). */
+  watched?: boolean;
 }): PopupStatus {
   const rule = opts.rule === undefined ? agentRule('readOnly', 'a1') : opts.rule;
   return {
+    downloadWatchedAgentIds: opts.watched === false ? [] : ['a1'],
     detectedAgents: [
       {
         id: 'a1',
@@ -326,19 +330,19 @@ describe('popup render: external-driver pill and caveat (#69)', () => {
     };
   }
 
-  it('shows the downloads state exactly when the caveat names the host (Read-Only, host)', async () => {
+  it('shows the downloads state exactly when the caveat says downloads in its tab are cancelled (Read-Only, watched tab)', async () => {
     await renderPopup(status({}));
     const r = pillAndCaveat();
     expect(r.pill).toBe(EXTERNAL_DRIVER_DOWNLOADS_ENFORCED_LABEL);
-    expect(r.caveat).toContain('downloads from shop.example.com are cancelled, yours included');
+    expect(r.caveat).toContain("downloads started in this agent's tab (detected on shop.example.com) are cancelled, yours included");
     expect(r.caveatAfterGrant).toBe(true);
   });
 
-  it('host-less agent: "Monitor only" with the short caveat under the grant row', async () => {
-    await renderPopup(status({ origin: 'about:blank' }));
+  it('agent tab without the extension\'s debugger session: "Monitor only" with the short caveat under the grant row', async () => {
+    await renderPopup(status({ watched: false }));
     const r = pillAndCaveat();
     expect(r.pill).toBe('Monitor only');
-    expect(r.caveat).not.toContain('downloads from');
+    expect(r.caveat).not.toContain('downloads');
     expect(r.caveatAfterGrant).toBe(true);
   });
 
@@ -346,7 +350,7 @@ describe('popup render: external-driver pill and caveat (#69)', () => {
     await renderPopup(status({ rule: agentRule('fullAccess', 'a1') }));
     const r = pillAndCaveat();
     expect(r.pill).toBe('Monitor only');
-    expect(r.caveat).not.toContain('downloads from');
+    expect(r.caveat).not.toContain('downloads');
   });
 
   it('no rule: "Monitor only" and no caveat', async () => {

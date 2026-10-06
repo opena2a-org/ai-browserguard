@@ -11,6 +11,10 @@
  *   blank   a host-less agent (about:blank) under Read-Only, no blocks
  *   norule  an agent with no delegation, no blocks
  *
+ * In fresh, mixed and stale the background reports the agent's tab as holding
+ * the extension's debugger session, the only thing that ties a download to a
+ * tab; in blank and norule it does not.
+ *
  * Asserts, per render:
  *   - no horizontal overflow: document scrollWidth is exactly 360
  *   - exactly one .capability-recovery block when a download block exists, none otherwise
@@ -146,6 +150,7 @@ function buildState(scenario, agentType) {
       originUrl: scenario === 'blank' ? 'about:blank' : 'https://shop.example.com/cart',
       observedCapabilities: [],
     }],
+    downloadWatchedAgentIds: ['fresh', 'mixed', 'stale'].includes(scenario) ? ['a1'] : [],
     aiSafetyDeclarations: {},
     activeDelegation: rules[1] ?? null,
     delegationRules: rules,
@@ -301,11 +306,13 @@ try {
       check(`${label}: pill renders on one line (${m.pillHeight} px)`, m.pillHeight !== null && m.pillHeight <= 20);
 
       const hasRule = scenario !== 'norule';
-      const downloadsEnforced = hasRule && scenario !== 'blank';
+      const downloadsEnforced = hasRule && state.downloadWatchedAgentIds.includes('a1');
       check(
         `${label}: pill label "${m.pillText}" matches the caveat variant`,
         m.pillText === (downloadsEnforced ? DOWNLOADS_LABEL : 'Monitor only') &&
-          (m.caveatText ?? '').includes('downloads from shop.example.com are cancelled') === downloadsEnforced,
+          (m.caveatText ?? '').includes(
+            "downloads started in this agent's tab (detected on shop.example.com) are cancelled",
+          ) === downloadsEnforced,
       );
       if (hasRule) {
         check(`${label}: caveat sits directly under the grant row`, m.caveatAfterGrant === true);

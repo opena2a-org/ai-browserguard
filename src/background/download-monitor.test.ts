@@ -3,8 +3,12 @@ import {
   shouldIgnoreDownload,
   attributeDownload,
   describeDownload,
+  matchTabDownloadStart,
+  originOf,
+  TAB_DOWNLOAD_START_WINDOW_MS,
   type DownloadInfo,
   type ActiveAgentTab,
+  type TabDownloadStart,
 } from './download-monitor';
 
 function info(overrides?: Partial<DownloadInfo>): DownloadInfo {
@@ -45,15 +49,13 @@ describe('attributeDownload', () => {
       { tabId: 7, originUrl: 'https://app.example.com/page' },
     ];
     const a = attributeDownload(info({ referrer: 'https://app.example.com/x' }), agents);
-    expect(a.tabId).toBe(7);
-    expect(a.matchedByReferrer).toBe(true);
+    expect(a).toEqual({ tabId: 7, level: 'host', matchedHost: 'app.example.com' });
   });
 
   it('falls back to the sole active agent when no host matches', () => {
     const agents: ActiveAgentTab[] = [{ tabId: 9, originUrl: 'https://nomatch.com/' }];
     const a = attributeDownload(info({ referrer: undefined, finalUrl: undefined, url: 'data:text/plain;base64,AAA' }), agents);
-    expect(a.tabId).toBe(9);
-    expect(a.matchedByReferrer).toBe(false);
+    expect(a).toEqual({ tabId: 9, level: 'none' });
   });
 
   it('matches by final/url host when no referrer is present', () => {
@@ -63,7 +65,7 @@ describe('attributeDownload', () => {
     ];
     const a = attributeDownload(info({ referrer: undefined }), agents);
     expect(a.tabId).toBe(1);
-    expect(a.matchedByReferrer).toBe(true);
+    expect(a.level).toBe('host');
   });
 
   it('marks attribution uncertain with multiple unmatched agents', () => {
@@ -75,8 +77,71 @@ describe('attributeDownload', () => {
       info({ referrer: 'https://c.com/', finalUrl: 'https://c.com/x', url: 'https://c.com/x' }),
       agents,
     );
-    expect(a.matchedByReferrer).toBe(false);
+    expect(a.level).toBe('none');
     expect([1, 2]).toContain(a.tabId);
+  });
+
+  it('compares scheme, host and port, not the bare host name', () => {
+    const agents: ActiveAgentTab[] = [{ tabId: 3, originUrl: 'http://localhost:3000/app' }];
+    const otherPort = info({ url: 'http://localhost:8080/export.csv', finalUrl: undefined, referrer: 'http://localhost:8080/' });
+    expect(attributeDownload(otherPort, agents).level).toBe('none');
+    const otherScheme = info({ url: 'https://localhost:3000/x', finalUrl: undefined, referrer: undefined });
+    expect(attributeDownload(otherScheme, agents).level).toBe('none');
+    const sameOrigin = info({ url: 'http://localhost:3000/export.csv', finalUrl: undefined, referrer: undefined });
+    expect(attributeDownload(sameOrigin, agents)).toEqual({ tabId: 3, level: 'host', matchedHost: 'localhost:3000' });
+  });
+
+  it('a download start reported in an agent tab is tab-level, ahead of any host match', () => {
+    const agents: ActiveAgentTab[] = [
+      { tabId: 4, originUrl: 'https://files.example.com/' },
+      { tabId: 8, originUrl: 'about:blank' },
+    ];
+    const start: TabDownloadStart = { tabId: 8, frameId: 'F1', guid: 'g1', url: 'https://files.example.com/a.txt', at: 0 };
+    expect(attributeDownload(info(), agents, start)).toEqual({ tabId: 8, level: 'tab', frameId: 'F1' });
+  });
+
+  it('a download start in a tab with no registered agent is not tab-level', () => {
+    const agents: ActiveAgentTab[] = [{ tabId: 4, originUrl: 'https://nomatch.example/' }];
+    const start: TabDownloadStart = { tabId: 99, frameId: 'F1', guid: 'g1', url: 'https://files.example.com/a.txt', at: 0 };
+    expect(attributeDownload(info(), agents, start).level).toBe('none');
+  });
+});
+
+describe('originOf', () => {
+  it('returns the origin, or null for opaque and unparseable URLs', () => {
+    expect(originOf('https://a.example:8443/x?y')).toBe('https://a.example:8443');
+    expect(originOf('about:blank')).toBeNull();
+    expect(originOf('file:///Users/me/page.html')).toBeNull();
+    expect(originOf('data:text/plain,hi')).toBeNull();
+    expect(originOf('not a url')).toBeNull();
+    expect(originOf(undefined)).toBeNull();
+  });
+});
+
+describe('matchTabDownloadStart', () => {
+  const start = (over: Partial<TabDownloadStart>): TabDownloadStart => ({
+    tabId: 1, frameId: 'F', guid: 'g', url: 'https://files.example.com/a.txt', at: 1_000, ...over,
+  });
+
+  it('matches on the item URL or its final URL', () => {
+    const item = { url: 'https://files.example.com/redirect', finalUrl: 'https://cdn.example.net/a.txt' };
+    expect(matchTabDownloadStart([start({ url: 'https://files.example.com/redirect' })], item, 1_000)?.guid).toBe('g');
+    expect(matchTabDownloadStart([start({ url: 'https://cdn.example.net/a.txt' })], item, 1_000)?.guid).toBe('g');
+    expect(matchTabDownloadStart([start({ url: 'https://files.example.com/other' })], item, 1_000)).toBeNull();
+  });
+
+  it('matches only inside the window, in either order', () => {
+    const item = { url: 'https://files.example.com/a.txt' };
+    const s = [start({ at: 10_000 })];
+    expect(matchTabDownloadStart(s, item, 10_000 + TAB_DOWNLOAD_START_WINDOW_MS)).not.toBeNull();
+    expect(matchTabDownloadStart(s, item, 10_000 - TAB_DOWNLOAD_START_WINDOW_MS)).not.toBeNull();
+    expect(matchTabDownloadStart(s, item, 10_000 + TAB_DOWNLOAD_START_WINDOW_MS + 1)).toBeNull();
+  });
+
+  it('picks the earliest of two starts for the same URL', () => {
+    const item = { url: 'https://files.example.com/a.txt' };
+    const s = [start({ guid: 'later', tabId: 2, at: 1_500 }), start({ guid: 'first', tabId: 1, at: 1_200 })];
+    expect(matchTabDownloadStart(s, item, 2_000)?.guid).toBe('first');
   });
 });
 

@@ -5,8 +5,9 @@
  *  - a user's own download in another tab is not cancelled while a CDP agent is
  *    active, when nothing ties it to the agent (the uncertain fallback, including
  *    an agent origin with no host, file://);
- *  - a download tied to the agent's own origin is still cancelled, external
- *    driver or not;
+ *  - a download from the agent's own origin is recorded as a host match and not
+ *    cancelled: with no report of it starting in the agent's tab, it may be the
+ *    user's own download in another tab of that site;
  *  - the popup's Allow writes the plain host to the rule it names, and says so
  *    when nothing was written.
  */
@@ -121,7 +122,7 @@ describe('#69 download attribution', () => {
     expect(w.cancel).not.toHaveBeenCalled();
   });
 
-  it('still cancels a download tied to the agent\'s own origin, for an external (CDP) driver too', async () => {
+  it('does not cancel a download from the agent\'s own origin when nothing reports it starting in the agent\'s tab', async () => {
     const w = await withAgentAndReadOnly('https://agent.example.com/run');
     await w.onCreated({
       id: 8,
@@ -131,8 +132,8 @@ describe('#69 download attribution', () => {
       filename: '/home/user/Downloads/report.pdf',
     });
     await settle();
-    expect(w.cancel).toHaveBeenCalledTimes(1);
-    expect(status(w.handleMessage).recentViolations.some((a) => a.title === 'Download blocked')).toBe(true);
+    expect(w.cancel).not.toHaveBeenCalled();
+    expect(status(w.handleMessage).recentViolations.some((a) => a.title === 'Download blocked')).toBe(false);
   });
 });
 

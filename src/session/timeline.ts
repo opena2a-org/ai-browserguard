@@ -5,7 +5,7 @@
  * Each entry records what happened, where, and whether it was allowed.
  */
 
-import type { AgentEvent, AgentEventType } from '../types/events';
+import type { AgentEvent, AgentEventType, DownloadEventAttribution } from '../types/events';
 import type { AgentCapability } from '../types/agent';
 import type { AgentSession, SessionSummary } from './types';
 
@@ -41,6 +41,7 @@ export function createTimelineEvent(
     attemptedAction?: AgentCapability;
     outcome?: 'allowed' | 'blocked' | 'informational';
     ruleId?: string;
+    attribution?: DownloadEventAttribution;
   }
 ): AgentEvent {
   return {
@@ -53,6 +54,8 @@ export function createTimelineEvent(
     targetSelector: options?.targetSelector,
     attemptedAction: options?.attemptedAction,
     ruleId: options?.ruleId,
+    // Only download events carry it; every other event keeps its old shape.
+    ...(options?.attribution ? { attribution: options.attribution } : {}),
   };
 }
 

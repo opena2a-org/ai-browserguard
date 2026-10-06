@@ -11,6 +11,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { chromeMock } from '../__tests__/setup';
 import { createRuleFromPreset } from '../delegation/rules';
+import { installDownloadTabWatch, withBlockedSite } from '../__tests__/download-tab-watch';
 import { showBoundaryNotification } from '../alerts/notification';
 import type { BoundaryAlert } from '../alerts/boundary';
 
@@ -65,6 +66,9 @@ describe('download-block notification lifetime', () => {
     const downloads = chromeMock.downloads as unknown as Record<string, unknown>;
     downloads.onCreated = { addListener: vi.fn(), removeListener: vi.fn() };
     downloads.cancel = vi.fn((_id: number, cb?: () => void) => { cb?.(); });
+    // A download is cancelled only when it starts in the agent's tab on our own
+    // debugger session: Browser-layer blocking on, a delegation with a blocked site.
+    const watch = installDownloadTabWatch();
 
     chromeMock.runtime.onMessage.addListener.mockClear();
     await import('./index');
@@ -72,9 +76,11 @@ describe('download-block notification lifetime', () => {
     const calls = chromeMock.runtime.onMessage.addListener.mock.calls;
     const handleMessage = calls[calls.length - 1][0] as Listener;
 
+    handleMessage({ type: 'SETTINGS_UPDATE', data: { cdpEnforcementEnabled: true } }, POPUP_SENDER, vi.fn());
+    await settle();
     handleMessage({ type: 'DETECTION_RESULT', data: detectionEvent() }, CONTENT_SENDER, vi.fn());
     await settle();
-    handleMessage({ type: 'DELEGATION_UPDATE', data: createRuleFromPreset('readOnly') }, POPUP_SENDER, vi.fn());
+    handleMessage({ type: 'DELEGATION_UPDATE', data: withBlockedSite(createRuleFromPreset('readOnly')) }, POPUP_SENDER, vi.fn());
     await settle();
 
     chromeMock.notifications.create.mockClear();
@@ -82,6 +88,7 @@ describe('download-block notification lifetime', () => {
 
     const onCreated = (downloads.onCreated as { addListener: { mock: { calls: unknown[][] } } })
       .addListener.mock.calls[0][0] as (item: unknown) => Promise<void>;
+    watch.reportDownloadStart(42, 'https://example.test/exfil.zip');
     await onCreated({
       id: 7,
       url: 'https://example.test/exfil.zip',

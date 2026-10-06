@@ -42,6 +42,12 @@ import {
 interface PopupState {
   detectedAgents: AgentIdentity[];
   /**
+   * Ids of agents whose tab holds the extension's debugger session, which
+   * reports the downloads started there: the only agents whose downloads a
+   * delegation can cancel.
+   */
+  downloadWatchedAgentIds: string[];
+  /**
    * ai-safety.txt lookup result for the page each agent is on, keyed by agent
    * id. Empty unless `settings.aiSafetyTxtEnabled` is on. Display-only: this
    * never influences the trust badge or any control (ADR-009).
@@ -108,6 +114,7 @@ interface PopupState {
 
 let popupState: PopupState = {
   detectedAgents: [],
+  downloadWatchedAgentIds: [],
   aiSafetyDeclarations: {},
   activeDelegation: null,
   delegationRules: [],
@@ -162,6 +169,7 @@ async function queryBackgroundStatus(): Promise<void> {
     if (response && typeof response === 'object') {
       const data = response as {
         detectedAgents?: AgentIdentity[];
+        downloadWatchedAgentIds?: string[];
         aiSafetyDeclarations?: Record<string, AiSafetyLookupResult>;
         activeDelegation?: DelegationRule | null;
         delegationRules?: DelegationRule[];
@@ -169,6 +177,7 @@ async function queryBackgroundStatus(): Promise<void> {
         recentViolations?: BoundaryAlert[];
       };
       popupState.detectedAgents = data.detectedAgents ?? [];
+      popupState.downloadWatchedAgentIds = data.downloadWatchedAgentIds ?? [];
       popupState.aiSafetyDeclarations = data.aiSafetyDeclarations ?? {};
       popupState.activeDelegation = data.activeDelegation ?? null;
       popupState.delegationRules = data.delegationRules ?? [];
@@ -329,6 +338,7 @@ async function onKillSwitchClick(): Promise<void> {
     popupState.killSwitchLastEvent =
       (resp as { event?: KillSwitchEvent } | null)?.event ?? popupState.killSwitchLastEvent;
     popupState.detectedAgents = [];
+    popupState.downloadWatchedAgentIds = [];
     popupState.activeDelegation = null;
     renderAll();
   } catch {
@@ -664,7 +674,9 @@ function renderDetectionPanel(): void {
     // ADR-008: one source of truth for what we can state about this agent.
     // External CDP/WebDriver drivers are detect-only — a rule does NOT make them
     // "Managed", because we cannot enforce it against them.
-    const presentation = presentAgent(agent, agentRule);
+    const presentation = presentAgent(agent, agentRule, {
+      downloadsWatched: popupState.downloadWatchedAgentIds.includes(agent.id),
+    });
 
     const trustBadge = document.createElement('span');
     if (!presentation.enforceable) {
@@ -1804,7 +1816,7 @@ function renderSettingsPanel(): void {
       key: 'cdpEnforcementEnabled',
       label: 'Browser-layer blocking (advanced)',
       description:
-        'Enforce your site block rules at the browser layer for delegated tabs. Shows Chrome\'s "debugging this browser" banner while a delegated tab is active; removed when the session ends.',
+        'Enforce your site block rules at the browser layer for delegated tabs, and cancel downloads started in those tabs when the delegation does not permit downloads. Shows Chrome\'s "debugging this browser" banner while a delegated tab is active; removed when the session ends.',
     },
     {
       key: 'aiSafetyTxtEnabled',

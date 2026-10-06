@@ -17,8 +17,9 @@
  *    it takes in the page. Downloads are the exception: they are cancelled by
  *    the service worker through `chrome.downloads`, which needs no input
  *    attribution, so under a delegation that blocks `download-file` a download
- *    from the host the agent was detected on is cancelled for every agent type
- *    (see `downloadsEnforced` below). (This is an
+ *    Chrome reports starting in the agent's tab, on a debugger session ABG
+ *    holds there, is cancelled for every agent type (see `downloadsEnforced`
+ *    below). (This is an
  *    attribution limit, not a debugger-slot limit: on current multi-client
  *    Chrome our `chrome.debugger.attach` typically SUCCEEDS alongside an
  *    external driver, which is why the tab-wide blocked-domain egress layer
@@ -65,8 +66,7 @@ const PAGE_REALM_METHODS: ReadonlySet<DetectionMethod> = new Set<DetectionMethod
 
 /**
  * Minimal shape this module needs — accepts a full AgentIdentity or a stub.
- * `originUrl` is the page the agent was detected on; without it (or when it
- * has no host name) no download is tied to the agent.
+ * `originUrl` is the page the agent was detected on.
  */
 export type AgentLike = Pick<AgentIdentity, 'type' | 'detectionMethods'> &
   Partial<Pick<AgentIdentity, 'originUrl'>>;
@@ -142,6 +142,16 @@ export interface AgentPresentation {
 /** Pill text for an external driver whose downloads the delegation cancels. */
 export const EXTERNAL_DRIVER_DOWNLOADS_ENFORCED_LABEL = 'Partly enforced';
 
+/** What the background worker reports about the agent's tab. */
+export interface AgentTabState {
+  /**
+   * The agent's tab holds ABG's debugger session (Browser-layer blocking),
+   * which reports the downloads started there. Without it no download is tied
+   * to the agent's tab, so none is cancelled.
+   */
+  downloadsWatched?: boolean;
+}
+
 /** The hostname of `url`, or '' when it is missing, unparseable or host-less. */
 function hostOf(url: string | undefined): string {
   if (!url) return '';
@@ -153,15 +163,21 @@ function hostOf(url: string | undefined): string {
 }
 
 /**
- * Whether downloads tied to this agent are cancelled under `rule`: a rule is
- * set, the agent's origin has a host name for a download to match, and the
- * rule blocks `download-file`. The ONE predicate that picks both the pill and
- * the caveat variant, so they can never disagree.
+ * Whether downloads started in this agent's tab are cancelled under `rule`: a
+ * rule is set, it blocks `download-file`, and the agent's tab holds ABG's
+ * debugger session, the only thing that ties a download to a tab. A download
+ * that merely shares the agent page's host is never cancelled. The ONE
+ * predicate that picks both the pill and the caveat variant, so they can never
+ * disagree.
  */
-export function downloadsEnforced(agent: AgentLike, rule: DelegationRule | null): boolean {
+export function downloadsEnforced(
+  _agent: AgentLike,
+  rule: DelegationRule | null,
+  tab: AgentTabState = {},
+): boolean {
   return (
     rule !== null &&
-    hostOf(agent.originUrl) !== '' &&
+    tab.downloadsWatched === true &&
     rule.scope.actionRestrictions.some((r) => r.capability === 'download-file' && r.action === 'block')
   );
 }
@@ -171,13 +187,18 @@ export function downloadsEnforced(agent: AgentLike, rule: DelegationRule | null)
  * that showed "Managed" whenever a rule existed — which asserted governance ABG
  * cannot deliver against an external driver.
  */
-export function presentAgent(agent: AgentLike, rule: DelegationRule | null): AgentPresentation {
+export function presentAgent(
+  agent: AgentLike,
+  rule: DelegationRule | null,
+  tab: AgentTabState = {},
+): AgentPresentation {
   if (isExternalDriver(agent)) {
-    const enforcedDownloads = downloadsEnforced(agent, rule);
+    const enforcedDownloads = downloadsEnforced(agent, rule, tab);
+    const host = hostOf(agent.originUrl);
     let ruleCaveat: string | null = null;
     if (rule) {
       ruleCaveat = enforcedDownloads
-        ? `Page-level policy does not stop this agent: it drives the browser directly. Under this delegation, downloads from ${hostOf(agent.originUrl)} are cancelled, yours included. The kill switch (close tab) is the hard stop.`
+        ? `Page-level policy does not stop this agent: it drives the browser directly. Under this delegation, downloads started in this agent's tab${host ? ` (detected on ${host})` : ''} are cancelled, yours included. The kill switch (close tab) is the hard stop.`
         : 'Page-level policy does not stop this agent: it drives the browser directly. The kill switch (close tab) is the hard stop.';
     }
     return {

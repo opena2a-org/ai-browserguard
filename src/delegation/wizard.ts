@@ -265,11 +265,11 @@ export function finalizeWizard(state: WizardState): DelegationRule | null {
 const PRESET_DESCRIPTIONS: Record<DelegationPreset, { title: string; description: string }> = {
   readOnly: {
     title: 'Read-Only',
-    description: 'Blocks clicking, typing, and form submission for in-page automation (best-effort), and cancels downloads from the host an agent is detected on, yours included. External CDP agents (Playwright, Computer Use, etc.) bypass the rest; use the kill switch to close the tab.',
+    description: 'Blocks clicking, typing, and form submission for in-page automation (best-effort). Cancels downloads started in an agent\'s tab, yours included, when Browser-layer blocking is on and this delegation blocks a site. External CDP agents (Playwright, Computer Use, etc.) bypass the rest; use the kill switch to close the tab.',
   },
   limited: {
     title: 'Limited Access',
-    description: 'Agent can interact with specific sites you choose, with a time limit. Downloads from the host an agent is detected on are cancelled, yours included.',
+    description: 'Agent can interact with specific sites you choose, with a time limit. Downloads started in an agent\'s tab are cancelled, yours included, when Browser-layer blocking is on and this delegation blocks a site.',
   },
   fullAccess: {
     title: 'Full Access',
