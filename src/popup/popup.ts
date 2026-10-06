@@ -32,10 +32,10 @@ import type { GuardPause, PauseLogEntry } from '../delegation/pause';
 import { pausableHostOf } from '../delegation/pause';
 import { triggerJsonDownload } from './download';
 import {
-  CAPABILITY_BLOCK_HINT,
   CAPABILITY_BLOCK_DETAIL_LABEL,
   CAPABILITY_BLOCK_DETAIL_BODY,
   blockingRuleIdOf,
+  capabilityRecoveryFor,
   isCapabilityBlock,
 } from './block-actions';
 
@@ -469,31 +469,40 @@ function calloutAlerts(now: number): BoundaryAlert[] {
   return fresh.slice(-RECENT_BLOCK_MAX_ITEMS).reverse();
 }
 
+/** The card name of a detected agent, or null once it is no longer detected. */
+function detectedAgentName(agentId: string): string | null {
+  const agent = popupState.detectedAgents.find((a) => a.id === agentId);
+  return agent ? formatAgentType(agent.type) : null;
+}
+
 /**
- * The one recovery block for capability (download) blocks: the visible hint
+ * The one recovery block for capability (download) blocks: the visible hint,
+ * naming the control for the rule that blocks downloads in the agent's tab,
  * and a native disclosure holding the other controls. Never sets `title`: a
  * tooltip is unreachable by keyboard and not reliably announced, and this text
  * is what the user needs to get the file back.
  */
-function renderCapabilityRecovery(): HTMLElement {
+function renderCapabilityRecovery(alerts: readonly BoundaryAlert[]): HTMLElement {
+  const recovery = capabilityRecoveryFor(alerts, popupState.delegationRules, detectedAgentName);
   const block = document.createElement('div');
   block.className = 'capability-recovery';
 
   const hint = document.createElement('p');
   hint.className = 'capability-recovery-hint';
-  hint.textContent = CAPABILITY_BLOCK_HINT;
-
-  const more = document.createElement('details');
-  more.className = 'capability-recovery-more';
-  const summary = document.createElement('summary');
-  summary.textContent = CAPABILITY_BLOCK_DETAIL_LABEL;
-  const body = document.createElement('p');
-  body.textContent = CAPABILITY_BLOCK_DETAIL_BODY;
-  more.appendChild(summary);
-  more.appendChild(body);
-
+  hint.textContent = recovery.hint;
   block.appendChild(hint);
-  block.appendChild(more);
+
+  if (recovery.showOtherControls) {
+    const more = document.createElement('details');
+    more.className = 'capability-recovery-more';
+    const summary = document.createElement('summary');
+    summary.textContent = CAPABILITY_BLOCK_DETAIL_LABEL;
+    const body = document.createElement('p');
+    body.textContent = CAPABILITY_BLOCK_DETAIL_BODY;
+    more.appendChild(summary);
+    more.appendChild(body);
+    block.appendChild(more);
+  }
   return block;
 }
 
@@ -564,7 +573,7 @@ function renderRecentBlockCallout(): void {
   }
 
   if (recent.some(isCapabilityBlock)) {
-    list.appendChild(renderCapabilityRecovery());
+    list.appendChild(renderCapabilityRecovery(recent));
   }
 }
 
@@ -1248,7 +1257,7 @@ function renderViolationsPanel(): void {
     !calloutAlerts(Date.now()).some(isCapabilityBlock) &&
     popupState.recentViolations.some(isCapabilityBlock)
   ) {
-    container.appendChild(renderCapabilityRecovery());
+    container.appendChild(renderCapabilityRecovery(popupState.recentViolations));
   }
 
   for (const alert of popupState.recentViolations.slice(-10).reverse()) {

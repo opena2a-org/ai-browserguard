@@ -244,6 +244,9 @@ function status(opts: {
   };
 }
 
+const CARD_GRANT_HINT =
+  "Cancelled: the grant on Anthropic Computer Use's card (Read-Only) blocks downloads started in its tab, yours included, and a site Allow cannot change that. To get the file, close that agent's tab, then retry. Revoke on its card also frees them, and leaves that agent with no delegation.";
+
 function recoveryBlocks(root: ParentNode): Element[] {
   return Array.from(root.querySelectorAll('.capability-recovery'));
 }
@@ -269,7 +272,9 @@ describe('popup render: download-block recovery (#69)', () => {
     expect(recoveryBlocks(callout)).toHaveLength(1);
 
     const block = recoveryBlocks(callout)[0];
-    expect(block.querySelector('.capability-recovery-hint')?.textContent).toBe(CAPABILITY_BLOCK_HINT);
+    // The blocking rule is the grant on a1's card, so the hint names Revoke.
+    const hint = block.querySelector('.capability-recovery-hint')?.textContent ?? '';
+    expect(hint).toBe(CARD_GRANT_HINT);
     const details = block.querySelector('details.capability-recovery-more') as HTMLDetailsElement;
     expect(details.open).toBe(false);
     expect(details.querySelector('summary')?.textContent).toBe(CAPABILITY_BLOCK_DETAIL_LABEL);
@@ -285,7 +290,7 @@ describe('popup render: download-block recovery (#69)', () => {
 
     // Recovery text is never carried in a tooltip.
     for (const title of titlesOnPage()) {
-      expect(title).not.toContain(CAPABILITY_BLOCK_HINT.slice(0, 40));
+      expect(title).not.toContain(hint.slice(0, 40));
       expect(title).not.toContain(CAPABILITY_BLOCK_DETAIL_BODY.slice(0, 40));
     }
   });
@@ -434,5 +439,77 @@ describe('popup render: ending the session delegation without Full Access', () =
     const otherAgentsCard = agentRule('readOnly', 'a-gone');
     await renderPopup({ ...status({ rule: session }), delegationRules: [session, revokedCard, otherAgentsCard] });
     expect(shadowNote()).toBeNull();
+  });
+});
+
+describe('popup render: the download-block hint follows the rule that blocks downloads in the agent\'s tab (#69)', () => {
+  const DOWNLOAD = 'https://shop.example.com/files/invoice-123.pdf';
+
+  function hintText(): string {
+    const blocks = recoveryBlocks(document);
+    expect(blocks).toHaveLength(1);
+    return blocks[0].querySelector('.capability-recovery-hint')?.textContent ?? '';
+  }
+
+  function otherControls(): Element | null {
+    return recoveryBlocks(document)[0].querySelector('details.capability-recovery-more');
+  }
+
+  it("names Revoke for a grant on the agent's card, and says to retry once Revoke is pressed", async () => {
+    const card = agentRule('readOnly', 'a1');
+    await renderPopup({
+      ...status({ rule: card, violations: [blockAlert('v1', 'download-file', DOWNLOAD, 2_000)] }),
+      activeDelegation: null,
+    });
+    expect(hintText()).toBe(CARD_GRANT_HINT);
+    expect(otherControls()?.querySelector('p')?.textContent).toBe(CAPABILITY_BLOCK_DETAIL_BODY);
+
+    const revoke = Array.from(document.querySelectorAll<HTMLButtonElement>('.agent-grant-row button'))
+      .find((b) => b.textContent === 'Revoke');
+    revoke!.click();
+
+    expect(hintText()).toBe(
+      "Cancelled under a delegation that no longer blocks downloads in Anthropic Computer Use's tab. Retry the download.",
+    );
+    expect(otherControls()).toBeNull();
+  });
+
+  it('names End for a session delegation, and says to retry once End is pressed', async () => {
+    const session = agentRule('readOnly', null);
+    await renderPopup(status({ rule: session, violations: [blockAlert('v1', 'download-file', DOWNLOAD, 2_000)] }));
+    expect(hintText()).toBe(
+      "Cancelled: the session delegation (Read-Only) blocks downloads started in Anthropic Computer Use's tab, yours included, and a site Allow cannot change that. To get the file, close that agent's tab, then retry. End on the session delegation also frees them, and leaves every agent without a grant of its own with no delegation.",
+    );
+
+    document.querySelector<HTMLButtonElement>('#delegation-end-btn')!.click();
+
+    expect(hintText()).toBe(
+      "Cancelled under a delegation that no longer blocks downloads in Anthropic Computer Use's tab. Retry the download.",
+    );
+  });
+
+  it('names Revoke together with End when both the card grant and the session delegation block downloads', async () => {
+    const session = agentRule('readOnly', null);
+    const card = agentRule('readOnly', 'a1');
+    await renderPopup({
+      ...status({ rule: session, violations: [blockAlert('v1', 'download-file', DOWNLOAD, 2_000)] }),
+      delegationRules: [session, card],
+    });
+    expect(hintText()).toMatch(
+      /Revoke on its card frees them only together with End on the session delegation \(Read-Only\), which blocks them too\.$/,
+    );
+
+    // End alone leaves the card grant in force, so the hint still names Revoke.
+    document.querySelector<HTMLButtonElement>('#delegation-end-btn')!.click();
+    expect(hintText()).toBe(CARD_GRANT_HINT);
+  });
+
+  it('shows the general hint once the agent behind the block is no longer detected', async () => {
+    const session = agentRule('readOnly', null);
+    const fromGoneAgent = blockAlert('v1', 'download-file', DOWNLOAD, 2_000) as { violation: Record<string, unknown> };
+    fromGoneAgent.violation.agentId = 'a-gone';
+    await renderPopup(status({ rule: session, violations: [fromGoneAgent] }));
+    expect(hintText()).toBe(CAPABILITY_BLOCK_HINT);
+    expect(otherControls()?.querySelector('p')?.textContent).toBe(CAPABILITY_BLOCK_DETAIL_BODY);
   });
 });
