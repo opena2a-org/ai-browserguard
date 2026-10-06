@@ -1,0 +1,7 @@
+# HackMyAgent scan exclusions, read by `npx hackmyagent secure .`.
+# Each rule leaves one check out for one file and says why. No whole-path
+# rules and no repo-wide `!CHECK` rules; src/__tests__/hmaignore.test.ts
+# enforces this.
+
+scripts/smoke-export.mjs:NEMO-009 # Playwright page.$eval(selector, fn) queries the DOM; it is not eval()
+scripts/smoke-scope.mjs:NEMO-009 # Puppeteer page.$eval(selector, fn) queries the DOM; it is not eval()
