@@ -12,7 +12,7 @@ import type { BoundaryAlert } from '../alerts/boundary';
 import { FULL_ACCESS_MAX_MINUTES } from '../delegation/rules';
 
 export const CAPABILITY_BLOCK_HINT =
-  "Cancelled: the delegation blocks downloads from the site where the agent was detected, yours included, and a site Allow cannot change that. To get the file, close that agent's tab, then retry.";
+  "Cancelled: the delegation blocks downloads started in the agent's tab, yours included, and a site Allow cannot change that. To get the file, close that agent's tab, then retry.";
 
 /** Summary of the disclosure that holds the other recovery controls. */
 export const CAPABILITY_BLOCK_DETAIL_LABEL = 'Other controls';

@@ -11,6 +11,7 @@
  */
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { chromeMock } from '../__tests__/setup';
+import { installDownloadTabWatch, withBlockedSite } from '../__tests__/download-tab-watch';
 import { createRuleFromPreset } from '../delegation/rules';
 import type { DelegationRule } from '../types/delegation';
 
@@ -50,6 +51,18 @@ async function ruleFor(handle: Listener, tabId: number, url: string): Promise<De
 
 async function delegateReadOnly(handle: Listener): Promise<DelegationRule> {
   const rule = createRuleFromPreset('readOnly');
+  expect(await send(handle, 'DELEGATION_UPDATE', rule, POPUP_SENDER)).toEqual({ success: true });
+  return rule;
+}
+
+/**
+ * Browser-layer blocking on and a Read-Only delegation that blocks one site,
+ * so a guarded agent tab holds the debugger session that reports a download
+ * starting in it. Only such a download is cancelled.
+ */
+async function delegateReadOnlyWithTabWatch(handle: Listener): Promise<DelegationRule> {
+  await send(handle, 'SETTINGS_UPDATE', { cdpEnforcementEnabled: true }, POPUP_SENDER);
+  const rule = withBlockedSite(createRuleFromPreset('readOnly'));
   expect(await send(handle, 'DELEGATION_UPDATE', rule, POPUP_SENDER)).toEqual({ success: true });
   return rule;
 }
@@ -102,6 +115,7 @@ beforeEach(() => {
 afterEach(() => {
   vi.restoreAllMocks();
   chromeMock.tabs.query.mockImplementation(() => Promise.resolve([]) as never);
+  (chromeMock as unknown as Record<string, unknown>).debugger = undefined;
 });
 
 describe('pause on this site (#71)', () => {
@@ -168,21 +182,25 @@ describe('pause on this site (#71)', () => {
     const downloads = chromeMock.downloads as unknown as Record<string, unknown>;
     downloads.onCreated = { addListener: vi.fn(), removeListener: vi.fn() };
     downloads.cancel = vi.fn((_id: number, cb?: () => void) => { cb?.(); });
+    const watch = installDownloadTabWatch();
     const handle = await importWorker();
 
     expect(await send(handle, 'DETECTION_RESULT', agentDetectedOn(PAUSED_URL), contentSender(42, PAUSED_URL))).toEqual({ success: true });
-    await delegateReadOnly(handle);
+    await delegateReadOnlyWithTabWatch(handle);
     await send(handle, 'GUARD_PAUSE', { scope: 'site', host: 'dashboard.example.test', minutes: 15 }, POPUP_SENDER);
 
     // The tab moves to another site; the page there has sent nothing yet.
     const onUpdated = chromeMock.tabs.onUpdated.addListener.mock.calls.at(-1)?.[0] as
       ((tabId: number, changeInfo: { url?: string }, tab: unknown) => void) | undefined;
     onUpdated?.(42, { url: OTHER_URL }, { id: 42, url: OTHER_URL });
+    for (let i = 0; i < 8; i++) await flush();
 
-    // A download from the agent's host in that tab is judged by the read-only
-    // rule of the site the tab is now on, not by the pause it left behind.
+    // A download the agent starts in that tab, from the paused site's host, is
+    // judged by the read-only rule of the site the tab is now on, not by the
+    // pause it left behind.
     const onCreated = (downloads.onCreated as { addListener: { mock: { calls: unknown[][] } } })
       .addListener.mock.calls[0][0] as (item: unknown) => Promise<void>;
+    watch.reportDownloadStart(42, 'https://dashboard.example.test/export.csv');
     await onCreated({ id: 8, url: 'https://dashboard.example.test/export.csv', referrer: OTHER_URL, filename: '/tmp/export.csv' });
     for (let i = 0; i < 8; i++) await flush();
     expect(downloads.cancel).toHaveBeenCalledWith(8, expect.any(Function));
@@ -192,10 +210,11 @@ describe('pause on this site (#71)', () => {
     const downloads = chromeMock.downloads as unknown as Record<string, unknown>;
     downloads.onCreated = { addListener: vi.fn(), removeListener: vi.fn() };
     downloads.cancel = vi.fn((_id: number, cb?: () => void) => { cb?.(); });
+    const watch = installDownloadTabWatch();
     const handle = await importWorker();
 
     expect(await send(handle, 'DETECTION_RESULT', agentDetectedOn(PAUSED_URL), contentSender(42, PAUSED_URL))).toEqual({ success: true });
-    await delegateReadOnly(handle);
+    await delegateReadOnlyWithTabWatch(handle);
     await send(handle, 'GUARD_PAUSE', { scope: 'site', host: 'dashboard.example.test', minutes: 15 }, POPUP_SENDER);
 
     // The tab left the paused site and its new page reported in.
@@ -211,6 +230,7 @@ describe('pause on this site (#71)', () => {
 
     const onCreated = (downloads.onCreated as { addListener: { mock: { calls: unknown[][] } } })
       .addListener.mock.calls[0][0] as (item: unknown) => Promise<void>;
+    watch.reportDownloadStart(99, 'https://dashboard.example.test/export.csv');
     await onCreated({ id: 9, url: 'https://dashboard.example.test/export.csv', referrer: OTHER_URL, filename: '/tmp/export.csv' });
     for (let i = 0; i < 8; i++) await flush();
     expect(downloads.cancel).toHaveBeenCalledWith(9, expect.any(Function));
@@ -235,10 +255,11 @@ describe('pause on this site (#71)', () => {
     const downloads = chromeMock.downloads as unknown as Record<string, unknown>;
     downloads.onCreated = { addListener: vi.fn(), removeListener: vi.fn() };
     downloads.cancel = vi.fn((_id: number, cb?: () => void) => { cb?.(); });
+    const watch = installDownloadTabWatch();
     const handle = await importWorker();
 
     expect(await send(handle, 'DETECTION_RESULT', agentDetectedOn(PAUSED_URL), contentSender(42, PAUSED_URL))).toEqual({ success: true });
-    await delegateReadOnly(handle);
+    await delegateReadOnlyWithTabWatch(handle);
     await send(handle, 'GUARD_PAUSE', { scope: 'site', host: 'dashboard.example.test', minutes: 15 }, POPUP_SENDER);
 
     // The tab left the paused site and its new page reported in.
@@ -250,9 +271,11 @@ describe('pause on this site (#71)', () => {
     const onUpdated = chromeMock.tabs.onUpdated.addListener.mock.calls.at(-1)?.[0] as
       (tabId: number, changeInfo: { url?: string }, tab: unknown) => void;
     onUpdated(42, { url: 'about:blank' }, { id: 42, url: 'about:blank' });
+    for (let i = 0; i < 8; i++) await flush();
 
     const onCreated = (downloads.onCreated as { addListener: { mock: { calls: unknown[][] } } })
       .addListener.mock.calls[0][0] as (item: unknown) => Promise<void>;
+    watch.reportDownloadStart(42, 'https://dashboard.example.test/export.csv');
     await onCreated({ id: 10, url: 'https://dashboard.example.test/export.csv', referrer: OTHER_URL, filename: '/tmp/export.csv' });
     for (let i = 0; i < 8; i++) await flush();
     expect(downloads.cancel).toHaveBeenCalledWith(10, expect.any(Function));
@@ -262,10 +285,11 @@ describe('pause on this site (#71)', () => {
     const downloads = chromeMock.downloads as unknown as Record<string, unknown>;
     downloads.onCreated = { addListener: vi.fn(), removeListener: vi.fn() };
     downloads.cancel = vi.fn((_id: number, cb?: () => void) => { cb?.(); });
+    const watch = installDownloadTabWatch();
     const handle = await importWorker();
 
     expect(await send(handle, 'DETECTION_RESULT', agentDetectedOn(PAUSED_URL), contentSender(42, PAUSED_URL))).toEqual({ success: true });
-    await delegateReadOnly(handle);
+    await delegateReadOnlyWithTabWatch(handle);
     await send(handle, 'GUARD_PAUSE', { scope: 'site', host: 'dashboard.example.test', minutes: 15 }, POPUP_SENDER);
 
     expect(await ruleFor(handle, 42, OTHER_URL)).toEqual(expect.objectContaining({ preset: 'readOnly' }));
@@ -279,6 +303,7 @@ describe('pause on this site (#71)', () => {
 
     const onCreated = (downloads.onCreated as { addListener: { mock: { calls: unknown[][] } } })
       .addListener.mock.calls[0][0] as (item: unknown) => Promise<void>;
+    watch.reportDownloadStart(42, 'https://dashboard.example.test/export.csv');
     await onCreated({ id: 11, url: 'https://dashboard.example.test/export.csv', referrer: OTHER_URL, filename: '/tmp/export.csv' });
     for (let i = 0; i < 8; i++) await flush();
     expect(downloads.cancel).toHaveBeenCalledWith(11, expect.any(Function));
@@ -288,14 +313,18 @@ describe('pause on this site (#71)', () => {
     const downloads = chromeMock.downloads as unknown as Record<string, unknown>;
     downloads.onCreated = { addListener: vi.fn(), removeListener: vi.fn() };
     downloads.cancel = vi.fn((_id: number, cb?: () => void) => { cb?.(); });
+    const watch = installDownloadTabWatch();
     const handle = await importWorker();
 
     expect(await send(handle, 'DETECTION_RESULT', agentDetectedOn(PAUSED_URL), contentSender(42, PAUSED_URL))).toEqual({ success: true });
-    await delegateReadOnly(handle);
+    await delegateReadOnlyWithTabWatch(handle);
     await send(handle, 'GUARD_PAUSE', { scope: 'site', host: 'dashboard.example.test', minutes: 15 }, POPUP_SENDER);
 
+    // The pause ends the tab's debugger session, so the agent's download is
+    // not tied to its tab and the rule there is none: it goes through.
     const onCreated = (downloads.onCreated as { addListener: { mock: { calls: unknown[][] } } })
       .addListener.mock.calls[0][0] as (item: unknown) => Promise<void>;
+    watch.reportDownloadStart(42, 'https://dashboard.example.test/export.csv');
     await onCreated({ id: 7, url: 'https://dashboard.example.test/export.csv', referrer: PAUSED_URL, filename: '/tmp/export.csv' });
     for (let i = 0; i < 8; i++) await flush();
     expect(downloads.cancel).not.toHaveBeenCalled();
@@ -303,7 +332,7 @@ describe('pause on this site (#71)', () => {
     const sessions = (await send(handle, 'SESSION_QUERY', {}, POPUP_SENDER) as { sessions: { events: { type: string; description: string }[] }[] }).sessions;
     const descriptions = sessions[0].events.map((e) => e.description);
     expect(descriptions).toContain('You paused the guard on dashboard.example.test for 15 minutes');
-    expect(descriptions).toContain("Download from the agent's host: export.csv (guard paused)");
+    expect(descriptions).toContain("Download from the agent's host (dashboard.example.test), tab unknown: export.csv (guard paused)");
   });
 });
 

@@ -16,6 +16,12 @@
  * interceptor. Detection plus the ISOLATED-world gates remain the defense for
  * that population.
  *
+ * The same session also enables the CDP `Page` domain so Chrome reports a
+ * download starting in the tab (`Page.downloadWillBegin`). That report is the
+ * only tab-level link between a download and an agent this extension can get
+ * with its permissions (a chrome.downloads item carries no tab id), and it is
+ * what download cancellation rests on (see download-monitor.ts).
+ *
  * Must run in the background service worker — `chrome.debugger` is not
  * available in content scripts.
  */
@@ -23,6 +29,12 @@
 import type { DelegationRule } from '../types/delegation';
 import { isTimeBoundExpired } from '../delegation/rules';
 import { matchUrlPattern } from '../url/match-pattern';
+import {
+  matchTabDownloadStart,
+  TAB_DOWNLOAD_START_WINDOW_MS,
+  type DownloadInfo,
+  type TabDownloadStart,
+} from './download-monitor';
 
 /** Remote debugging protocol version requested on attach. */
 export const CDP_PROTOCOL_VERSION = '1.3';
@@ -150,6 +162,12 @@ const attachedTabs = new Set<number>();
 const attaching = new Set<number>();
 /** Serializes reconcileTabs runs so overlapping calls can't interleave. */
 let reconcileChain: Promise<void> = Promise.resolve();
+/** Attached tabs whose session has the Page domain enabled (download starts reported). */
+const downloadWatchedTabs = new Set<number>();
+/** Download starts reported on our sessions and not yet matched, keyed by guid. */
+const downloadStarts = new Map<string, TabDownloadStart>();
+/** Download items waiting for their start to be reported. */
+const downloadStartWaiters = new Set<() => void>();
 
 /** Whether `chrome.debugger` (with the methods we need) is available. */
 function debuggerAvailable(): boolean {
@@ -176,11 +194,16 @@ export function initCdpEnforcement(opts: { getRuleForTab: GetRuleForTab; onBlock
 }
 
 /**
- * Handle a CDP instrumentation event. Only `Fetch.requestPaused` is acted on.
+ * Handle a CDP instrumentation event. `Fetch.requestPaused` and
+ * `Page.downloadWillBegin` are acted on; every other event is ignored.
  * Every paused request is answered exactly once (continue or fail) — leaving
  * one unanswered would hang the page, so unknown/stale events are continued.
  */
 function handleDebuggerEvent(source: chrome.debugger.Debuggee, method: string, params?: object): void {
+  if (method === 'Page.downloadWillBegin') {
+    recordDownloadStart(source.tabId, params);
+    return;
+  }
   if (method !== 'Fetch.requestPaused') return;
   const tabId = source.tabId;
   const requestId = (params as { requestId?: string } | undefined)?.requestId;
@@ -214,7 +237,81 @@ function handleDebuggerEvent(source: chrome.debugger.Debuggee, method: string, p
 function handleDebuggerDetach(source: chrome.debugger.Debuggee): void {
   if (source.tabId !== undefined) {
     attachedTabs.delete(source.tabId);
+    downloadWatchedTabs.delete(source.tabId);
   }
+}
+
+/** Drop download starts older than the matching window. */
+function pruneDownloadStarts(now: number): void {
+  for (const [guid, start] of downloadStarts) {
+    if (now - start.at > TAB_DOWNLOAD_START_WINDOW_MS) downloadStarts.delete(guid);
+  }
+}
+
+/**
+ * Keep a `Page.downloadWillBegin` reported on a session we hold, for the
+ * download item it belongs to. A report for a tab we are not attached to is
+ * dropped: only our own session on that tab says the download started there.
+ */
+function recordDownloadStart(tabId: number | undefined, params?: object): void {
+  if (tabId === undefined || !attachedTabs.has(tabId)) return;
+  const p = params as { frameId?: unknown; guid?: unknown; url?: unknown } | undefined;
+  if (typeof p?.guid !== 'string' || typeof p.url !== 'string' || !p.url) return;
+  const now = Date.now();
+  pruneDownloadStarts(now);
+  downloadStarts.set(p.guid, {
+    tabId,
+    frameId: typeof p.frameId === 'string' ? p.frameId : '',
+    guid: p.guid,
+    url: p.url,
+    at: now,
+  });
+  for (const wake of Array.from(downloadStartWaiters)) wake();
+}
+
+/**
+ * Take (consume) the reported download start that belongs to `info`, or null.
+ * Each start is matched to at most one download item.
+ */
+export function takeTabDownloadStart(
+  info: Pick<DownloadInfo, 'url' | 'finalUrl'>,
+  now: number = Date.now(),
+): TabDownloadStart | null {
+  pruneDownloadStarts(now);
+  const match = matchTabDownloadStart(downloadStarts.values(), info, now);
+  if (match) downloadStarts.delete(match.guid);
+  return match;
+}
+
+/**
+ * The download start that belongs to `info`, waiting up to
+ * {@link TAB_DOWNLOAD_START_WINDOW_MS} for it when none has been reported yet
+ * (Chrome does not order the CDP event against chrome.downloads.onCreated).
+ * Resolves null at once when no session of ours could report one.
+ */
+export function awaitTabDownloadStart(
+  info: Pick<DownloadInfo, 'url' | 'finalUrl'>,
+): Promise<TabDownloadStart | null> {
+  const found = takeTabDownloadStart(info);
+  if (found || downloadWatchedTabs.size === 0) return Promise.resolve(found);
+  return new Promise((resolve) => {
+    const finish = (start: TabDownloadStart | null) => {
+      clearTimeout(timer);
+      downloadStartWaiters.delete(check);
+      resolve(start);
+    };
+    const check = () => {
+      const start = takeTabDownloadStart(info);
+      if (start) finish(start);
+    };
+    const timer = setTimeout(() => finish(null), TAB_DOWNLOAD_START_WINDOW_MS);
+    downloadStartWaiters.add(check);
+  });
+}
+
+/** Whether an attached session on `tabId` reports the downloads started there. */
+export function isTabDownloadWatched(tabId: number): boolean {
+  return downloadWatchedTabs.has(tabId);
 }
 
 async function continueRequest(tabId: number, requestId: string): Promise<void> {
@@ -256,6 +353,12 @@ export async function attachTab(tabId: number): Promise<boolean> {
     await chrome.debugger.attach({ tabId }, CDP_PROTOCOL_VERSION);
     await chrome.debugger.sendCommand({ tabId }, 'Fetch.enable', {});
     attachedTabs.add(tabId);
+    // Download starts in this tab. Best-effort: without it the session still
+    // enforces blocked sites, and downloads here are only recorded.
+    try {
+      await chrome.debugger.sendCommand({ tabId }, 'Page.enable', {});
+      if (attachedTabs.has(tabId)) downloadWatchedTabs.add(tabId);
+    } catch { /* downloads in this tab stay record-only */ }
     return true;
   } catch {
     // attach() may have partially succeeded (e.g. Fetch.enable failed) — detach
@@ -271,6 +374,7 @@ export async function attachTab(tabId: number): Promise<boolean> {
 export async function detachTab(tabId: number): Promise<void> {
   if (!attachedTabs.has(tabId)) return;
   attachedTabs.delete(tabId);
+  downloadWatchedTabs.delete(tabId);
   if (!debuggerAvailable()) return;
   try {
     await chrome.debugger.detach({ tabId });
@@ -316,6 +420,9 @@ export function getAttachedTabs(): number[] {
 export function _resetForTest(): void {
   attachedTabs.clear();
   attaching.clear();
+  downloadWatchedTabs.clear();
+  downloadStarts.clear();
+  downloadStartWaiters.clear();
   reconcileChain = Promise.resolve();
   getRuleForTab = null;
   onBlock = null;

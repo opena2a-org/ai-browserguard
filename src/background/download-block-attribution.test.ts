@@ -8,10 +8,15 @@
  * notification (honoring the Notifications setting) and a findable entry in
  * the popup's recent list, with a plain-language why. Both assertions fail on
  * the pre-fix code.
+ *
+ * A download is cancelled only when Chrome reports it starting in the agent's
+ * tab on the extension's own debugger session, so the blocking cases arm
+ * Browser-layer blocking and report the start (see download-tab-watch.ts).
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { chromeMock, storageData } from '../__tests__/setup';
 import { createRuleFromPreset } from '../delegation/rules';
+import { installDownloadTabWatch, withBlockedSite } from '../__tests__/download-tab-watch';
 
 const POPUP_SENDER = { id: 'test-id', url: 'chrome-extension://test-id/dist/popup/index.html' };
 const CONTENT_SENDER = {
@@ -54,7 +59,14 @@ function detectionEvent() {
 
 beforeEach(() => {
   vi.resetModules();
+  (chromeMock as unknown as Record<string, unknown>).debugger = undefined;
 });
+
+/** Browser-layer blocking on, so the delegated agent tab gets a session of ours. */
+async function enableBrowserLayerBlocking(handleMessage: Listener): Promise<void> {
+  handleMessage({ type: 'SETTINGS_UPDATE', data: { cdpEnforcementEnabled: true } }, POPUP_SENDER, vi.fn());
+  for (let i = 0; i < 6; i++) await flush();
+}
 
 describe('F-A: blocked agent download is attributed, not silent', () => {
   it('shows a notification and records a recent-violations entry when a download is cancelled', async () => {
@@ -64,12 +76,14 @@ describe('F-A: blocked agent download is attributed, not silent', () => {
     const downloads = chromeMock.downloads as unknown as Record<string, unknown>;
     downloads.onCreated = { addListener: vi.fn(), removeListener: vi.fn() };
     downloads.cancel = vi.fn((_id: number, cb?: () => void) => { cb?.(); });
+    const watch = installDownloadTabWatch();
 
     chromeMock.runtime.onMessage.addListener.mockClear();
     chromeMock.notifications.create.mockClear();
     await import('./index');
     const calls = chromeMock.runtime.onMessage.addListener.mock.calls;
     const handleMessage = calls[calls.length - 1][0] as Listener;
+    await enableBrowserLayerBlocking(handleMessage);
 
     // An agent is active on tab 42...
     const detResp = vi.fn();
@@ -79,16 +93,16 @@ describe('F-A: blocked agent download is attributed, not silent', () => {
     expect(detResp).toHaveBeenCalledWith(expect.objectContaining({ success: true }));
 
     // ...under a Read-Only delegation (download-file not permitted).
-    const rule = createRuleFromPreset('readOnly');
+    const rule = withBlockedSite(createRuleFromPreset('readOnly'));
     const delResp = vi.fn();
     handleMessage({ type: 'DELEGATION_UPDATE', data: rule }, POPUP_SENDER, delResp);
-    await flush();
-    await flush();
+    for (let i = 0; i < 6; i++) await flush();
     expect(delResp).toHaveBeenCalledWith(expect.objectContaining({ success: true }));
 
-    // The agent's page triggers a download.
+    // The agent's tab starts a download.
     const onCreated = (downloads.onCreated as { addListener: { mock: { calls: unknown[][] } } })
       .addListener.mock.calls[0][0] as (item: unknown) => Promise<void>;
+    watch.reportDownloadStart(42, 'https://example.test/exfil.zip');
     await onCreated({
       id: 7,
       url: 'https://example.test/exfil.zip',
@@ -102,14 +116,14 @@ describe('F-A: blocked agent download is attributed, not silent', () => {
 
     // ...and the user can tell: an in-the-moment notification with a
     // plain-language why (pre-fix: notifications.create never called here)
-    // that names the agent's host, the delegation by its display name (not the
-    // raw preset id), and a remedy that works...
+    // that names the tab by the agent's host, the delegation by its display
+    // name (not the raw preset id), and a remedy that works...
     expect(chromeMock.notifications.create).toHaveBeenCalledWith(
       expect.any(String),
       expect.objectContaining({
         title: expect.stringContaining('Download blocked'),
         message:
-          "Cancelled a download: exfil.zip. An agent was detected on example.test, and your delegation (Read-Only) blocks downloads from there, yours included. To get it, close that agent's tab, then retry.",
+          "Cancelled a download: exfil.zip. It started in the tab where an agent was detected on example.test, and your delegation (Read-Only) blocks downloads in that tab, yours included. To get it, close that agent's tab, then retry.",
       }),
     );
     // ...with no "Allow once" button — the download cannot be resumed, and an
@@ -138,26 +152,28 @@ describe('F-A: blocked agent download is attributed, not silent', () => {
     const downloads = chromeMock.downloads as unknown as Record<string, unknown>;
     downloads.onCreated = { addListener: vi.fn(), removeListener: vi.fn() };
     downloads.cancel = vi.fn((_id: number, cb?: () => void) => { cb?.(); });
+    const watch = installDownloadTabWatch();
 
     chromeMock.runtime.onMessage.addListener.mockClear();
     chromeMock.notifications.create.mockClear();
     await import('./index');
     const calls = chromeMock.runtime.onMessage.addListener.mock.calls;
     const handleMessage = calls[calls.length - 1][0] as Listener;
+    await enableBrowserLayerBlocking(handleMessage);
 
     const detResp = vi.fn();
     handleMessage({ type: 'DETECTION_RESULT', data: detectionEvent() }, CONTENT_SENDER, detResp);
     await flush();
     await flush();
-    const rule = createRuleFromPreset('readOnly');
+    const rule = withBlockedSite(createRuleFromPreset('readOnly'));
     const delResp = vi.fn();
     handleMessage({ type: 'DELEGATION_UPDATE', data: rule }, POPUP_SENDER, delResp);
-    await flush();
-    await flush();
+    for (let i = 0; i < 6; i++) await flush();
 
     const onCreated = (downloads.onCreated as { addListener: { mock: { calls: unknown[][] } } })
       .addListener.mock.calls[0][0] as (item: unknown) => Promise<void>;
     for (const id of [11, 12, 13]) {
+      watch.reportDownloadStart(42, `https://example.test/burst-${id}.zip`);
       await onCreated({
         id,
         url: `https://example.test/burst-${id}.zip`,

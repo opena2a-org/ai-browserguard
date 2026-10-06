@@ -54,6 +54,36 @@ export interface AgentEvent {
 
   /** Reference to the delegation rule that governed this event, if any. */
   ruleId?: string;
+
+  /**
+   * How a `download` event was tied to an agent. Absent on other event types
+   * and on download events recorded before this field existed.
+   */
+  attribution?: DownloadEventAttribution;
+}
+
+/**
+ * How certain the link between a download and an agent is.
+ *
+ * - `tab`: Chrome reported the download starting in the agent's tab, on a
+ *   debugger session this extension holds there. The only level a download is
+ *   ever cancelled on.
+ * - `host`: the download's URL, final URL or referrer has the same origin as
+ *   the page where an agent was detected. The tab it started in is unknown, so
+ *   it may be the user's own download; never counted as an agent action.
+ * - `none`: nothing ties the download to an agent beyond one being detected.
+ */
+export type DownloadAttributionLevel = 'tab' | 'host' | 'none';
+
+/** The structured attribution stored on a `download` timeline event. */
+export interface DownloadEventAttribution {
+  level: DownloadAttributionLevel;
+  /** `tab` only: the tab the download started in. */
+  tabId?: number;
+  /** `tab` only: the frame the download started in. */
+  frameId?: string;
+  /** `host` only: the host (with port, when not the default) that matched. */
+  matchedHost?: string;
 }
 
 /**

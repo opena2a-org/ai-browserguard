@@ -44,6 +44,8 @@ import {
   reconcileTabs,
   detachTab,
   shouldEnforceTab,
+  awaitTabDownloadStart,
+  isTabDownloadWatched,
 } from './cdp-enforcement';
 import { lookupAgentIdentity } from '../aim/client';
 import { lookupRegistryTrust } from '../registry/client';
@@ -311,10 +313,11 @@ function initialize(): void {
 
   // Monitor downloads while an agent is registered (exfiltration / drive-by
   // vector). Downloads made while no agent is registered are ignored. While one
-  // is, every download is recorded on an agent's session, and a download whose
-  // referrer, final URL or URL host equals an agent's origin host is cancelled
-  // under a delegation that does not permit download-file, whoever started it
-  // (the user's own downloads from that host included).
+  // is, every download is recorded on an agent's session. Under a delegation
+  // that does not permit download-file, a download is cancelled only when
+  // Chrome reports it starting in that agent's tab on our own debugger session;
+  // a download that merely shares the agent page's host is recorded, not
+  // cancelled, because it may be the user's own download in another tab.
   try {
     chrome.downloads.onCreated.addListener((item) => {
       handleDownloadCreated(item).catch((err) => {
@@ -604,6 +607,11 @@ function handleMessage(
       const agents = Array.from(state.activeAgents.values());
       sendResponse({
         detectedAgents: agents,
+        // Agents whose tab holds our debugger session reporting download
+        // starts: the only tabs a download can be cancelled in.
+        downloadWatchedAgentIds: Array.from(state.activeAgents.entries())
+          .filter(([tabId]) => isTabDownloadWatched(tabId))
+          .map(([, agent]) => agent.id),
         // Re-keyed to agent id, and only for origins that still match. Empty
         // unless the feature is on. See aisafety/attribution.ts.
         aiSafetyDeclarations: collectAiSafetyDeclarations(state.activeAgents, getInMemoryDeclarations()),
@@ -1607,13 +1615,16 @@ async function handleCdpDebuggerDetection(result: DebuggerDetectionResult): Prom
 
 /**
  * Record a download made while an agent is registered and, under a blocking
- * delegation, cancel it when it is attributed to an agent with certainty.
+ * delegation, cancel it when it started in an agent's tab.
  *
- * A download has no tab id, so who started it is unknown: a download whose
- * referrer, final URL or URL host equals an agent's origin host is attributed
- * to that agent and treated as its download, including one the user started
- * from that host. Any other download is attributed to the first agent as a
- * guess, recorded as uncertain and never cancelled.
+ * A download item has no tab id. The one tab-level signal is Chrome's report
+ * of a download starting in a tab on a debugger session this extension holds
+ * there (cdp-enforcement.ts), matched to the item by URL. Only a download
+ * matched that way is treated as the agent's and may be cancelled. A download
+ * whose referrer, final URL or URL has the origin of an agent's page is
+ * recorded as a host match: it may be the user's own download in another tab of
+ * that site, so it is never cancelled and never counted as a blocked action.
+ * Any other download is recorded on the first agent's session as uncertain.
  *
  * If no agent is yet registered we run a fresh CDP check: a live debugger
  * attachment means the browser is being driven, so we register those tabs
@@ -1643,28 +1654,33 @@ async function handleDownloadCreated(item: chrome.downloads.DownloadItem): Promi
     }
   }
 
-  const activeTabs = Array.from(state.activeAgents.entries()).map(([tabId, agent]) => ({
+  const activeTabsNow = () => Array.from(state.activeAgents.entries()).map(([tabId, agent]) => ({
     tabId,
     originUrl: agent.originUrl,
   }));
 
-  if (shouldIgnoreDownload(info, activeTabs, ownId)) return;
+  if (shouldIgnoreDownload(info, activeTabsNow(), ownId)) return;
 
-  const { tabId, matchedByReferrer } = attributeDownload(info, activeTabs);
+  // The tab-level report, when one of our sessions saw this download start.
+  // Resolves at once when no session of ours could report it.
+  const tabStart = await awaitTabDownloadStart(info);
+  const activeTabs = activeTabsNow();
+  if (activeTabs.length === 0) return;
+
+  const attribution = attributeDownload(info, activeTabs, tabStart);
+  const { tabId, level } = attribution;
   const downloadUrl = info.finalUrl ?? info.url;
   const label = describeDownload(info);
   const rule = getEffectiveRuleForTab(tabId);
   // Under an owner pause the rule is none; say so on the timeline (#71).
   const pausedNote = pauseForTab(tabId) ? ' (guard paused)' : '';
 
-  // Under a delegation that does not permit download-file, cancel the download,
-  // but only when it is attributed with certainty (a referrer / final / url host
-  // equal to the agent's origin host). The fallback attribution is a guess: a
-  // download has no tabId, so with any agent active the user's own download in
-  // another tab lands on it, and cancelling on that guess destroyed the user's
-  // downloads browser-wide (#69). An uncertain download is recorded, not cancelled.
+  // Cancel only a download Chrome reported starting in the agent's tab, under a
+  // delegation that does not permit download-file. A host match is not enough:
+  // the same site open in another tab is the user's, and cancelling on it
+  // destroyed the user's downloads with no way back.
   let blocked = false;
-  if (rule && matchedByReferrer && !evaluateRule(rule, 'download-file', downloadUrl).allowed) {
+  if (rule && level === 'tab' && !evaluateRule(rule, 'download-file', downloadUrl).allowed) {
     blocked = true;
     try {
       chrome.downloads.cancel(item.id, () => {
@@ -1676,12 +1692,13 @@ async function handleDownloadCreated(item: chrome.downloads.DownloadItem): Promi
     }
   }
 
-  const uncertain = matchedByReferrer ? '' : ' (attribution uncertain)';
   const timelineLabel = blocked
-    ? `Blocked download from the agent's host: ${label}`
-    : matchedByReferrer
-      ? `Download from the agent's host: ${label}${pausedNote}`
-      : `Download while an agent was detected: ${label} (attribution uncertain)${pausedNote}`;
+    ? `Blocked download started in the agent's tab: ${label}`
+    : level === 'tab'
+      ? `Download started in the agent's tab: ${label}${pausedNote}`
+      : level === 'host'
+        ? `Download from the agent's host (${attribution.matchedHost}), tab unknown: ${label}${pausedNote}`
+        : `Download while an agent was detected: ${label} (attribution uncertain)${pausedNote}`;
   const event = createTimelineEvent(
     'download',
     downloadUrl,
@@ -1690,6 +1707,11 @@ async function handleDownloadCreated(item: chrome.downloads.DownloadItem): Promi
       attemptedAction: 'download-file',
       outcome: blocked ? 'blocked' : 'informational',
       ruleId: rule?.id,
+      attribution: level === 'tab'
+        ? { level, tabId, frameId: attribution.frameId }
+        : level === 'host'
+          ? { level, matchedHost: attribution.matchedHost }
+          : { level },
     },
   );
 
@@ -1723,19 +1745,21 @@ async function handleDownloadCreated(item: chrome.downloads.DownloadItem): Promi
       url: downloadUrl,
       targetSelector: undefined,
       blockingRuleId: rule?.id ?? 'none',
-      reason: `Delegation does not permit downloads${uncertain}`,
+      reason: 'Delegation does not permit downloads',
       userOverride: false,
     };
     // Bound what a page-controlled string can put into an OS notification.
     const shortLabel = boundForNotification(label);
-    // A cancel requires a host match, so the agent's origin host is never empty here.
+    // A tab-level cancel needs no host, so the agent's page may have none
+    // (about:blank, file://); the message then names the tab without one.
     const agentHost = boundForNotification(hostOf(state.activeAgents.get(tabId)?.originUrl) ?? '');
+    const where = agentHost ? `the tab where an agent was detected on ${agentHost}` : 'a tab where an agent was detected';
     const ruleName = rule ? (rule.label || PRESET_DISPLAY_NAMES[rule.preset]) : '';
     const alert: BoundaryAlert = {
       violation,
       severity: 'high',
       title: 'Download blocked',
-      message: `Cancelled a download: ${shortLabel}. An agent was detected on ${agentHost}, and your delegation (${ruleName}) blocks downloads from there, yours included. To get it, close that agent's tab, then retry.`,
+      message: `Cancelled a download: ${shortLabel}. It started in ${where}, and your delegation (${ruleName}) blocks downloads in that tab, yours included. To get it, close that agent's tab, then retry.`,
       allowOneTimeOverride: false,
       acknowledged: false,
     };
