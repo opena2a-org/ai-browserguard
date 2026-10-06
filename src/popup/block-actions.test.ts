@@ -182,6 +182,38 @@ describe('capabilityRecoveryFor: the hint names the control for the rule that bl
       .toMatch(/^Cancelled: the session delegation \(Read-Only\)/);
   });
 
+  it("says to retry while an owner pause covers the agent's tab, whatever rule would block downloads there", () => {
+    const card = createRuleFromPreset('readOnly', { agentId: 'a1' });
+    const session = createRuleFromPreset('readOnly', { agentId: null });
+    const paused = { everywhere: false, agentIds: ['a1'] };
+    for (const rules of [[card], [session], [session, card]]) {
+      const r = capabilityRecoveryFor([download('a1')], rules, nameOf, paused);
+      expect(r.hint).toBe(
+        "Cancelled, but the guard is now paused in Puppeteer's tab, so no delegation blocks downloads there until the pause ends. Retry the download.",
+      );
+      expect(r.showOtherControls).toBe(false);
+    }
+    // A pause covering another agent's tab changes nothing for this one.
+    expect(capabilityRecoveryFor([download('a1')], [card], nameOf, { everywhere: false, agentIds: ['a2'] }).hint)
+      .toMatch(/^Cancelled: the grant on Puppeteer's card \(Read-Only\)/);
+    // Several agents behind the blocks, each tab covered by a site pause: no
+    // single tab to name, so the general hint stays.
+    expect(capabilityRecoveryFor([download('a1'), download('a2')], [session], nameOf, { everywhere: false, agentIds: ['a1', 'a2'] }))
+      .toEqual({ hint: CAPABILITY_BLOCK_HINT, showOtherControls: true });
+  });
+
+  it('says to retry while a pause everywhere is live, also when no single detected agent is behind the blocks', () => {
+    const session = createRuleFromPreset('readOnly', { agentId: null });
+    const everywhere = { everywhere: true, agentIds: ['a1', 'a2'] };
+    for (const alerts of [[download('a1')], [download('a1'), download('a2')], [download('a-gone')]]) {
+      const r = capabilityRecoveryFor(alerts, [session], nameOf, everywhere);
+      expect(r.hint).toBe(
+        'Cancelled, but the guard is now paused everywhere, so no delegation blocks downloads until the pause ends. Retry the download.',
+      );
+      expect(r.showOtherControls).toBe(false);
+    }
+  });
+
   it('never offers Full Access as the way out, and always names a control that grants nothing', () => {
     const cases: DelegationRule[][] = [
       [createRuleFromPreset('readOnly', { agentId: 'a1' })],
