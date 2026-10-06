@@ -19,7 +19,7 @@ export const CAPABILITY_BLOCK_DETAIL_LABEL = 'Other controls';
 
 /** The other recovery controls, each with the condition under which it works. */
 export const CAPABILITY_BLOCK_DETAIL_BODY =
-  `Revoke on the agent's card frees downloads if no session delegation blocks them. Full Access permits downloads but gives the agent every capability for up to ${FULL_ACCESS_MAX_MINUTES} minutes, and a grant on the agent's card overrides a session one. The kill switch frees them but closes agent tabs and ends every delegation.`;
+  `Revoke on the agent's card frees downloads if no session delegation blocks them. End on the session delegation frees them if the agent's card holds no grant of its own. Full Access permits downloads but gives the agent every capability for up to ${FULL_ACCESS_MAX_MINUTES} minutes, and a grant on the agent's card overrides a session one. The kill switch frees them but closes agent tabs and ends every delegation.`;
 
 /** The full detail string, label and body, as one sentence group. */
 export const CAPABILITY_BLOCK_DETAIL = `${CAPABILITY_BLOCK_DETAIL_LABEL}: ${CAPABILITY_BLOCK_DETAIL_BODY}`;

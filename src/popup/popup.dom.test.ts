@@ -148,8 +148,12 @@ interface PopupStatus {
   aiSafetyDeclarations: Record<string, unknown>;
 }
 
+/** Every message the popup sent to the background in the current render test. */
+let sentMessages: Array<{ type: string; data: unknown }> = [];
+
 async function renderPopup(status: PopupStatus): Promise<void> {
   vi.resetModules();
+  sentMessages = [];
   const parsed = new DOMParser().parseFromString(POPUP_HTML, 'text/html');
   parsed.querySelectorAll('script').forEach((el) => el.remove());
   document.body.replaceChildren(...Array.from(parsed.body.childNodes).map((n) => document.importNode(n, true)));
@@ -165,7 +169,8 @@ async function renderPopup(status: PopupStatus): Promise<void> {
       lastError: undefined,
       getManifest: () => ({ version: '0.0.0-test' }),
       onMessage: { addListener() {}, removeListener() {} },
-      sendMessage: (msg: { type: string }, cb?: (r: unknown) => void) => {
+      sendMessage: (msg: { type: string; data?: unknown }, cb?: (r: unknown) => void) => {
+        sentMessages.push({ type: msg.type, data: msg.data });
         setTimeout(() => cb?.(responses[msg.type] ?? {}), 0);
       },
     },
@@ -358,5 +363,76 @@ describe('popup render: external-driver pill and caveat (#69)', () => {
     const r = pillAndCaveat();
     expect(r.pill).toBe('Monitor only');
     expect(r.caveat).toBeNull();
+  });
+});
+
+describe('popup render: ending the session delegation without Full Access', () => {
+  function sessionPanel(): HTMLElement {
+    return document.getElementById('delegation-content')!;
+  }
+
+  function endButton(): HTMLButtonElement | null {
+    return sessionPanel().querySelector<HTMLButtonElement>('#delegation-end-btn');
+  }
+
+  function shadowNote(): string | null {
+    return sessionPanel().querySelector('.delegation-shadow-note')?.textContent ?? null;
+  }
+
+  it('offers End next to Change for an active session delegation, and End turns it off without granting anything', async () => {
+    const session = agentRule('readOnly', null);
+    await renderPopup(status({ rule: session }));
+    const end = endButton();
+    expect(end?.textContent).toBe('End');
+    expect(end?.getAttribute('aria-label')).toBe('End the session delegation');
+    expect(sessionPanel().querySelector('#delegation-wizard-btn')?.textContent).toBe('Change');
+
+    end!.click();
+
+    const updates = sentMessages.filter((m) => m.type === 'DELEGATION_UPDATE');
+    expect(updates).toHaveLength(1);
+    const sent = updates[0].data as DelegationRule;
+    expect(sent.id).toBe(session.id);
+    expect(sent.agentId).toBeNull();
+    expect(sent.isActive).toBe(false);
+    // Ending changes nothing else about the rule: no capability is granted.
+    expect(sent.preset).toBe('readOnly');
+    expect(sent.scope).toEqual(session.scope);
+
+    expect(sessionPanel().textContent).toContain('No delegation active');
+    expect(endButton()).toBeNull();
+    // The agent card no longer reports the session grant.
+    expect(document.querySelector('.agent-grant-row')?.textContent).not.toContain('Session:');
+  });
+
+  it('offers no End when no session delegation is active', async () => {
+    await renderPopup(status({ rule: null }));
+    expect(endButton()).toBeNull();
+    expect(sessionPanel().textContent).toContain('No delegation active');
+  });
+
+  it("names the agents whose own card grant overrides the session delegation, where the session rule is changed", async () => {
+    const session = agentRule('readOnly', null);
+    const card = agentRule('fullAccess', 'a1');
+    await renderPopup({ ...status({ rule: session }), delegationRules: [session, card] });
+    expect(shadowNote()).toBe(
+      "A grant on an agent's card overrides the session delegation for that agent: Anthropic Computer Use.",
+    );
+  });
+
+  it('names the overriding card grant when no session delegation is active too', async () => {
+    const card = agentRule('readOnly', 'a1');
+    await renderPopup({ ...status({ rule: card }), activeDelegation: null });
+    expect(shadowNote()).toBe(
+      "A grant on an agent's card overrides the session delegation for that agent: Anthropic Computer Use.",
+    );
+  });
+
+  it('shows no override note when no detected agent holds its own grant', async () => {
+    const session = agentRule('readOnly', null);
+    const revokedCard = { ...agentRule('readOnly', 'a1'), isActive: false };
+    const otherAgentsCard = agentRule('readOnly', 'a-gone');
+    await renderPopup({ ...status({ rule: session }), delegationRules: [session, revokedCard, otherAgentsCard] });
+    expect(shadowNote()).toBeNull();
   });
 });

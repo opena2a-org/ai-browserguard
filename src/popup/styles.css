@@ -720,6 +720,19 @@ kbd {
   justify-content: space-between;
 }
 
+.delegation-actions {
+  display: flex;
+  gap: var(--spacing-xs);
+}
+
+/* Agents whose card grant takes precedence over the session delegation */
+.delegation-shadow-note {
+  margin: 6px 0 0;
+  font-size: var(--font-size-xs);
+  line-height: 1.45;
+  color: var(--text-secondary);
+}
+
 /* Pause the guard (#71) */
 .pause-row {
   display: flex;

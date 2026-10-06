@@ -17,6 +17,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { chromeMock } from '../__tests__/setup';
 import { createRuleFromPreset } from '../delegation/rules';
 import { TAB_DOWNLOAD_START_WINDOW_MS } from './download-monitor';
+import { withBlockedSite } from '../__tests__/download-tab-watch';
 import type { DelegationRule } from '../types/delegation';
 import type { AgentEvent } from '../types/events';
 
@@ -439,6 +440,48 @@ describe('a download Chrome reports starting in the agent tab is cancelled', () 
     w.onCreated({ id: 42, url: 'https://b.example.com/export.zip' });
     await drain();
     expect(cancelledIds(w)).toEqual([41]);
+  });
+
+  it('the cited recovery works: after ending the session delegation, the same download completes', async () => {
+    const session = readOnlyWithBlockedSite();
+    const w = await watchedAgentTab(session);
+    willBegin(55, 'g-61', 'https://b.example.com/export.zip');
+    w.onCreated({ id: 61, url: 'https://b.example.com/export.zip' });
+    await drain();
+    expect(cancelledIds(w)).toEqual([61]);
+
+    send(w.handleMessage, 'DELEGATION_UPDATE', { ...session, isActive: false });
+    await drain();
+    willBegin(55, 'g-62', 'https://b.example.com/export.zip');
+    w.onCreated({ id: 62, url: 'https://b.example.com/export.zip' });
+    await drain();
+    expect(cancelledIds(w)).toEqual([61]);
+    // No rule is left on the tab, so the extension's session there ends too.
+    expect(status(w).downloadWatchedAgentIds).toHaveLength(0);
+    expect(status(w).lifetimeStats.totalActionsBlocked).toBe(1);
+  });
+
+  it("ending the session delegation leaves a grant on the agent's card in force; Revoke on the card then lets the same download complete", async () => {
+    const session = readOnlyWithBlockedSite();
+    const w = await watchedAgentTab(session);
+    const [agentId] = status(w).downloadWatchedAgentIds;
+    const card = withBlockedSite(createRuleFromPreset('readOnly', { agentId }));
+    send(w.handleMessage, 'DELEGATION_UPDATE', card);
+    await drain();
+    send(w.handleMessage, 'DELEGATION_UPDATE', { ...session, isActive: false });
+    await drain();
+
+    willBegin(55, 'g-71', 'https://b.example.com/export.zip');
+    w.onCreated({ id: 71, url: 'https://b.example.com/export.zip' });
+    await drain();
+    expect(cancelledIds(w)).toEqual([71]);
+
+    send(w.handleMessage, 'DELEGATION_UPDATE', { ...card, isActive: false });
+    await drain();
+    willBegin(55, 'g-72', 'https://b.example.com/export.zip');
+    w.onCreated({ id: 72, url: 'https://b.example.com/export.zip' });
+    await drain();
+    expect(cancelledIds(w)).toEqual([71]);
   });
 
   it('a delegation that permits downloads records the reported download without cancelling it', async () => {

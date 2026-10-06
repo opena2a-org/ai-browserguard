@@ -922,7 +922,7 @@ function onQuickAllowClick(preset: 'readOnly' | 'fullAccess', agentId: string): 
 
 /**
  * Revoke a per-agent grant by deactivating it and syncing to the background.
- * A session-wide rule is revoked through the delegation panel, not here.
+ * A session-wide rule is ended with End on the delegation panel, not here.
  */
 function onRevokeAgentGrant(rule: DelegationRule): void {
   const revoked: DelegationRule = { ...rule, isActive: false };
@@ -934,6 +934,54 @@ function onRevokeAgentGrant(rule: DelegationRule): void {
   sendToBackground('DELEGATION_UPDATE', revoked).catch((err) => {
     console.error('[AI Browser Guard] Failed to sync revoke to background:', err);
   });
+}
+
+/**
+ * End the session-wide delegation from the delegation panel: deactivate it so
+ * no session rule applies, without granting anything in its place. Before this
+ * the panel offered only Change, whose presets all keep a rule in force, so
+ * the only way to let downloads through under a session rule was Full Access
+ * or the kill switch. Grants on agent cards are left as they are.
+ */
+function onEndSessionDelegation(rule: DelegationRule): void {
+  const ended: DelegationRule = { ...rule, isActive: false };
+  popupState.activeDelegation = null;
+  popupState.delegationRules = popupState.delegationRules.map((r) =>
+    r.id === rule.id ? ended : r,
+  );
+  popupState.wizardState = null;
+  const wizardContainer = document.getElementById('wizard-container');
+  if (wizardContainer) {
+    wizardContainer.classList.add('hidden');
+    wizardContainer.replaceChildren();
+  }
+  renderAll();
+
+  sendToBackground('DELEGATION_UPDATE', ended).catch((err) => {
+    console.error('[AI Browser Guard] Failed to sync ending the session delegation to background:', err);
+  });
+}
+
+/**
+ * Names of the detected agents whose own card grant is in force. A card grant
+ * takes precedence over the session delegation in its agent's tab, so
+ * changing or ending the session rule does not change what those agents may do.
+ */
+function agentsWithOwnGrant(): string[] {
+  return popupState.detectedAgents
+    .filter((agent) => getActiveRuleForAgent(agent.id)?.agentId === agent.id)
+    .map((agent) => formatAgentType(agent.type));
+}
+
+/** The note naming agents whose card grant overrides the session rule, or null. */
+function renderSessionShadowNote(): HTMLElement | null {
+  const names = agentsWithOwnGrant();
+  if (names.length === 0) return null;
+  const note = document.createElement('p');
+  note.className = 'delegation-shadow-note';
+  note.textContent =
+    `A grant on an agent's card overrides the session delegation for that agent: ${names.join(', ')}.`;
+  return note;
 }
 
 function renderDelegationPanel(): void {
@@ -1007,8 +1055,25 @@ function renderDelegationPanel(): void {
     changeBtn.textContent = 'Change';
     changeBtn.addEventListener('click', onDelegationWizardClick);
 
+    // End lifts the session rule without putting another in its place, so
+    // freeing a blocked action never requires granting Full Access.
+    const endBtn = document.createElement('button');
+    endBtn.type = 'button';
+    endBtn.id = 'delegation-end-btn';
+    endBtn.className = 'btn btn-secondary btn-sm';
+    endBtn.textContent = 'End';
+    endBtn.setAttribute('aria-label', 'End the session delegation');
+    endBtn.addEventListener('click', () => {
+      onEndSessionDelegation(rule);
+    });
+
+    const actions = document.createElement('div');
+    actions.className = 'delegation-actions';
+    actions.appendChild(endBtn);
+    actions.appendChild(changeBtn);
+
     row.appendChild(labelSpan);
-    row.appendChild(changeBtn);
+    row.appendChild(actions);
     content.appendChild(row);
   } else {
     const wizardOpen = popupState.wizardState !== null;
@@ -1030,6 +1095,10 @@ function renderDelegationPanel(): void {
     empty.appendChild(wizardBtn);
     content.appendChild(empty);
   }
+
+  // Shown where the session rule is changed or ended, active or not.
+  const shadowNote = renderSessionShadowNote();
+  if (shadowNote) content.appendChild(shadowNote);
 }
 
 /**
