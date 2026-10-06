@@ -158,6 +158,34 @@ describe('detectDebuggerAttachment', () => {
     expect(result.detail).toContain('2 target(s)');
   });
 
+  it('lists every tab with a debugger attached, browser pages included, and none when the list cannot be read', async () => {
+    mockGetTargets.mockImplementation((cb: (targets: unknown[]) => void) => {
+      cb([
+        { id: 't1', type: 'page', title: 'Tab 1', url: 'https://a.com', attached: true, tabId: 1 },
+        { id: 't2', type: 'page', title: 'Extensions', url: 'chrome://extensions/', attached: true, tabId: 5 },
+        { id: 't3', type: 'page', title: 'Tab 3', url: 'https://c.com', attached: false, tabId: 3 },
+        { id: 't4', type: 'other', title: 'DevTools', url: 'devtools://devtools/bundled/devtools_app.html', attached: true },
+      ]);
+    });
+    expect((await detectDebuggerAttachment()).attachedTabIds).toEqual([1, 5]);
+
+    mockGetTargets.mockImplementation((cb: (targets: unknown[]) => void) => {
+      cb([{ id: 't3', type: 'page', title: 'Tab 3', url: 'https://c.com', attached: false, tabId: 3 }]);
+    });
+    expect((await detectDebuggerAttachment()).attachedTabIds).toEqual([]);
+
+    vi.stubGlobal('chrome', {
+      debugger: {
+        getTargets: (cb: (targets: unknown[]) => void) => {
+          (chrome.runtime as Record<string, unknown>).lastError = { message: 'Permission denied' };
+          cb([]);
+        },
+      },
+      runtime: { lastError: null },
+    });
+    expect((await detectDebuggerAttachment()).attachedTabIds).toBeUndefined();
+  });
+
   it('handles chrome.runtime.lastError gracefully', async () => {
     vi.stubGlobal('chrome', {
       debugger: {
@@ -229,6 +257,25 @@ describe('monitorDebuggerAttachment', () => {
     // Same state, same count — should not re-report
     await vi.advanceTimersByTimeAsync(1000);
     expect(onDetection).toHaveBeenCalledTimes(1);
+
+    cleanup();
+  });
+
+  it('passes every check to onCheck, including one that finds nothing attached', async () => {
+    let attached = true;
+    mockGetTargets.mockImplementation((cb: (targets: unknown[]) => void) => {
+      cb([{ id: 't1', type: 'page', title: 'Test', url: 'https://test.com', attached, tabId: 1 }]);
+    });
+
+    const onDetection = vi.fn();
+    const onCheck = vi.fn();
+    const cleanup = monitorDebuggerAttachment(onDetection, 1000, onCheck);
+
+    await vi.advanceTimersByTimeAsync(100);
+    attached = false;
+    await vi.advanceTimersByTimeAsync(1000);
+    expect(onDetection).toHaveBeenCalledTimes(1);
+    expect(onCheck.mock.calls.map((c) => c[0].attachedTabIds)).toEqual([[1], []]);
 
     cleanup();
   });

@@ -30,7 +30,7 @@ import {
   describePauseDuration,
   PAUSE_END_REASON_LABELS,
 } from '../delegation/pause';
-import { shouldIgnoreDownload, attributeDownload, describeDownload, hostOf } from './download-monitor';
+import { shouldIgnoreDownload, attributeDownload, describeDownload, hostOf, originOf } from './download-monitor';
 import { setupNotificationHandlers, clearAllNotifications, showBoundaryNotification } from '../alerts/notification';
 import type { BoundaryAlert } from '../alerts/boundary';
 import { processBoundaryViolation, handleAllowOnce } from './handlers';
@@ -46,6 +46,7 @@ import {
   shouldEnforceTab,
   awaitTabDownloadStart,
   isTabDownloadWatched,
+  isTabAttached,
 } from './cdp-enforcement';
 import { lookupAgentIdentity } from '../aim/client';
 import { lookupRegistryTrust } from '../registry/client';
@@ -98,6 +99,18 @@ interface BackgroundState {
    * or file: URL) records nothing, so the pause keeps covering the tab there.
    */
   tabHosts: Map<number, string>;
+  /**
+   * Origin (scheme, host and port) of the page in each tab, recorded with
+   * `tabHosts`, null when that page has none (about:blank, a data: or file:
+   * URL). A download is matched to an agent's host against this, so the match
+   * follows the agent's tab instead of the page the agent was first seen on.
+   */
+  tabOrigins: Map<number, string | null>;
+  /**
+   * Agents registered from a debugger attachment on their tab, not reported by
+   * their page. Such an agent leaves when the attachment ends.
+   */
+  debuggerAgentIds: Set<string>;
 }
 
 const state: BackgroundState = {
@@ -113,6 +126,8 @@ const state: BackgroundState = {
   guardPauses: [],
   guardPauseLog: [],
   tabHosts: new Map(),
+  tabOrigins: new Map(),
+  debuggerAgentIds: new Set(),
 };
 
 /**
@@ -335,7 +350,9 @@ function initialize(): void {
     handleCdpDebuggerDetection(result).catch((err) => {
       console.error('[AI Browser Guard] CDP detection handler error:', err);
     });
-  }, 3000);
+  }, 3000, (result) => {
+    refreshDebuggerAgents(result).catch(() => { /* re-run on the next check */ });
+  });
 
   // CDP-layer network egress enforcement (ADR-007). Opt-in; attaches only under
   // an active delegation. Registering listeners here is a no-op when the
@@ -352,9 +369,78 @@ function initialize(): void {
  */
 async function runCdpDebuggerCheck(): Promise<void> {
   const result = await detectDebuggerAttachment();
+  await refreshDebuggerAgents(result);
   if (result.detected) {
     await handleCdpDebuggerDetection(result);
   }
+}
+
+/**
+ * How long a debugger-registered agent's tab must stay without an attachment,
+ * from the first check that found none to a later one that still finds none,
+ * before the agent is dropped. One check alone is not enough, so a single
+ * odd read of the target list cannot end a live session.
+ */
+const DETACHED_AGENT_GRACE_MS = 5_000;
+
+/** Agent id -> when a check first found its tab without an attachment. */
+const detachedSince = new Map<string, number>();
+
+/**
+ * Keep debugger-registered agents current with a fresh read of the target
+ * list. Each agent tab's page origin follows its page target's URL, and an
+ * agent registered from a debugger attachment is dropped, its session ended as
+ * 'agent-disconnected', once its tab has had no attachment for
+ * {@link DETACHED_AGENT_GRACE_MS}. Before this, an attachment that ended (the
+ * driver disconnected, or a DevTools window was closed) left its agent
+ * registered until the tab closed, and downloads made in the meantime were
+ * recorded against it.
+ *
+ * An agent its page reported is left alone: it was not seen through an
+ * attachment. So is an agent whose tab holds our own Browser-layer blocking
+ * session, because that session makes the tab report an attachment whether or
+ * not the driver is still connected. A failed read of the target list drops
+ * nothing.
+ */
+async function refreshDebuggerAgents(result: DebuggerDetectionResult): Promise<void> {
+  if (!result.attachedTabIds) return;
+  for (const target of result.targets) {
+    if (target.type === 'page' && target.tabId !== undefined && state.activeAgents.has(target.tabId)) {
+      trackTabHost(target.tabId, target.url);
+    }
+  }
+  const attached = new Set(result.attachedTabIds);
+  const activeIds = new Set(Array.from(state.activeAgents.values(), (a) => a.id));
+  for (const id of Array.from(detachedSince.keys())) {
+    if (!activeIds.has(id)) detachedSince.delete(id);
+  }
+  const now = Date.now();
+  let dropped = false;
+  for (const [tabId, agent] of Array.from(state.activeAgents)) {
+    if (!state.debuggerAgentIds.has(agent.id) || attached.has(tabId) || isTabAttached(tabId)) {
+      detachedSince.delete(agent.id);
+      continue;
+    }
+    const since = detachedSince.get(agent.id);
+    if (since === undefined) {
+      detachedSince.set(agent.id, now);
+      continue;
+    }
+    if (now - since < DETACHED_AGENT_GRACE_MS) continue;
+    detachedSince.delete(agent.id);
+    // A detection may have replaced the agent on this tab meanwhile.
+    if (state.activeAgents.get(tabId)?.id !== agent.id) continue;
+    await endTabAgent(tabId, 'agent-disconnected');
+    dropped = true;
+    // The tab lives on without its agent: a rule granted to that agent no
+    // longer applies to it, so push the rule that now does.
+    chrome.tabs.sendMessage(tabId, {
+      type: 'DELEGATION_UPDATE',
+      data: getEffectiveRuleForTab(tabId),
+      sentAt: new Date().toISOString(),
+    }).catch(() => { /* tab may not have a content script */ });
+  }
+  if (dropped) updateBadge();
 }
 
 async function loadPersistedState(): Promise<void> {
@@ -420,6 +506,7 @@ async function loadPersistedState(): Promise<void> {
     if (tabAlive) {
       state.activeAgents.set(tabId, entry.agent);
       state.activeSessions.set(tabId, entry.sessionId);
+      if (entry.fromDebugger === true) state.debuggerAgentIds.add(entry.agent.id);
       liveSessionIds.add(entry.sessionId);
     } else {
       deadTabIds.push(tabKey);
@@ -925,10 +1012,13 @@ function handleMessage(
   }
 }
 
-async function handleDetection(tabId: number, event: DetectionEvent): Promise<void> {
+async function handleDetection(tabId: number, event: DetectionEvent, fromDebugger = false): Promise<void> {
   if (!event.agent) return;
 
+  const replaced = state.activeAgents.get(tabId);
+  if (replaced) state.debuggerAgentIds.delete(replaced.id);
   state.activeAgents.set(tabId, event.agent);
+  if (fromDebugger) state.debuggerAgentIds.add(event.agent.id);
 
   // Create a new session. Attribute it to the rule that actually governs this
   // tab's agent (per-agent rule if one exists, else the session-wide rule).
@@ -974,7 +1064,11 @@ async function handleDetection(tabId: number, event: DetectionEvent): Promise<vo
   // the popup and there is no agent card left to grant a delegation from.
   await updateActiveAgentRegistry((reg) => ({
     ...reg,
-    [String(tabId)]: { agent: event.agent!, sessionId: updatedSession.id },
+    [String(tabId)]: {
+      agent: event.agent!,
+      sessionId: updatedSession.id,
+      ...(fromDebugger ? { fromDebugger: true } : {}),
+    },
   })).catch(() => { /* availability aid — next detection re-persists */ });
 
   // Push the tab's effective rule so a session-wide grant (or none) is enforced
@@ -1297,6 +1391,9 @@ function hostForTab(tabId: number): string | null {
  * left a paused site back under the pause.
  */
 function noteTabHost(tabId: number, url: string): boolean {
+  // The origin is recorded even when the host is not: a download is matched
+  // against the page now in the tab, and a page with no origin matches none.
+  state.tabOrigins.set(tabId, originOf(url));
   const host = hostOf(url) || null;
   if (host === null || state.tabHosts.get(tabId) === host) return false;
   state.tabHosts.set(tabId, host);
@@ -1523,6 +1620,7 @@ async function executeKillSwitch(
   // Clear active agents (memory + persisted registry — the kill switch ends
   // every session, so nothing may rehydrate on the next worker start).
   state.activeAgents.clear();
+  state.debuggerAgentIds.clear();
   await updateActiveAgentRegistry(() => ({}));
 
   // Deactivate all delegation rules
@@ -1609,7 +1707,7 @@ async function handleCdpDebuggerDetection(result: DebuggerDetectionResult): Prom
       },
     };
 
-    await handleDetection(tabId, event);
+    await handleDetection(tabId, event, true);
   }
 }
 
@@ -1628,8 +1726,11 @@ async function handleCdpDebuggerDetection(result: DebuggerDetectionResult): Prom
  *
  * If no agent is yet registered we run a fresh CDP check: a live debugger
  * attachment means the browser is being driven, so we register those tabs
- * (creating sessions) before attributing. With no active agent and no live
- * attachment, the download is ignored.
+ * (creating sessions) before attributing. An attachment seen while the
+ * built-in DevTools is open (`medium` confidence) registers nothing here: it is
+ * most likely the user inspecting the page, and registering it made the user's
+ * own downloads count as agent downloads. With no active agent and no other
+ * live attachment, the download is ignored.
  */
 async function handleDownloadCreated(item: chrome.downloads.DownloadItem): Promise<void> {
   const info = {
@@ -1649,7 +1750,7 @@ async function handleDownloadCreated(item: chrome.downloads.DownloadItem): Promi
   // any attached tabs (which also creates their sessions) before attributing.
   if (state.activeAgents.size === 0) {
     const cdp = await detectDebuggerAttachment();
-    if (cdp.detected) {
+    if (cdp.detected && (cdp.confidence === 'high' || cdp.confidence === 'confirmed')) {
       await handleCdpDebuggerDetection(cdp);
     }
   }
@@ -1657,6 +1758,7 @@ async function handleDownloadCreated(item: chrome.downloads.DownloadItem): Promi
   const activeTabsNow = () => Array.from(state.activeAgents.entries()).map(([tabId, agent]) => ({
     tabId,
     originUrl: agent.originUrl,
+    pageOrigin: state.tabOrigins.get(tabId),
   }));
 
   if (shouldIgnoreDownload(info, activeTabsNow(), ownId)) return;
@@ -1800,11 +1902,24 @@ const DOWNLOAD_NOTIFICATION_COALESCE_MS = 10_000;
 let lastDownloadBlockNotificationAt = 0;
 
 async function handleTabRemoved(tabId: number): Promise<void> {
+  state.tabHosts.delete(tabId);
+  state.tabOrigins.delete(tabId);
+  await endTabAgent(tabId, 'page-unload');
+  // Release any CDP enforcement session for the closed tab.
+  detachTab(tabId).catch(() => { /* tab already gone */ });
+  updateBadge();
+}
+
+/**
+ * End the session of the agent in a tab and drop the agent: from memory, from
+ * the persisted registry and from the ai-safety.txt declarations read for it.
+ */
+async function endTabAgent(tabId: number, endReason: 'page-unload' | 'agent-disconnected'): Promise<void> {
   const sessionId = state.activeSessions.get(tabId);
   if (sessionId) {
     // Never overwrite a session that already ended — when the kill switch
     // closes this tab, the session was just ended as 'kill-switch' and reported;
-    // stamping 'page-unload' over it (or reporting it twice) would erase the
+    // stamping another reason over it (or reporting it twice) would erase the
     // attribution the user needs to understand who closed their tabs.
     const stored = await getStorageState();
     const session = stored.sessions.find((s) => s.id === sessionId);
@@ -1812,23 +1927,21 @@ async function handleTabRemoved(tabId: number): Promise<void> {
       await updateSession(sessionId, (s) => (s.endedAt ? s : {
         ...s,
         endedAt: new Date().toISOString(),
-        endReason: 'page-unload' as const,
+        endReason,
       }));
       // Generate post-session report
       await generateAndStoreReport(sessionId);
     }
     state.activeSessions.delete(tabId);
   }
+  const agent = state.activeAgents.get(tabId);
+  if (agent) state.debuggerAgentIds.delete(agent.id);
   state.activeAgents.delete(tabId);
-  state.tabHosts.delete(tabId);
   await updateActiveAgentRegistry((reg) => {
     delete reg[String(tabId)];
     return reg;
   }).catch(() => { /* availability aid */ });
   deleteDeclaration(tabId);
-  // Release any CDP enforcement session for the closed tab.
-  detachTab(tabId).catch(() => { /* tab already gone */ });
-  updateBadge();
 }
 
 /**

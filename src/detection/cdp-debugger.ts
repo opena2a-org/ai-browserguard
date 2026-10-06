@@ -24,6 +24,14 @@ export interface DebuggerDetectionResult {
   detail: string;
   targets: DebuggerTarget[];
   inferredFramework: AgentType;
+  /**
+   * Every tab with a debugger attached, whoever holds it: an external client,
+   * the built-in DevTools, or this extension's own Browser-layer blocking
+   * session (the target list does not tell them apart), and browser pages
+   * included. Absent when the target list could not be read, so a failed query
+   * is never mistaken for "nothing attached".
+   */
+  attachedTabIds?: number[];
 }
 
 export interface DebuggerTarget {
@@ -117,6 +125,9 @@ export async function detectDebuggerAttachment(): Promise<DebuggerDetectionResul
     });
 
     const ownExtensionId = typeof chrome.runtime?.id === 'string' ? chrome.runtime.id : undefined;
+    const attachedTabIds = targets
+      .filter((t) => t.attached && t.tabId !== undefined)
+      .map((t) => t.tabId as number);
 
     // Find targets with an attached debugger, excluding browser-chrome,
     // DevTools, and this extension's own pages. Attachments on those are not
@@ -127,7 +138,7 @@ export async function detectDebuggerAttachment(): Promise<DebuggerDetectionResul
     );
 
     if (attachedTargets.length === 0) {
-      return noDetection;
+      return { ...noDetection, attachedTabIds };
     }
 
     // Map to our target format
@@ -176,6 +187,7 @@ export async function detectDebuggerAttachment(): Promise<DebuggerDetectionResul
       detail: `External debugger attached to ${attachedTargets.length} target(s). Framework: ${framework}.${devToolsNote}`,
       targets: detectedTargets,
       inferredFramework: framework,
+      attachedTabIds,
     };
   } catch (err) {
     return {
@@ -215,7 +227,9 @@ function inferFrameworkFromTargets(attachedTargets: chrome.debugger.TargetInfo[]
  * Start monitoring for debugger attachments.
  *
  * Polls chrome.debugger.getTargets() at the specified interval and
- * invokes the callback when a new attachment is detected.
+ * invokes the callback when a new attachment is detected. `onCheck`, when
+ * given, receives every result, so a caller can also notice an attachment
+ * that has ended.
  *
  * Must be called from the background service worker.
  *
@@ -224,6 +238,7 @@ function inferFrameworkFromTargets(attachedTargets: chrome.debugger.TargetInfo[]
 export function monitorDebuggerAttachment(
   callback: (result: DebuggerDetectionResult) => void,
   intervalMs = 3000,
+  onCheck?: (result: DebuggerDetectionResult) => void,
 ): () => void {
   let stopped = false;
   let lastDetectedCount = 0;
@@ -231,6 +246,7 @@ export function monitorDebuggerAttachment(
   const check = async () => {
     if (stopped) return;
     const result = await detectDebuggerAttachment();
+    onCheck?.(result);
 
     if (result.detected && result.targets.length !== lastDetectedCount) {
       lastDetectedCount = result.targets.length;
