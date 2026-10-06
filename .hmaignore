@@ -1,4 +1,7 @@
 # HackMyAgent scan exclusions, read by `npx hackmyagent secure .`.
+# The <path>:<CHECK-ID> rules below need HackMyAgent 0.33.0 or later.
+# Earlier releases read each line as a path that matches no file, so the
+# rules do nothing there.
 # Each rule leaves one check out for one file and says why. No whole-path
 # rules and no repo-wide `!CHECK` rules; src/__tests__/hmaignore.test.ts
 # enforces this.
