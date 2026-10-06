@@ -17,6 +17,7 @@ import {
   describePauseDuration,
   MAX_PAUSE_LOG_ENTRIES,
   PAUSE_END_REASON_LABELS,
+  pauseEndReasonLabel,
 } from './pause';
 import type { GuardPause } from './pause';
 
@@ -180,17 +181,36 @@ describe('isPauseLogEntry (stored shape)', () => {
     }
   });
 
-  it('rejects an end reason the history has no label for', () => {
-    expect(isPauseLogEntry({ ...ended, endReason: 'x' })).toBe(false);
-    expect(isPauseLogEntry({ ...ended, endReason: 'toString' })).toBe(false);
+  it('keeps an end reason the history has no label for, which a later version may have written', () => {
+    expect(isPauseLogEntry({ ...ended, endReason: 'x' })).toBe(true);
+    expect(isPauseLogEntry({ ...ended, endReason: 'toString' })).toBe(true);
+  });
+
+  it('rejects an end reason that is not text', () => {
+    expect(isPauseLogEntry({ ...ended, endReason: '' })).toBe(false);
     expect(isPauseLogEntry({ ...ended, endReason: 7 })).toBe(false);
     expect(isPauseLogEntry(ended)).toBe(false);
+  });
+
+  it('rejects an entry whose end time and end reason disagree', () => {
+    expect(isPauseLogEntry({ ...ended, endReason: null })).toBe(false);
+    expect(isPauseLogEntry({ ...ended, endedAt: null, endReason: 'expired' })).toBe(false);
   });
 
   it('rejects a damaged pause or end time', () => {
     expect(isPauseLogEntry({ ...ended, endReason: 'expired', endedAt: 7 })).toBe(false);
     expect(isPauseLogEntry({ ...ended, endReason: 'expired', scope: 'tab' })).toBe(false);
     expect(isPauseLogEntry(null)).toBe(false);
+  });
+});
+
+describe('pauseEndReasonLabel', () => {
+  it('describes every end reason this version writes, and any other one neutrally', () => {
+    for (const [reason, label] of Object.entries(PAUSE_END_REASON_LABELS)) {
+      expect(pauseEndReasonLabel(reason)).toBe(label);
+    }
+    expect(pauseEndReasonLabel('x')).toBe('ended');
+    expect(pauseEndReasonLabel('toString')).toBe('ended');
   });
 });
 

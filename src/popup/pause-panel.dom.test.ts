@@ -34,6 +34,10 @@ function render(overrides: Partial<PausePanelInput> = {}) {
   return { container, actions };
 }
 
+function historyRows(container: HTMLElement): string[] {
+  return Array.from(container.querySelectorAll('.pause-history li')).map((li) => li.textContent ?? '');
+}
+
 function buttonByText(container: HTMLElement, text: string): HTMLButtonElement {
   const button = Array.from(container.querySelectorAll('button')).find((b) => b.textContent === text);
   if (!button) throw new Error(`no button "${text}"`);
@@ -123,7 +127,7 @@ describe('pause panel (#71)', () => {
     expect(items[1]).toMatch(/^dashboard\.example\.com · .+ to .+ · ended on time$/);
   });
 
-  it('a stored entry with an unknown end reason is not listed, so no row reads "undefined"', async () => {
+  it('lists a stored entry with an end reason this version has no label for as ended, never as "undefined"', async () => {
     const at = new Date(NOW).toISOString();
     await chrome.storage.local.set({
       guardPauseLog: [
@@ -135,8 +139,9 @@ describe('pause panel (#71)', () => {
     const { container } = render({ log });
     const items = Array.from(container.querySelectorAll('.pause-history li')).map((li) => li.textContent);
     expect(items.join('\n')).not.toContain('undefined');
-    expect(items).toHaveLength(1);
-    expect(items[0]).toMatch(/^Everywhere · .+ to .+ · resumed by you$/);
+    expect(items).toHaveLength(2);
+    expect(items[0]).toMatch(/^Everywhere · .+ to .+ · ended$/);
+    expect(items[1]).toMatch(/^Everywhere · .+ to .+ · resumed by you$/);
   });
 
   it('dates a history row from another day, and keeps today\'s rows to the time (#78)', () => {
@@ -182,6 +187,73 @@ describe('pause panel (#71)', () => {
     const date = new Date(live.startedAt).toLocaleDateString([], { month: 'short', day: 'numeric' });
     expect(item).toContain(date);
     expect(item).toMatch(/ to now · still paused$/);
+  });
+
+  it('dates a row from the same day of the previous month', () => {
+    const lastMonth: PauseLogEntry = {
+      ...pause({ scope: 'all', host: null, minutes: 15 }, 'p1'),
+      startedAt: '2026-09-05T12:00:00.000Z',
+      expiresAt: '2026-09-05T12:15:00.000Z',
+      endedAt: '2026-09-05T12:15:00.000Z',
+      endReason: 'expired',
+    };
+    expect(new Date(lastMonth.startedAt).getDate()).toBe(new Date(NOW).getDate());
+    const item = historyRows(render({ log: [lastMonth] }).container)[0];
+    expect(item).toContain(new Date(lastMonth.startedAt).toLocaleDateString([], { month: 'short', day: 'numeric' }));
+  });
+
+  it('compares days in local time: 02:00 UTC is the evening before in Los Angeles', () => {
+    const tz = process.env.TZ;
+    process.env.TZ = 'America/Los_Angeles';
+    try {
+      const evening: PauseLogEntry = {
+        ...pause({ scope: 'all', host: null, minutes: 15 }, 'p1'),
+        startedAt: '2026-10-05T02:00:00.000Z',
+        expiresAt: '2026-10-05T02:15:00.000Z',
+        endedAt: '2026-10-05T02:15:00.000Z',
+        endReason: 'expired',
+      };
+      const item = historyRows(render({ log: [evening] }).container)[0];
+      expect(new Date(evening.startedAt).getDate()).toBe(4);
+      expect(item).toContain(new Date(evening.startedAt).toLocaleDateString([], { month: 'short', day: 'numeric' }));
+    } finally {
+      if (tz === undefined) delete process.env.TZ;
+      else process.env.TZ = tz;
+    }
+  });
+
+  it('shows an unreadable start time as "?"', () => {
+    const damaged: PauseLogEntry = {
+      ...pause({ scope: 'all', host: null, minutes: 15 }, 'p1'),
+      startedAt: 'not a date',
+      endedAt: '2026-10-05T12:15:00.000Z',
+      endReason: 'expired',
+    };
+    const item = historyRows(render({ log: [damaged] }).container)[0];
+    expect(item).not.toContain('Invalid');
+    expect(item).toMatch(/^Everywhere · \? to .+ · ended on time$/);
+  });
+
+  it('adds the year to a row from another year only', () => {
+    const fullDate = (iso: string) => new Date(iso).toLocaleDateString([], { year: 'numeric', month: 'short', day: 'numeric' });
+    const yesterday: PauseLogEntry = {
+      ...pause({ scope: 'all', host: null, minutes: 60 }, 'p1'),
+      startedAt: '2026-10-04T09:10:00.000Z',
+      expiresAt: '2026-10-04T10:10:00.000Z',
+      endedAt: '2026-10-04T10:10:00.000Z',
+      endReason: 'expired',
+    };
+    const lastYear: PauseLogEntry = {
+      ...yesterday,
+      id: 'p2',
+      startedAt: '2025-10-04T09:10:00.000Z',
+      expiresAt: '2025-10-04T10:10:00.000Z',
+      endedAt: '2025-10-04T10:10:00.000Z',
+    };
+    const [recent, old] = historyRows(render({ log: [yesterday, lastYear] }).container);
+    expect(old).toContain(fullDate(lastYear.startedAt));
+    expect(old).toContain(fullDate(lastYear.endedAt as string));
+    expect(recent).not.toContain('2026');
   });
 
   it('writes a hostile host as text, never as markup', () => {

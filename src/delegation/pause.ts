@@ -57,7 +57,11 @@ export type PauseEndReason = 'expired' | 'resumed' | 'replaced' | 'kill-switch';
 export interface PauseLogEntry extends GuardPause {
   /** ISO 8601 timestamp when the pause ended; null while it is live. */
   endedAt: string | null;
-  endReason: PauseEndReason | null;
+  /**
+   * How the pause ended; null while it is live. One of PauseEndReason when this
+   * version wrote it; a stored entry may carry a reason a later version added.
+   */
+  endReason: string | null;
 }
 
 export type CreatePauseResult =
@@ -222,16 +226,16 @@ export function isGuardPause(value: unknown): value is GuardPause {
 }
 
 /**
- * Shape-check a stored history entry. The end reason must be one the history
- * has a label for, so a damaged record is dropped instead of being listed with
- * no description of how the pause ended.
+ * Shape-check a stored history entry. A live entry has neither an end time nor
+ * an end reason, and an ended one has both. An end reason this version has no
+ * label for is kept: a later version may have written it, and the loaded
+ * history is written back to storage, so dropping it here would delete it.
  */
 export function isPauseLogEntry(value: unknown): value is PauseLogEntry {
   if (!isGuardPause(value)) return false;
   const { endedAt, endReason } = value as unknown as Record<string, unknown>;
-  if (!(endedAt === null || typeof endedAt === 'string')) return false;
-  return endReason === null
-    || (typeof endReason === 'string' && Object.prototype.hasOwnProperty.call(PAUSE_END_REASON_LABELS, endReason));
+  if (endedAt === null) return endReason === null;
+  return typeof endedAt === 'string' && typeof endReason === 'string' && endReason !== '';
 }
 
 /**
@@ -268,3 +272,10 @@ export const PAUSE_END_REASON_LABELS: Record<PauseEndReason, string> = {
   replaced: 'replaced by a new pause',
   'kill-switch': 'ended by the kill switch',
 };
+
+/** The history label for an end reason; "ended" for one this version does not know. */
+export function pauseEndReasonLabel(reason: string): string {
+  return Object.prototype.hasOwnProperty.call(PAUSE_END_REASON_LABELS, reason)
+    ? PAUSE_END_REASON_LABELS[reason as PauseEndReason]
+    : 'ended';
+}
