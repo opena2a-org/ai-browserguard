@@ -18,6 +18,7 @@ All notable changes to AI Browser Guard are documented here.
 
 ### Changed
 - The download notification, the session log labels, the popup's recovery hint, the delegation preset descriptions and the external-agent card now say that a cancellation is tied to the agent's tab. The external-agent card shows "Partly enforced" only while the agent's tab holds the Browser-layer blocking session. Download events in the session log carry a structured `attribution` field (`tab`, `host` or `none`).
+- **A download from an agent's site that was not seen starting in the agent's tab is left to finish, and you are told (#69).** Under a delegation that does not permit downloads, such a download now shows a "Download not stopped" notification naming the file and the site, unless notifications are turned off; a burst shows one notification per 10 seconds. It is not listed under Recently blocked or counted as a blocked action. It is not paused for you to keep or discard either: in Chrome 145, a paused download from a short-lived link without range support was lost when the server closed the connection during the wait, and a blob: download finished while reported paused (`node scripts/measure-download-hold.mjs` repeats the measurement).
 
 ## 0.7.0 - 2026-08-03
 
