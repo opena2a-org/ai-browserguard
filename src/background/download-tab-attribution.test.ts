@@ -101,6 +101,7 @@ function status(w: Worker) {
     recentViolations: Array<{ title: string }>;
     lifetimeStats: { totalActionsBlocked: number };
     downloadWatchedAgentIds: string[];
+    detectedAgents: Array<{ id: string; confidence: string }>;
   };
 }
 
@@ -347,20 +348,35 @@ describe('a download Chrome reports starting in the agent tab is cancelled', () 
     onEvent._fire({ tabId }, 'Page.downloadWillBegin', { frameId: `frame-${tabId}`, guid, url, suggestedFilename: 'x' });
   }
 
+  /** The target list the worker reads; tests that open DevTools replace it. */
+  let targets: unknown[];
+
+  /**
+   * The built-in DevTools front end as Chrome 145 lists it to an extension:
+   * an unattached page with no tab id. The page it inspects reports an
+   * attachment, exactly as it would under an external client.
+   */
+  const DEVTOOLS_FRONT_END = {
+    id: 'dt', type: 'page', title: 'DevTools', attached: false,
+    url: 'devtools://devtools/bundled/devtools_app.html?remoteBase=https://chrome-devtools-frontend.appspot.com/',
+  };
+
   /** A CDP agent first seen on about:blank in tab 55, our session attached to that tab. */
-  async function watchedAgentTab(rule: DelegationRule): Promise<Worker> {
+  async function watchedAgentTab(
+    rule: DelegationRule,
+    initialTargets: unknown[] = [{ id: 'p1', type: 'page', title: 'A', url: 'about:blank', attached: true, tabId: 55 }],
+  ): Promise<Worker> {
     vi.useFakeTimers();
     onEvent = eventMock();
     sendCommand = vi.fn(() => Promise.resolve({}));
+    targets = initialTargets;
     (chromeMock as unknown as Record<string, unknown>).debugger = {
       attach: vi.fn(() => Promise.resolve()),
       detach: vi.fn(() => Promise.resolve()),
       sendCommand,
       onEvent,
       onDetach: eventMock(),
-      getTargets: (cb: (t: unknown[]) => void) => cb([
-        { id: 'p1', type: 'page', title: 'A', url: 'about:blank', attached: true, tabId: 55 },
-      ]),
+      getTargets: (cb: (t: unknown[]) => void) => cb(targets),
     };
     onRemoved = eventMock();
     const tabs = chromeMock.tabs as unknown as Record<string, unknown>;
@@ -494,5 +510,58 @@ describe('a download Chrome reports starting in the agent tab is cancelled', () 
     const e = (await downloadEvents()).find((ev) => ev.url === 'https://b.example.com/export.zip');
     expect(e?.attribution?.level).toBe('tab');
     expect(e?.outcome).toBe('informational');
+  });
+
+  // Measured on Chrome 145: with DevTools open on the user's own tab, that tab
+  // was registered as an agent, our session attached to it, and the user's
+  // download there was cancelled as started in the agent's tab.
+  it("with DevTools open on the user's tab, a download Chrome reports starting there is recorded as a host match, not cancelled", async () => {
+    const w = await watchedAgentTab(readOnlyWithBlockedSite(), [
+      { id: 'p1', type: 'page', title: 'Reports', url: 'https://b.example.com/app', attached: true, tabId: 55 },
+      DEVTOOLS_FRONT_END,
+    ]);
+    // The inspected page is listed as an agent, and our session is on its tab.
+    expect(status(w).detectedAgents.map((a) => a.confidence)).toEqual(['medium']);
+    expect(sendCommand).toHaveBeenCalledWith({ tabId: 55 }, 'Page.enable', {});
+    expect(status(w).downloadWatchedAgentIds).toEqual([]);
+
+    willBegin(55, 'g-61', 'https://b.example.com/export.zip');
+    w.onCreated({ id: 61, url: 'https://b.example.com/export.zip', referrer: 'https://b.example.com/app', filename: '/d/export.zip' });
+    await drain();
+
+    expect(w.cancel).not.toHaveBeenCalled();
+    const e = (await downloadEvents()).find((ev) => ev.url === 'https://b.example.com/export.zip');
+    expect(e?.outcome).toBe('informational');
+    expect(e?.attribution).toEqual({ level: 'host', matchedHost: 'b.example.com' });
+    const st = status(w);
+    expect(st.lifetimeStats.totalActionsBlocked).toBe(0);
+    expect(st.recentViolations).toEqual([]);
+  });
+
+  it('a driver registered before DevTools opens in another tab is still cancelled; the inspected tab is not', async () => {
+    const w = await watchedAgentTab(readOnlyWithBlockedSite());
+    expect(status(w).detectedAgents.map((a) => a.confidence)).toEqual(['high']);
+
+    targets = [
+      { id: 'p1', type: 'page', title: 'A', url: 'about:blank', attached: true, tabId: 55 },
+      { id: 'p2', type: 'page', title: 'Mine', url: 'https://c.example.org/home', attached: true, tabId: 77 },
+      DEVTOOLS_FRONT_END,
+    ];
+    await vi.advanceTimersByTimeAsync(3_000);
+    await drain();
+    expect(sendCommand).toHaveBeenCalledWith({ tabId: 77 }, 'Page.enable', {});
+    expect(status(w).downloadWatchedAgentIds).toHaveLength(1);
+
+    willBegin(55, 'g-71', 'https://b.example.com/agent.zip');
+    w.onCreated({ id: 71, url: 'https://b.example.com/agent.zip' });
+    await drain();
+    willBegin(77, 'g-72', 'https://c.example.org/mine.pdf');
+    w.onCreated({ id: 72, url: 'https://c.example.org/mine.pdf', referrer: 'https://c.example.org/home' });
+    await drain();
+
+    expect(cancelledIds(w)).toEqual([71]);
+    const events = await downloadEvents();
+    expect(events.find((e) => e.url === 'https://c.example.org/mine.pdf')?.attribution)
+      .toEqual({ level: 'host', matchedHost: 'c.example.org' });
   });
 });

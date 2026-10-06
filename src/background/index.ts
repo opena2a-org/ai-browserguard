@@ -696,9 +696,10 @@ function handleMessage(
       sendResponse({
         detectedAgents: agents,
         // Agents whose tab holds our debugger session reporting download
-        // starts: the only tabs a download can be cancelled in.
+        // starts: the only tabs a download can be cancelled in. An attachment
+        // seen while DevTools was open is not one of them.
         downloadWatchedAgentIds: Array.from(state.activeAgents.entries())
-          .filter(([tabId]) => isTabDownloadWatched(tabId))
+          .filter(([tabId]) => tabDownloadsCancellable(tabId))
           .map(([, agent]) => agent.id),
         // Agents whose tab a live owner pause covers, by the page now in it:
         // no rule applies there, so a download it blocked can be retried.
@@ -1348,6 +1349,25 @@ function getEffectiveRuleForTab(tabId: number): DelegationRule | null {
   return selectEffectiveRule(state.delegationRules, agentId);
 }
 
+/**
+ * Whether `agent` was registered only from a debugger attachment seen while the
+ * built-in DevTools was open (`medium` confidence). Measured on Chrome 145, an
+ * open DevTools window makes the page it inspects report an attachment, so the
+ * periodic check registers that tab as an agent and, under a delegation with a
+ * blocked site, Browser-layer blocking attaches its session there. That tab is
+ * most likely the user's own: a download started in it is never treated as
+ * started in an agent's tab, so it is not cancelled.
+ */
+function isDevToolsOnlyAgent(agent: AgentIdentity): boolean {
+  return state.debuggerAgentIds.has(agent.id) && agent.confidence === 'medium';
+}
+
+/** Whether a download started in `tabId` can be cancelled as started in an agent's tab. */
+function tabDownloadsCancellable(tabId: number): boolean {
+  const agent = state.activeAgents.get(tabId);
+  return agent !== undefined && !isDevToolsOnlyAgent(agent) && isTabDownloadWatched(tabId);
+}
+
 /** The session-wide rule currently active, if any (for the popup panel). */
 function getActiveSessionRule(): DelegationRule | null {
   return selectEffectiveRule(state.delegationRules, null);
@@ -1742,7 +1762,9 @@ async function handleCdpDebuggerDetection(result: DebuggerDetectionResult): Prom
  * built-in DevTools is open (`medium` confidence) registers nothing here: it is
  * most likely the user inspecting the page, and registering it made the user's
  * own downloads count as agent downloads. With no active agent and no other
- * live attachment, the download is ignored.
+ * live attachment, the download is ignored. Such an attachment the periodic
+ * check did register gives no tab-level attribution: a download Chrome reports
+ * starting in its tab is at most a host match (see isDevToolsOnlyAgent).
  */
 async function handleDownloadCreated(item: chrome.downloads.DownloadItem): Promise<void> {
   const info = {
@@ -1771,6 +1793,7 @@ async function handleDownloadCreated(item: chrome.downloads.DownloadItem): Promi
     tabId,
     originUrl: agent.originUrl,
     pageOrigin: state.tabOrigins.get(tabId),
+    devToolsOnly: isDevToolsOnlyAgent(agent),
   }));
 
   if (shouldIgnoreDownload(info, activeTabsNow(), ownId)) return;

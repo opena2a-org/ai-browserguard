@@ -20,6 +20,7 @@ npm test                 # unit + lock-in suites (incl. no-emoji + download)
 npm run smoke:export     # real-extension: popup chrome + export download
 npm run smoke:arming     # real-popup wizard -> Read-Only rule -> block + toast
 npm run smoke:downloads  # real-extension: user downloads beside a CDP agent
+npm run smoke:devtools   # real-extension: user download in a tab with DevTools open
 ```
 
 `npm run smoke:downloads` loads the built extension with a session delegation
@@ -31,6 +32,17 @@ counted as blocked actions. It also asserts that a download the client starts
 in its own tab completes with Browser-layer blocking off, and with it on is
 cancelled, recorded as started in the agent's tab and counted once. It opens a
 browser window and needs no OS focus. It must report 0 failed.
+
+`npm run smoke:devtools` loads the built extension with a session delegation
+set to Read-Only, Browser-layer blocking on, and DevTools open on every tab
+(`--auto-open-devtools-for-tabs`, the same front end F12 opens). No automation
+client touches a page. It first records what an open DevTools window looks
+like to the extension: the inspected page reports `attached: true` in
+`chrome.debugger.getTargets` and a `devtools://` front end is listed, and the
+tab is registered from that attachment at `medium` confidence. It then asserts
+that the user's download in that tab completes, is recorded as a host match
+and is not counted as a blocked action. It opens a browser window and needs
+no OS focus. It must report 0 failed.
 
 `npm run smoke:arming` closes manual step 3 below: it opens the REAL toolbar
 popup (`chrome.action.openPopup`), walks the Configure wizard to activate a

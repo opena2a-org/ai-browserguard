@@ -117,6 +117,14 @@ describe('attributeDownload', () => {
     const start: TabDownloadStart = { tabId: 99, frameId: 'F1', guid: 'g1', url: 'https://files.example.com/a.txt', at: 0 };
     expect(attributeDownload(info(), agents, start).level).toBe('none');
   });
+
+  it('a download start in the tab of an attachment seen while DevTools was open is at most a host match', () => {
+    const start: TabDownloadStart = { tabId: 8, frameId: 'F1', guid: 'g1', url: 'https://files.example.com/a.txt', at: 0 };
+    const inspected: ActiveAgentTab[] = [{ tabId: 8, originUrl: 'https://files.example.com/app', devToolsOnly: true }];
+    expect(attributeDownload(info(), inspected, start)).toEqual({ tabId: 8, level: 'host', matchedHost: 'files.example.com' });
+    const elsewhere: ActiveAgentTab[] = [{ tabId: 8, originUrl: 'https://other.example.org/', devToolsOnly: true }];
+    expect(attributeDownload(info(), elsewhere, start)).toEqual({ tabId: 8, level: 'none' });
+  });
 });
 
 describe('originOf', () => {
