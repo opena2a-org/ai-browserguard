@@ -18,7 +18,12 @@
  * Asserts, per render:
  *   - no horizontal overflow: document scrollWidth is exactly 360
  *   - exactly one .capability-recovery block when a download block exists, none otherwise
- *   - no title attribute carries any part of the recovery hint or detail
+ *   - the hint names Revoke on the agent's card together with End on the session
+ *     delegation, since both rules in these scenarios block downloads
+ *   - no title attribute carries any part of the recovery hint (general or as
+ *     rendered) or detail
+ *   - with a session delegation active, End and Change sit on one row inside
+ *     the popup width
  *   - the disclosure summary is reachable by Tab (before Revoke when the block
  *     is in the callout) and Enter opens it
  *   - the trust pill renders on one line (height <= 20 px)
@@ -74,6 +79,8 @@ function fragments(text, size = 24) {
   return out;
 }
 const RECOVERY_FRAGMENTS = [...fragments(HINT), ...fragments(DETAIL_BODY)];
+const TAILORED_REVOKE_AND_END =
+  'Revoke on its card frees them only together with End on the session delegation (Read-Only), which blocks them too.';
 
 const MIME = {
   '.html': 'text/html',
@@ -292,6 +299,11 @@ try {
           caveatText: caveat ? caveat.textContent : null,
           caveatAfterGrant: caveat ? !!caveat.previousElementSibling?.classList.contains('agent-grant-row') : null,
           hasRevoke: [...card.querySelectorAll('button')].some((b) => b.textContent === 'Revoke'),
+          hintText: document.querySelector('.capability-recovery-hint')?.textContent ?? null,
+          delegationButtons: [...document.querySelectorAll('#delegation-content button')].map((b) => {
+            const r = b.getBoundingClientRect();
+            return { text: b.textContent, top: Math.round(r.top), right: r.right, height: r.height };
+          }),
         };
       });
 
@@ -301,8 +313,29 @@ try {
         `${label}: ${hasDownloadBlock ? 'exactly one' : 'no'} recovery block (found ${m.recoveryCount})`,
         m.recoveryCount === (hasDownloadBlock ? 1 : 0),
       );
-      const leaking = m.titles.filter((t) => RECOVERY_FRAGMENTS.some((f) => t.includes(f)));
+      if (hasDownloadBlock) {
+        check(
+          `${label}: the hint names Revoke on the card together with End`,
+          m.hintText?.endsWith(TAILORED_REVOKE_AND_END) === true,
+          JSON.stringify(m.hintText),
+        );
+      }
+      const shownFragments = [...RECOVERY_FRAGMENTS, ...fragments(m.hintText ?? '')];
+      const leaking = m.titles.filter((t) => shownFragments.some((f) => t.includes(f)));
       check(`${label}: no title carries recovery text`, leaking.length === 0, JSON.stringify(leaking));
+
+      if (state.activeDelegation) {
+        const end = m.delegationButtons.find((b) => b.text === 'End');
+        const change = m.delegationButtons.find((b) => b.text === 'Change');
+        check(`${label}: End and Change are offered for the session delegation`, !!end && !!change, JSON.stringify(m.delegationButtons));
+        if (end && change) {
+          check(
+            `${label}: End and Change sit on one row inside the popup width`,
+            end.top === change.top && end.right <= POPUP_WIDTH && change.right <= POPUP_WIDTH,
+            JSON.stringify(m.delegationButtons),
+          );
+        }
+      }
       check(`${label}: pill renders on one line (${m.pillHeight} px)`, m.pillHeight !== null && m.pillHeight <= 20);
 
       const hasRule = scenario !== 'norule';
