@@ -17,6 +17,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { chromeMock } from '../__tests__/setup';
 import { createRuleFromPreset } from '../delegation/rules';
 import { TAB_DOWNLOAD_START_WINDOW_MS } from './download-monitor';
+import { TAB_DOWNLOAD_START_GRACE_MS } from './cdp-enforcement';
 import { withBlockedSite } from '../__tests__/download-tab-watch';
 import type { DelegationRule } from '../types/delegation';
 import type { AgentEvent } from '../types/events';
@@ -424,6 +425,25 @@ describe('a download Chrome reports starting in the agent tab is cancelled', () 
         message: "Cancelled a download: export.zip. It started in a tab where an agent was detected, and your delegation (Read-Only) blocks downloads in that tab, yours included. To get it, close that agent's tab, then retry.",
       }),
     );
+  });
+
+  // #91: a download no session reports used to wait out the whole matching
+  // window, so its timeline entry and notice came about 5 s late.
+  it("records the user's download from another tab of the agent's site, with its notice, without waiting out the window", async () => {
+    const w = await watchedAgentTab(readOnlyWithBlockedSite(), [
+      { id: 'p1', type: 'page', title: 'App', url: 'https://b.example.com/app', attached: true, tabId: 55 },
+    ]);
+    expect(status(w).downloadWatchedAgentIds).toHaveLength(1);
+
+    w.onCreated({ id: 81, url: 'https://b.example.com/mine.pdf', referrer: 'https://b.example.com/home', filename: '/d/mine.pdf' });
+    await vi.advanceTimersByTimeAsync(TAB_DOWNLOAD_START_GRACE_MS + 10);
+
+    const e = (await downloadEvents()).find((ev) => ev.url === 'https://b.example.com/mine.pdf');
+    expect(e?.attribution).toEqual({ level: 'host', matchedHost: 'b.example.com' });
+    expect(e?.outcome).toBe('informational');
+    const titles = chromeMock.notifications.create.mock.calls.map((c: unknown[]) => (c[1] as { title?: string }).title);
+    expect(titles).toContain('AI Browser Guard - Download not stopped');
+    expect(w.cancel).not.toHaveBeenCalled();
   });
 
   it('matches a start Chrome reports after the download item', async () => {
