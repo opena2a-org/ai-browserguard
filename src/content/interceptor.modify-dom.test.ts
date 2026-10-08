@@ -40,19 +40,55 @@ function asAgent<T>(fn: () => T): T {
   return UtilityScript();
 }
 
-/** Let queued MessagePort deliveries flush. */
-function flush(): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, 0));
+/**
+ * Waiters for updates posted to the interceptor, in post order. MessagePort
+ * delivery is FIFO, so the Nth message the interceptor handles settles the Nth
+ * waiter.
+ */
+const handledUpdates: Array<() => void> = [];
+
+/**
+ * Post an update and resolve only once the interceptor has HANDLED it. A
+ * `setTimeout(0)` wait is not enough: on a loaded runner the timer can fire
+ * before the port delivers, so the next write races the rule the test just set.
+ */
+function postToInterceptor(message: Record<string, unknown>): Promise<void> {
+  return new Promise((resolve) => {
+    handledUpdates.push(resolve);
+    toInterceptor.postMessage(message);
+  });
 }
 
-async function setRule(rule: TestRule | null): Promise<void> {
-  toInterceptor.postMessage({ type: MSG_RULE_UPDATE, rule });
-  await flush();
+function setRule(rule: TestRule | null): Promise<void> {
+  return postToInterceptor({ type: MSG_RULE_UPDATE, rule });
 }
 
-async function setKillSwitch(active: boolean): Promise<void> {
-  toInterceptor.postMessage({ type: MSG_KILL_SWITCH, active });
-  await flush();
+function setKillSwitch(active: boolean): Promise<void> {
+  return postToInterceptor({ type: MSG_KILL_SWITCH, active });
+}
+
+/**
+ * Run `post` the way a loaded CI runner does: from inside a MessagePort
+ * callback (vitest resumes test code from its worker RPC port), followed by a
+ * stall longer than the 1 ms timer clamp. A `setTimeout(0)` wait started there
+ * fires before the port delivers the update.
+ */
+async function fromStalledPortCallback(post: () => Promise<void>): Promise<void> {
+  const resume = new MessageChannel();
+  try {
+    await new Promise<void>((resolve, reject) => {
+      resume.port2.onmessage = () => {
+        const posted = post();
+        const until = Date.now() + 5;
+        while (Date.now() < until) { /* busy runner */ }
+        posted.then(resolve, reject);
+      };
+      resume.port1.postMessage(null);
+    });
+  } finally {
+    resume.port1.close();
+    resume.port2.close();
+  }
 }
 
 function blockingRule(): TestRule {
@@ -90,7 +126,20 @@ beforeAll(async () => {
       ports: [channel.port2],
     }),
   );
-  await flush();
+
+  // The bootstrap listener ran synchronously and installed the interceptor's
+  // handler on port2. Wrap it so each update settles its waiter only after the
+  // interceptor has applied it.
+  const interceptorPort = channel.port2;
+  const handle = interceptorPort.onmessage;
+  if (typeof handle !== 'function') throw new Error('interceptor did not capture the bridge port');
+  interceptorPort.onmessage = function (this: MessagePort, e: MessageEvent) {
+    try {
+      handle.call(this, e);
+    } finally {
+      handledUpdates.shift()?.();
+    }
+  };
 });
 
 describe('isModifyDomGuardArmed (pure)', () => {
@@ -237,5 +286,16 @@ describe('modify-dom enforcement (DOM)', () => {
     expect(el.querySelector('#ks-user')).not.toBeNull();
 
     await setKillSwitch(false); // restore for any later tests
+  });
+
+  it('applies a rule update before the test writes, even on a stalled runner', async () => {
+    await setRule(null);
+    await fromStalledPortCallback(() => setRule(blockingRule()));
+    const el = document.createElement('div');
+    document.body.appendChild(el);
+
+    asAgent(() => { el.innerHTML = '<span id="stalled">s</span>'; });
+
+    expect(el.querySelector('#stalled')).toBeNull();
   });
 });
