@@ -1799,7 +1799,8 @@ async function handleDownloadCreated(item: chrome.downloads.DownloadItem): Promi
   if (shouldIgnoreDownload(info, activeTabsNow(), ownId)) return;
 
   // The tab-level report, when one of our sessions saw this download start.
-  // Resolves at once when no session of ours could report it.
+  // Resolves at once when no session of ours could report it, and shortly
+  // after each of our sessions has answered when none did.
   const tabStart = await awaitTabDownloadStart(info);
   const activeTabs = activeTabsNow();
   if (activeTabs.length === 0) return;

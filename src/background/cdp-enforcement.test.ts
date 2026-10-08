@@ -13,6 +13,7 @@ import {
   getAttachedTabs,
   _resetForTest,
   CDP_PROTOCOL_VERSION,
+  TAB_DOWNLOAD_START_GRACE_MS,
   takeTabDownloadStart,
   awaitTabDownloadStart,
   isTabDownloadWatched,
@@ -386,6 +387,69 @@ describe('download starts reported on our sessions (Page.downloadWillBegin)', ()
     const pending = awaitTabDownloadStart(item);
     vi.advanceTimersByTime(TAB_DOWNLOAD_START_WINDOW_MS);
     await expect(pending).resolves.toBeNull();
+  });
+
+  // #91: a download from a tab without our session is never reported, and
+  // waiting out the whole window delayed its timeline entry and notice by 5 s.
+  it('a download item no session reports resolves once every watched session has answered, long before the window ends', async () => {
+    vi.useFakeTimers();
+    await attachTab(42);
+    await attachTab(43);
+    let result: unknown = 'pending';
+    void awaitTabDownloadStart(item).then((s) => { result = s; });
+    await vi.advanceTimersByTimeAsync(TAB_DOWNLOAD_START_GRACE_MS);
+    expect(result).toBeNull();
+    expect(sendCommand).toHaveBeenCalledWith({ tabId: 42 }, 'Page.getNavigationHistory', {});
+    expect(sendCommand).toHaveBeenCalledWith({ tabId: 43 }, 'Page.getNavigationHistory', {});
+  });
+
+  it('a start a watched session reports before it answers is matched', async () => {
+    vi.useFakeTimers();
+    await attachTab(42);
+    let answer = () => {};
+    sendCommand.mockImplementation((_t: unknown, method: string) =>
+      method === 'Page.getNavigationHistory' ? new Promise((r) => { answer = () => r({}); }) : Promise.resolve({}));
+    let result: unknown = 'pending';
+    void awaitTabDownloadStart(item).then((s) => { result = s; });
+    await vi.advanceTimersByTimeAsync(TAB_DOWNLOAD_START_GRACE_MS * 4);
+    expect(result).toBe('pending');
+    willBegin(42, 'g-before-answer');
+    answer();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(result).toEqual(expect.objectContaining({ tabId: 42, guid: 'g-before-answer' }));
+  });
+
+  it('a start reported inside the grace after the last answer is still matched', async () => {
+    vi.useFakeTimers();
+    await attachTab(42);
+    const pending = awaitTabDownloadStart(item);
+    await vi.advanceTimersByTimeAsync(TAB_DOWNLOAD_START_GRACE_MS - 1);
+    willBegin(42, 'g-in-grace');
+    await expect(pending).resolves.toEqual(expect.objectContaining({ tabId: 42, guid: 'g-in-grace' }));
+  });
+
+  it('a session that fails the command, such as one detached meanwhile, counts as answered', async () => {
+    vi.useFakeTimers();
+    await attachTab(42);
+    sendCommand.mockImplementation((_t: unknown, method: string) =>
+      method === 'Page.getNavigationHistory' ? Promise.reject(new Error('Detached while handling command.')) : Promise.resolve({}));
+    let result: unknown = 'pending';
+    void awaitTabDownloadStart(item).then((s) => { result = s; });
+    await vi.advanceTimersByTimeAsync(TAB_DOWNLOAD_START_GRACE_MS);
+    expect(result).toBeNull();
+  });
+
+  it('a session that never answers holds the item until the end of the window, no longer', async () => {
+    vi.useFakeTimers();
+    await attachTab(42);
+    sendCommand.mockImplementation((_t: unknown, method: string) =>
+      method === 'Page.getNavigationHistory' ? new Promise(() => {}) : Promise.resolve({}));
+    let result: unknown = 'pending';
+    void awaitTabDownloadStart(item).then((s) => { result = s; });
+    await vi.advanceTimersByTimeAsync(TAB_DOWNLOAD_START_WINDOW_MS - 1);
+    expect(result).toBe('pending');
+    await vi.advanceTimersByTimeAsync(1);
+    expect(result).toBeNull();
   });
 
   it('with no watched tab, a download item resolves null at once', async () => {

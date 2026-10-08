@@ -39,6 +39,20 @@ import {
 /** Remote debugging protocol version requested on attach. */
 export const CDP_PROTOCOL_VERSION = '1.3';
 
+/**
+ * How long a download item still waits for its start once every session that
+ * could report it has answered a command sent after the item arrived (see
+ * {@link awaitTabDownloadStart}).
+ */
+export const TAB_DOWNLOAD_START_GRACE_MS = 250;
+
+/**
+ * The command that asks a download-watched session whether it has a start
+ * left to report. The browser answers it without involving the page, so a busy
+ * page does not hold the answer back, and it changes nothing.
+ */
+const DOWNLOAD_START_BARRIER_METHOD = 'Page.getNavigationHistory';
+
 /** Decision for a single intercepted request. */
 export interface FetchDecision {
   block: boolean;
@@ -284,19 +298,36 @@ export function takeTabDownloadStart(
 }
 
 /**
- * The download start that belongs to `info`, waiting up to
- * {@link TAB_DOWNLOAD_START_WINDOW_MS} for it when none has been reported yet
- * (Chrome does not order the CDP event against chrome.downloads.onCreated).
- * Resolves null at once when no session of ours could report one.
+ * The download start that belongs to `info`, when none has been reported yet
+ * waiting for it (Chrome does not order the CDP event against
+ * chrome.downloads.onCreated). Resolves null at once when no session of ours
+ * could report one.
+ *
+ * A download started in a tab without our session is never reported, so the
+ * wait does not run out the matching window: each watched session is sent a
+ * command. Chrome sends a session's events and replies in order, and reports a
+ * download start on the session before the item (0-6 ms before
+ * chrome.downloads.onCreated, measured on Chrome 145), so once every session
+ * has answered or failed to, a start one of them reported for this item has
+ * normally been recorded. The item then waits
+ * {@link TAB_DOWNLOAD_START_GRACE_MS} more, a margin for an event that reaches
+ * this worker after the reply that followed it, and never longer than
+ * {@link TAB_DOWNLOAD_START_WINDOW_MS} in all.
  */
 export function awaitTabDownloadStart(
   info: Pick<DownloadInfo, 'url' | 'finalUrl'>,
 ): Promise<TabDownloadStart | null> {
   const found = takeTabDownloadStart(info);
   if (found || downloadWatchedTabs.size === 0) return Promise.resolve(found);
+  const watched = Array.from(downloadWatchedTabs);
   return new Promise((resolve) => {
+    let done = false;
+    let graceTimer: ReturnType<typeof setTimeout> | undefined;
     const finish = (start: TabDownloadStart | null) => {
-      clearTimeout(timer);
+      if (done) return;
+      done = true;
+      clearTimeout(windowTimer);
+      clearTimeout(graceTimer);
       downloadStartWaiters.delete(check);
       resolve(start);
     };
@@ -304,9 +335,26 @@ export function awaitTabDownloadStart(
       const start = takeTabDownloadStart(info);
       if (start) finish(start);
     };
-    const timer = setTimeout(() => finish(null), TAB_DOWNLOAD_START_WINDOW_MS);
+    const windowTimer = setTimeout(() => finish(null), TAB_DOWNLOAD_START_WINDOW_MS);
     downloadStartWaiters.add(check);
+    void Promise.all(watched.map(sessionAnswered)).then(() => {
+      if (!done) graceTimer = setTimeout(() => finish(null), TAB_DOWNLOAD_START_GRACE_MS);
+    });
   });
+}
+
+/**
+ * Resolves once the session on `tabId` has answered a command sent now, or
+ * failed to (a session that has gone reports nothing more). Never rejects.
+ */
+async function sessionAnswered(tabId: number): Promise<void> {
+  if (!debuggerAvailable()) return;
+  try {
+    await chrome.debugger.sendCommand({ tabId }, DOWNLOAD_START_BARRIER_METHOD, {});
+  } catch {
+    // An error reply comes back in order like any other, and a session that
+    // has gone reports nothing more.
+  }
 }
 
 /** Whether an attached session on `tabId` reports the downloads started there. */
