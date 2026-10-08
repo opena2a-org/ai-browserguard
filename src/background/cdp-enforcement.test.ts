@@ -455,4 +455,65 @@ describe('download starts reported on our sessions (Page.downloadWillBegin)', ()
   it('with no watched tab, a download item resolves null at once', async () => {
     await expect(awaitTabDownloadStart(item)).resolves.toBeNull();
   });
+
+  describe('with another download of the same URL', () => {
+    const listed = (ids: number[], startTime = new Date().toISOString()) =>
+      ids.map((id) => ({ id, url: item.url, startTime }));
+    const setSearch = (search: ReturnType<typeof vi.fn>) => {
+      (chrome as unknown as Record<string, unknown>).downloads = { search };
+    };
+
+    it('waits while one report could be either download, and takes the first start once both are reported', async () => {
+      await attachTab(42);
+      const both = listed([1, 2]);
+      setSearch(vi.fn(() => Promise.resolve(both)));
+      willBegin(42, 'g1');
+      const first = awaitTabDownloadStart({ id: 1, ...item });
+      let settled = false;
+      void first.then(() => { settled = true; });
+      await new Promise((r) => setTimeout(r, 0));
+      expect(settled).toBe(false);
+      willBegin(42, 'g2');
+      await expect(first).resolves.toEqual(expect.objectContaining({ guid: 'g1' }));
+      await expect(awaitTabDownloadStart({ id: 2, ...item })).resolves.toEqual(expect.objectContaining({ guid: 'g2' }));
+    });
+
+    it('resolves null once every watched session has answered when no second report comes, long before the window ends', async () => {
+      vi.useFakeTimers();
+      await attachTab(42);
+      const both = listed([1, 2]);
+      setSearch(vi.fn(() => Promise.resolve(both)));
+      willBegin(42, 'g1');
+      let result: unknown = 'pending';
+      void awaitTabDownloadStart({ id: 1, ...item }).then((s) => { result = s; });
+      await vi.advanceTimersByTimeAsync(TAB_DOWNLOAD_START_GRACE_MS - 1);
+      expect(result).toBe('pending');
+      await vi.advanceTimersByTimeAsync(1);
+      expect(result).toBeNull();
+    });
+
+    it('a start reported while an earlier check is still listing downloads at the end of the grace is matched', async () => {
+      vi.useFakeTimers();
+      await attachTab(42);
+      const search = vi.fn(() => Promise.resolve([] as unknown[]));
+      setSearch(search);
+      let result: unknown = 'pending';
+      void awaitTabDownloadStart({ id: 1, ...item }).then((s) => { result = s; });
+      await vi.advanceTimersByTimeAsync(TAB_DOWNLOAD_START_GRACE_MS - 1);
+      search.mockImplementationOnce(() => new Promise(() => {}));
+      willBegin(42, 'g1');
+      await vi.advanceTimersByTimeAsync(1);
+      expect(result).toEqual(expect.objectContaining({ guid: 'g1' }));
+    });
+
+    it('a failed search matches nothing', async () => {
+      vi.useFakeTimers();
+      await attachTab(42);
+      setSearch(vi.fn(() => Promise.reject(new Error('unavailable'))));
+      willBegin(42, 'g1');
+      const pending = awaitTabDownloadStart({ id: 1, ...item });
+      await vi.advanceTimersByTimeAsync(TAB_DOWNLOAD_START_WINDOW_MS);
+      await expect(pending).resolves.toBeNull();
+    });
+  });
 });

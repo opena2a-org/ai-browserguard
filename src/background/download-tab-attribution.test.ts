@@ -584,4 +584,78 @@ describe('a download Chrome reports starting in the agent tab is cancelled', () 
     expect(events.find((e) => e.url === 'https://c.example.org/mine.pdf')?.attribution)
       .toEqual({ level: 'host', matchedHost: 'c.example.org' });
   });
+
+  describe('two downloads of the same URL, one reported in the agent tab', () => {
+    const FILE = 'https://files.example.com/report.pdf';
+    let items: Array<{ id: number; url: string; startTime: string }>;
+
+    /** chrome.downloads.search over the items Chrome has created so far, as the real API lists them. */
+    function listCreatedItems(): void {
+      items = [];
+      (chromeMock.downloads as unknown as Record<string, unknown>).search = vi.fn(
+        (q: { startedAfter?: string }) => Promise.resolve(
+          items.filter((i) => !q.startedAfter || Date.parse(i.startTime) > Date.parse(q.startedAfter)),
+        ),
+      );
+    }
+
+    /** Chrome creates a download item now; its onCreated event is fired separately. */
+    function create(id: number) {
+      const item = { id, url: FILE, startTime: new Date().toISOString() };
+      items.push(item);
+      return item;
+    }
+
+    afterEach(() => {
+      delete (chromeMock.downloads as unknown as Record<string, unknown>).search;
+    });
+
+    it("the user's download started first is not cancelled when the agent's tab then reports the same URL", async () => {
+      const w = await watchedAgentTab(readOnlyWithBlockedSite());
+      listCreatedItems();
+      const user = create(81);
+      w.onCreated(user);
+      await vi.advanceTimersByTimeAsync(1_000);
+      const agentItem = create(82);
+      willBegin(55, 'g-82', FILE);
+      w.onCreated(agentItem);
+      await drain();
+
+      expect(cancelledIds(w)).not.toContain(81);
+      const events = (await downloadEvents()).filter((e) => e.url === FILE);
+      expect(events).toHaveLength(2);
+      expect(events.map((e) => e.outcome)).toEqual(['informational', 'informational']);
+      expect(status(w).lifetimeStats.totalActionsBlocked).toBe(0);
+    });
+
+    it("the user's download created after the report is not cancelled, and the agent's is", async () => {
+      const w = await watchedAgentTab(readOnlyWithBlockedSite());
+      listCreatedItems();
+      const agentItem = create(91);
+      willBegin(55, 'g-91', FILE);
+      await vi.advanceTimersByTimeAsync(200);
+      const user = create(92);
+      // The user's onCreated is handled before the agent's.
+      w.onCreated(user);
+      w.onCreated(agentItem);
+      await drain();
+
+      expect(cancelledIds(w)).toEqual([91]);
+    });
+
+    it('the agent downloading the URL twice has both cancelled once both are reported', async () => {
+      const w = await watchedAgentTab(readOnlyWithBlockedSite());
+      listCreatedItems();
+      const first = create(101);
+      willBegin(55, 'g-101', FILE);
+      const second = create(102);
+      w.onCreated(first);
+      await vi.advanceTimersByTimeAsync(20);
+      willBegin(55, 'g-102', FILE);
+      w.onCreated(second);
+      await drain();
+
+      expect(cancelledIds(w).sort()).toEqual([101, 102]);
+    });
+  });
 });

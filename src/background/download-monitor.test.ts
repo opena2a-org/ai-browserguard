@@ -9,6 +9,7 @@ import {
   type DownloadInfo,
   type ActiveAgentTab,
   type TabDownloadStart,
+  type RecentDownload,
 } from './download-monitor';
 
 function info(overrides?: Partial<DownloadInfo>): DownloadInfo {
@@ -162,6 +163,38 @@ describe('matchTabDownloadStart', () => {
     const item = { url: 'https://files.example.com/a.txt' };
     const s = [start({ guid: 'later', tabId: 2, at: 1_500 }), start({ guid: 'first', tabId: 1, at: 1_200 })];
     expect(matchTabDownloadStart(s, item, 2_000)?.guid).toBe('first');
+  });
+
+  it('does not match while another download of the URL could be the one reported', () => {
+    const item = { id: 1, url: 'https://files.example.com/a.txt', startTime: new Date(900).toISOString() };
+    const other = (over: Partial<RecentDownload>): RecentDownload => ({
+      id: 2, url: 'https://files.example.com/a.txt', startTime: new Date(950).toISOString(), ...over,
+    });
+    const one = [start({ at: 1_000 })];
+    expect(matchTabDownloadStart(one, item, 1_000, [other({})])).toBeNull();
+    expect(matchTabDownloadStart(one, item, 1_000, [other({ id: 3, url: 'https://cdn.example.net/a.txt', finalUrl: 'https://files.example.com/a.txt' })])).toBeNull();
+    expect(matchTabDownloadStart(one, item, 1_000, [other({ startTime: undefined })])).toBeNull();
+    // A report for each download: the earliest is matched.
+    const two = [start({ guid: 'second', at: 1_100 }), start({ guid: 'first', at: 1_000 })];
+    expect(matchTabDownloadStart(two, item, 1_100, [other({})])?.guid).toBe('first');
+  });
+
+  it('a download that cannot be the reported one leaves the match alone', () => {
+    const item = { id: 1, url: 'https://files.example.com/a.txt', startTime: new Date(900).toISOString() };
+    const s = [start({ at: 1_000 })];
+    const others: RecentDownload[] = [
+      { id: 1, url: item.url, startTime: item.startTime },
+      { id: 2, url: 'https://files.example.com/other.txt', startTime: new Date(950).toISOString() },
+      { id: 3, url: item.url, startTime: new Date(1_001).toISOString() },
+      { id: 4, url: item.url, startTime: new Date(1_000 - TAB_DOWNLOAD_START_WINDOW_MS - 1).toISOString() },
+    ];
+    expect(matchTabDownloadStart(s, item, 1_000, others)?.guid).toBe('g');
+  });
+
+  it('a download created after the report was observed is not matched to it', () => {
+    const s = [start({ at: 1_000 })];
+    expect(matchTabDownloadStart(s, { url: 'https://files.example.com/a.txt', startTime: new Date(1_001).toISOString() }, 1_001)).toBeNull();
+    expect(matchTabDownloadStart(s, { url: 'https://files.example.com/a.txt', startTime: new Date(1_000).toISOString() }, 1_001)?.guid).toBe('g');
   });
 });
 
