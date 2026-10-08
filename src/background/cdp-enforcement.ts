@@ -32,7 +32,8 @@ import { matchUrlPattern } from '../url/match-pattern';
 import {
   matchTabDownloadStart,
   TAB_DOWNLOAD_START_WINDOW_MS,
-  type DownloadInfo,
+  type DownloadToMatch,
+  type RecentDownload,
   type TabDownloadStart,
 } from './download-monitor';
 
@@ -182,6 +183,8 @@ const downloadWatchedTabs = new Set<number>();
 const downloadStarts = new Map<string, TabDownloadStart>();
 /** Download items waiting for their start to be reported. */
 const downloadStartWaiters = new Set<() => void>();
+/** Download items that took a start, by download id, with when they took it. */
+const matchedDownloads = new Map<number, number>();
 
 /** Whether `chrome.debugger` (with the methods we need) is available. */
 function debuggerAvailable(): boolean {
@@ -255,10 +258,17 @@ function handleDebuggerDetach(source: chrome.debugger.Debuggee): void {
   }
 }
 
-/** Drop download starts older than the matching window. */
+/**
+ * Drop download starts older than the matching window, and forget items that
+ * took a start once they are too old to compete for one (created more than
+ * two windows ago).
+ */
 function pruneDownloadStarts(now: number): void {
   for (const [guid, start] of downloadStarts) {
     if (now - start.at > TAB_DOWNLOAD_START_WINDOW_MS) downloadStarts.delete(guid);
+  }
+  for (const [id, at] of matchedDownloads) {
+    if (now - at > 2 * TAB_DOWNLOAD_START_WINDOW_MS) matchedDownloads.delete(id);
   }
 }
 
@@ -285,22 +295,48 @@ function recordDownloadStart(tabId: number | undefined, params?: object): void {
 
 /**
  * Take (consume) the reported download start that belongs to `info`, or null.
- * Each start is matched to at most one download item.
+ * Each start is matched to at most one download item. `others` are the other
+ * download items Chrome has created lately; those that took a start are left
+ * out, and while more of the rest share the start's URL than there are reports
+ * for it, none is matched (see matchTabDownloadStart).
  */
 export function takeTabDownloadStart(
-  info: Pick<DownloadInfo, 'url' | 'finalUrl'>,
+  info: DownloadToMatch,
   now: number = Date.now(),
+  others: Iterable<RecentDownload> = [],
 ): TabDownloadStart | null {
   pruneDownloadStarts(now);
-  const match = matchTabDownloadStart(downloadStarts.values(), info, now);
-  if (match) downloadStarts.delete(match.guid);
+  const unmatched = Array.from(others).filter((d) => !matchedDownloads.has(d.id));
+  const match = matchTabDownloadStart(downloadStarts.values(), info, now, unmatched);
+  if (match) {
+    downloadStarts.delete(match.guid);
+    if (info.id !== undefined) matchedDownloads.set(info.id, now);
+  }
   return match;
+}
+
+/**
+ * The download items Chrome created recently enough to share a start with one
+ * being matched now. Empty when chrome.downloads cannot be searched here; null
+ * when the search failed, so nothing is matched on a list we could not read.
+ */
+async function otherRecentDownloads(now: number): Promise<RecentDownload[] | null> {
+  if (typeof chrome === 'undefined' || typeof chrome.downloads?.search !== 'function') return [];
+  try {
+    const items = await chrome.downloads.search({
+      startedAfter: new Date(now - 2 * TAB_DOWNLOAD_START_WINDOW_MS).toISOString(),
+    });
+    return items ?? [];
+  } catch {
+    return null;
+  }
 }
 
 /**
  * The download start that belongs to `info`, when none has been reported yet
  * waiting for it (Chrome does not order the CDP event against
- * chrome.downloads.onCreated). Resolves null at once when no session of ours
+ * chrome.downloads.onCreated), or while another download of its URL leaves the
+ * reports so far ambiguous. Resolves null at once when no session of ours
  * could report one.
  *
  * A download started in a tab without our session is never reported, so the
@@ -308,37 +344,52 @@ export function takeTabDownloadStart(
  * command. Chrome sends a session's events and replies in order, and reports a
  * download start on the session before the item (0-6 ms before
  * chrome.downloads.onCreated, measured on Chrome 145), so once every session
- * has answered or failed to, a start one of them reported for this item has
- * normally been recorded. The item then waits
- * {@link TAB_DOWNLOAD_START_GRACE_MS} more, a margin for an event that reaches
- * this worker after the reply that followed it, and never longer than
- * {@link TAB_DOWNLOAD_START_WINDOW_MS} in all.
+ * has answered or failed to, a start one of them reported for this item, or
+ * for another download of its URL created before it, has normally been
+ * recorded. The item then waits {@link TAB_DOWNLOAD_START_GRACE_MS} more, a
+ * margin for an event that reaches this worker after the reply that followed
+ * it, and never longer than {@link TAB_DOWNLOAD_START_WINDOW_MS} in all. A
+ * report still ambiguous then stays unmatched.
  */
-export function awaitTabDownloadStart(
-  info: Pick<DownloadInfo, 'url' | 'finalUrl'>,
-): Promise<TabDownloadStart | null> {
-  const found = takeTabDownloadStart(info);
-  if (found || downloadWatchedTabs.size === 0) return Promise.resolve(found);
+export function awaitTabDownloadStart(info: DownloadToMatch): Promise<TabDownloadStart | null> {
   const watched = Array.from(downloadWatchedTabs);
+  const wait = watched.length > 0;
   return new Promise((resolve) => {
-    let done = false;
+    let settled = false;
+    let windowTimer: ReturnType<typeof setTimeout> | undefined;
     let graceTimer: ReturnType<typeof setTimeout> | undefined;
     const finish = (start: TabDownloadStart | null) => {
-      if (done) return;
-      done = true;
+      if (settled) return;
+      settled = true;
       clearTimeout(windowTimer);
       clearTimeout(graceTimer);
-      downloadStartWaiters.delete(check);
+      downloadStartWaiters.delete(wake);
       resolve(start);
     };
-    const check = () => {
-      const start = takeTabDownloadStart(info);
+    const check = async (): Promise<boolean> => {
+      const others = await otherRecentDownloads(Date.now());
+      if (settled || others === null) return settled;
+      const start = takeTabDownloadStart(info, Date.now(), others);
       if (start) finish(start);
+      return start !== null;
     };
-    const windowTimer = setTimeout(() => finish(null), TAB_DOWNLOAD_START_WINDOW_MS);
-    downloadStartWaiters.add(check);
-    void Promise.all(watched.map(sessionAnswered)).then(() => {
-      if (!done) graceTimer = setTimeout(() => finish(null), TAB_DOWNLOAD_START_GRACE_MS);
+    const wake = () => { void check(); };
+    // A last check at the end of the grace, so a start reported while an
+    // earlier check was still listing downloads is not lost.
+    const endOfGrace = () => { void check().then((found) => { if (!found) finish(null); }); };
+    if (wait) {
+      windowTimer = setTimeout(() => finish(null), TAB_DOWNLOAD_START_WINDOW_MS);
+      downloadStartWaiters.add(wake);
+    }
+    void check().then((found) => {
+      if (found || settled) return;
+      if (!wait) {
+        finish(null);
+        return;
+      }
+      void Promise.all(watched.map(sessionAnswered)).then(() => {
+        if (!settled) graceTimer = setTimeout(endOfGrace, TAB_DOWNLOAD_START_GRACE_MS);
+      });
     });
   });
 }
@@ -471,6 +522,7 @@ export function _resetForTest(): void {
   downloadWatchedTabs.clear();
   downloadStarts.clear();
   downloadStartWaiters.clear();
+  matchedDownloads.clear();
   reconcileChain = Promise.resolve();
   getRuleForTab = null;
   onBlock = null;

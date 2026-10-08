@@ -1774,6 +1774,7 @@ async function handleDownloadCreated(item: chrome.downloads.DownloadItem): Promi
     filename: item.filename,
     referrer: item.referrer,
     byExtensionId: item.byExtensionId,
+    startTime: item.startTime,
   };
   const ownId = typeof chrome.runtime?.id === 'string' ? chrome.runtime.id : undefined;
 

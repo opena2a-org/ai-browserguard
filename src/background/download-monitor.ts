@@ -9,7 +9,10 @@
  * - `tab`: Chrome reported the download starting in an agent's tab
  *   (`Page.downloadWillBegin` on a debugger session this extension holds
  *   there), matched to the download item by URL inside
- *   {@link TAB_DOWNLOAD_START_WINDOW_MS}. Only this level may be cancelled.
+ *   {@link TAB_DOWNLOAD_START_WINDOW_MS}, and only while that URL names one
+ *   download: the report carries no download id, so another download of the
+ *   same URL that no report accounts for (the user's, in a tab we hold no
+ *   session on) leaves both unmatched. Only this level may be cancelled.
  *   Not for a tab whose agent is an attachment seen while the built-in
  *   DevTools was open (`devToolsOnly`): that is most likely the user
  *   inspecting their own page, so a start there is at most a host match.
@@ -35,6 +38,8 @@ export interface DownloadInfo {
   referrer?: string;
   /** Set by Chrome when the download was initiated by an extension. */
   byExtensionId?: string;
+  /** When Chrome created the item (ISO 8601). */
+  startTime?: string;
 }
 
 /** An agent currently active in a tab. */
@@ -77,6 +82,31 @@ export interface TabDownloadStart {
  * discarded, and a download item waits at most this long for its start.
  */
 export const TAB_DOWNLOAD_START_WINDOW_MS = 5_000;
+
+/** A download item a start could also belong to, as chrome.downloads lists it. */
+export type RecentDownload = Pick<DownloadInfo, 'id' | 'url' | 'finalUrl' | 'startTime'>;
+
+/** The download item a start is matched to; `id` and `startTime` when known. */
+export type DownloadToMatch = Pick<DownloadInfo, 'url' | 'finalUrl' | 'startTime'> & { id?: number };
+
+/** `startTime` in ms since epoch, or null when it is missing or unparseable. */
+function startedAt(d: Pick<DownloadInfo, 'startTime'>): number | null {
+  const t = d.startTime ? Date.parse(d.startTime) : NaN;
+  return Number.isNaN(t) ? null : t;
+}
+
+/**
+ * Whether the download `d` could be the one `start` reports: same URL, and
+ * created no later than the report was observed and at most
+ * {@link TAB_DOWNLOAD_START_WINDOW_MS} before it. Chrome creates the item
+ * before it reports the start, so an item created after the report was
+ * observed is not its download. An unknown creation time is not ruled out.
+ */
+function couldBeStartOf(d: Pick<DownloadInfo, 'url' | 'finalUrl' | 'startTime'>, start: TabDownloadStart): boolean {
+  if (start.url !== d.url && start.url !== d.finalUrl) return false;
+  const t = startedAt(d);
+  return t === null || (t <= start.at && start.at - t <= TAB_DOWNLOAD_START_WINDOW_MS);
+}
 
 export interface DownloadAttribution {
   /** The agent tab whose session the download is recorded on. */
@@ -131,22 +161,38 @@ export function shouldIgnoreDownload(
 }
 
 /**
- * The earliest start in `starts` that belongs to the download `info`: its URL
- * equals the item's URL or final URL, and it was observed within
- * {@link TAB_DOWNLOAD_START_WINDOW_MS} of `now`. Null when none does.
+ * The earliest start in `starts` (the reports no download has taken yet) that
+ * belongs to the download `info`: its URL equals the item's URL or final URL,
+ * it was observed within {@link TAB_DOWNLOAD_START_WINDOW_MS} of `now`, and the
+ * item was not created after it was observed. Null when none does.
+ *
+ * A report carries no download id, so its URL is all that ties it to an item.
+ * `others` are the other download items that have not taken a report. When
+ * more of them could be that URL's download than there are reports for it
+ * besides this one, the report cannot say which download started in the
+ * agent's tab, and null is returned: one of them is not the agent's, and
+ * matching by arrival order could hand the report to the user's download.
  */
 export function matchTabDownloadStart(
   starts: Iterable<TabDownloadStart>,
-  info: Pick<DownloadInfo, 'url' | 'finalUrl'>,
+  info: DownloadToMatch,
   now: number,
+  others: Iterable<RecentDownload> = [],
 ): TabDownloadStart | null {
+  const live = Array.from(starts).filter((s) => s.url && Math.abs(now - s.at) <= TAB_DOWNLOAD_START_WINDOW_MS);
   let best: TabDownloadStart | null = null;
-  for (const start of starts) {
-    if (Math.abs(now - start.at) > TAB_DOWNLOAD_START_WINDOW_MS) continue;
-    if (!start.url || (start.url !== info.url && start.url !== info.finalUrl)) continue;
+  for (const start of live) {
+    if (!couldBeStartOf(info, start)) continue;
     if (!best || start.at < best.at) best = start;
   }
-  return best;
+  if (!best) return null;
+  const match = best;
+  const reports = live.filter((s) => s.url === match.url).length;
+  let rivals = 0;
+  for (const d of others) {
+    if (d.id !== info.id && couldBeStartOf(d, match)) rivals += 1;
+  }
+  return rivals < reports ? match : null;
 }
 
 /**
