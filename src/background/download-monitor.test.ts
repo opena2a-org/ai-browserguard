@@ -179,6 +179,13 @@ describe('matchTabDownloadStart', () => {
     expect(matchTabDownloadStart(two, item, 1_100, [other({})])?.guid).toBe('first');
   });
 
+  it('a report for another URL does not settle which download of this URL was reported', () => {
+    const item = { id: 1, url: 'https://files.example.com/a.txt', startTime: new Date(900).toISOString() };
+    const other: RecentDownload = { id: 2, url: item.url, startTime: new Date(950).toISOString() };
+    const s = [start({ at: 1_000 }), start({ guid: 'b', url: 'https://files.example.com/b.txt', at: 1_000 })];
+    expect(matchTabDownloadStart(s, item, 1_000, [other])).toBeNull();
+  });
+
   it('a download that cannot be the reported one leaves the match alone', () => {
     const item = { id: 1, url: 'https://files.example.com/a.txt', startTime: new Date(900).toISOString() };
     const s = [start({ at: 1_000 })];

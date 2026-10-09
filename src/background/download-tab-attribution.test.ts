@@ -643,6 +643,25 @@ describe('a download Chrome reports starting in the agent tab is cancelled', () 
       expect(cancelledIds(w)).toEqual([91]);
     });
 
+    // With no other download listed, only the item's own creation time keeps
+    // the report from the user's download handled first.
+    it.each([
+      ['cannot be searched', undefined],
+      ['are listed as none', () => Promise.resolve([])],
+    ])("when the other downloads %s, the user's download created after the report is not cancelled, and the agent's is", async (_label, search) => {
+      const w = await watchedAgentTab(readOnlyWithBlockedSite());
+      if (search) (chromeMock.downloads as unknown as Record<string, unknown>).search = vi.fn(search);
+      const agentItem = { id: 95, url: FILE, startTime: new Date().toISOString() };
+      willBegin(55, 'g-95', FILE);
+      await vi.advanceTimersByTimeAsync(200);
+      const user = { id: 96, url: FILE, startTime: new Date().toISOString() };
+      w.onCreated(user);
+      w.onCreated(agentItem);
+      await drain();
+
+      expect(cancelledIds(w)).toEqual([95]);
+    });
+
     it('the agent downloading the URL twice has both cancelled once both are reported', async () => {
       const w = await watchedAgentTab(readOnlyWithBlockedSite());
       listCreatedItems();
