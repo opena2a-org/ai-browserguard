@@ -506,6 +506,23 @@ describe('download starts reported on our sessions (Page.downloadWillBegin)', ()
       expect(result).toEqual(expect.objectContaining({ guid: 'g1' }));
     });
 
+    it('a download that took a start more than two windows ago competes for a start of its URL again', async () => {
+      vi.useFakeTimers();
+      await attachTab(42);
+      // Listed with no creation time, so time alone never rules it out.
+      const first = { id: 1, ...item };
+      willBegin(42, 'g1');
+      expect(takeTabDownloadStart(first)).toEqual(expect.objectContaining({ guid: 'g1' }));
+      vi.advanceTimersByTime(2 * TAB_DOWNLOAD_START_WINDOW_MS);
+      willBegin(42, 'g2');
+      expect(takeTabDownloadStart({ id: 2, ...item }, Date.now(), [first, { id: 2, ...item }]))
+        .toEqual(expect.objectContaining({ guid: 'g2' }));
+      vi.advanceTimersByTime(1);
+      willBegin(42, 'g3');
+      expect(takeTabDownloadStart({ id: 3, ...item }, Date.now(), [first, { id: 2, ...item }, { id: 3, ...item }]))
+        .toBeNull();
+    });
+
     it('a failed search matches nothing', async () => {
       vi.useFakeTimers();
       await attachTab(42);
