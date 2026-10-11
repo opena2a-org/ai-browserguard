@@ -26,12 +26,15 @@
  *
  * The browser has a window, no --enable-automation and
  * --disable-blink-features=AutomationControlled, as in smoke-downloads.mjs, so
- * the page detector does not report every tab. Run: npm run build && npm run
- * smoke:devtools (opens a browser window; needs a display; about 30 s).
- * CHROME_PATH selects the browser; the default is the one Puppeteer installed.
- * Exit 0 pass, 1 fail, 2 watchdog.
+ * the page detector does not report every tab. The profile has Developer mode
+ * on, set before that browser starts (smoke-profile.mjs): with it off, Chrome
+ * 154 leaves an unpacked extension disabled after the reload that loads the
+ * settings. Run: npm run build && npm run smoke:devtools (opens a browser
+ * window; needs a display; about 30 s). CHROME_PATH selects the browser; the
+ * default is the one Puppeteer installed. Exit 0 pass, 1 fail, 2 watchdog.
  */
 import puppeteer from 'puppeteer';
+import { enableDeveloperMode } from './smoke-profile.mjs';
 import { createServer } from 'node:http';
 import { existsSync, mkdtempSync, mkdirSync, readFileSync, writeFileSync, readdirSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -128,6 +131,8 @@ const launchOptions = {
 };
 if (process.env.CHROME_PATH) launchOptions.executablePath = process.env.CHROME_PATH;
 
+// Developer mode on, so the extension stays enabled when it is reloaded below.
+await enableDeveloperMode(puppeteer, { userDataDir: profile, executablePath: process.env.CHROME_PATH });
 const browser = await puppeteer.launch(launchOptions);
 let worker = null;
 const usedWorkerTargets = new Set();

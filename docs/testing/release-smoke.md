@@ -45,6 +45,14 @@ that the user's download in that tab completes, is recorded as a host match
 and is not counted as a blocked action. It opens a browser window and needs
 no OS focus. It must report 0 failed.
 
+`npm run smoke:downloads` and `npm run smoke:devtools` write their settings to
+storage and reload the extension so the background loads them. Chrome 154
+leaves an unpacked extension disabled after a reload in a profile where
+Developer mode is off, so each of the two first turns Developer mode on in its
+temporary profile (`scripts/smoke-profile.mjs`). Both pass on Chrome for
+Testing 145, the browser Puppeteer installs, and on Google Chrome 154. To run
+them on an installed browser, set `CHROME_PATH` to its binary.
+
 `npm run smoke:arming` closes manual step 3 below: it opens the REAL toolbar
 popup (`chrome.action.openPopup`), walks the Configure wizard to activate a
 Read-Only rule, asserts the rule persisted, then drives the in-page agent

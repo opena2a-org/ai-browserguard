@@ -36,11 +36,15 @@
  *
  * Settings and the delegation are written to chrome.storage and the extension
  * is reloaded so the background loads them, which needs no popup and no OS
- * focus. Run: npm run build && npm run smoke:downloads   (opens a browser
- * window; needs a display; about 1 minute). CHROME_PATH selects the browser;
- * the default is the one Puppeteer installed. Exit 0 pass, 1 fail, 2 watchdog.
+ * focus. The profile has Developer mode on, set before the browser below
+ * starts (smoke-profile.mjs): with it off, Chrome 154 leaves an unpacked
+ * extension disabled after a reload. Run: npm run build && npm run
+ * smoke:downloads   (opens a browser window; needs a display; about 1 minute).
+ * CHROME_PATH selects the browser; the default is the one Puppeteer installed.
+ * Exit 0 pass, 1 fail, 2 watchdog.
  */
 import puppeteer from 'puppeteer';
+import { enableDeveloperMode } from './smoke-profile.mjs';
 import { createServer } from 'node:http';
 import { existsSync, mkdtempSync, mkdirSync, readFileSync, writeFileSync, readdirSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -167,6 +171,8 @@ const launchOptions = {
 };
 if (process.env.CHROME_PATH) launchOptions.executablePath = process.env.CHROME_PATH;
 
+// Developer mode on, so the extension stays enabled when armAndReload reloads it.
+await enableDeveloperMode(puppeteer, { userDataDir: profile, executablePath: process.env.CHROME_PATH });
 const browser = await puppeteer.launch(launchOptions);
 let worker = null;
 /** Worker targets already used. A reload leaves the old one listed, and it never answers. */
