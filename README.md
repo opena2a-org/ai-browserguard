@@ -93,7 +93,7 @@ npm install          # Install dependencies
 npm run build        # Build to dist/
 npm run dev          # Watch mode
 npm run test         # 1365 tests
-npm run lint         # TypeScript strict checking
+npm run lint         # TypeScript strict checking and the docs prose check
 ```
 
 ## Contributing
