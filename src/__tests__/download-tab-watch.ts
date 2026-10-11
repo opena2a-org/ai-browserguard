@@ -4,8 +4,9 @@
  *
  * A download is cancelled only when Chrome reports it starting in an agent's
  * tab on a debugger session the extension holds there. That session exists
- * when Browser-layer blocking is on and the tab's delegation blocks a site, so
- * a test arms both, then reports the start before creating the download item.
+ * when Browser-layer blocking is on and the tab's delegation blocks a site or
+ * withholds downloads, so a test arms both, then reports the start before
+ * creating the download item.
  * Install the mock BEFORE importing the worker: it registers its debugger
  * listeners at start-up.
  */
@@ -44,7 +45,7 @@ export function installDownloadTabWatch(targets: unknown[] = []): DownloadTabWat
   };
 }
 
-/** `rule` with one blocked site, so Browser-layer blocking attaches to its tabs. */
+/** `rule` with one blocked site, so its session also pauses the tab's requests. */
 export function withBlockedSite(rule: DelegationRule): DelegationRule {
   return { ...rule, scope: { ...rule.scope, sitePatterns: [{ pattern: 'blocked.example', action: 'block' }] } };
 }

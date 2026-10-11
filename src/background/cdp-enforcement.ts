@@ -20,14 +20,17 @@
  * download starting in the tab (`Page.downloadWillBegin`). That report is the
  * only tab-level link between a download and an agent this extension can get
  * with its permissions (a chrome.downloads item carries no tab id), and it is
- * what download cancellation rests on (see download-monitor.ts).
+ * what download cancellation rests on (see download-monitor.ts). So a session
+ * also attaches to a tab whose rule withholds `download-file` and blocks no
+ * site (Read-Only, Limited without a blocked site); that session watches
+ * downloads only and does not pause the tab's requests.
  *
  * Must run in the background service worker — `chrome.debugger` is not
  * available in content scripts.
  */
 
 import type { DelegationRule } from '../types/delegation';
-import { isTimeBoundExpired } from '../delegation/rules';
+import { evaluateActionRestrictions, isTimeBoundExpired } from '../delegation/rules';
 import { matchUrlPattern } from '../url/match-pattern';
 import {
   matchTabDownloadStart,
@@ -96,14 +99,24 @@ export function decideFetchRequest(rule: DelegationRule | null, url: string): Fe
 }
 
 /**
- * Whether a rule carries at least one explicit site `block` pattern — i.e.
- * something the CDP layer can actually enforce. A rule with no block pattern
- * has nothing to enforce off-realm, so attaching would only show the debugger
- * banner for no benefit.
+ * Whether a rule carries at least one explicit site `block` pattern — i.e. a
+ * request the CDP layer can actually block. Only such a rule has the session
+ * pause the tab's requests (`Fetch` domain).
  */
 export function ruleHasBlockPattern(rule: DelegationRule | null): boolean {
   if (!rule) return false;
   return rule.scope.sitePatterns.some((p) => p.action === 'block');
+}
+
+/**
+ * Whether a rule withholds `download-file`, so a download Chrome reports
+ * starting in the tab is cancelled (Read-Only and Limited do). The report
+ * comes only from a session of ours on that tab, so such a rule needs one
+ * even when it blocks no site.
+ */
+export function ruleWithholdsDownloads(rule: DelegationRule | null): boolean {
+  if (!rule) return false;
+  return !evaluateActionRestrictions('download-file', rule.scope.actionRestrictions).allowed;
 }
 
 /**
@@ -133,9 +146,11 @@ export interface EnforceTabInput {
 /**
  * Whether a tab should have a CDP enforcement session attached: the feature is
  * on, an agent is present, an active/unexpired delegation governs the tab, AND
- * that rule has at least one site `block` pattern to enforce. The block-pattern
- * requirement keeps the debugger banner off when there is nothing the CDP layer
- * can actually enforce (the capability-level block stays page-realm).
+ * that rule either has a site `block` pattern to enforce or withholds
+ * `download-file` (the session reports the downloads started in the tab, which
+ * is what cancelling one rests on). A rule that does neither, such as Full
+ * Access, gets no session, so the debugger banner stays off when the CDP layer
+ * has nothing to do (the capability-level block stays page-realm).
  */
 export function shouldEnforceTab(input: EnforceTabInput): boolean {
   if (!input.settingEnabled) return false;
@@ -143,8 +158,7 @@ export function shouldEnforceTab(input: EnforceTabInput): boolean {
   const rule = input.rule;
   if (!rule || !rule.isActive) return false;
   if (isTimeBoundExpired(rule.scope.timeBound)) return false;
-  if (!ruleHasBlockPattern(rule)) return false;
-  return true;
+  return ruleHasBlockPattern(rule) || ruleWithholdsDownloads(rule);
 }
 
 /** Diff between the tabs that should be enforced and those currently attached. */
@@ -179,6 +193,8 @@ const attaching = new Set<number>();
 let reconcileChain: Promise<void> = Promise.resolve();
 /** Attached tabs whose session has the Page domain enabled (download starts reported). */
 const downloadWatchedTabs = new Set<number>();
+/** Attached tabs whose session has the Fetch domain enabled (requests paused). */
+const fetchEnabledTabs = new Set<number>();
 /** Download starts reported on our sessions and not yet matched, keyed by guid. */
 const downloadStarts = new Map<string, TabDownloadStart>();
 /** Download items waiting for their start to be reported. */
@@ -255,6 +271,7 @@ function handleDebuggerDetach(source: chrome.debugger.Debuggee): void {
   if (source.tabId !== undefined) {
     attachedTabs.delete(source.tabId);
     downloadWatchedTabs.delete(source.tabId);
+    fetchEnabledTabs.delete(source.tabId);
   }
 }
 
@@ -435,10 +452,21 @@ async function failRequest(tabId: number, requestId: string): Promise<void> {
 }
 
 /**
- * Attach a CDP session to a tab and enable request interception. Fail-safe: on
- * any failure (DevTools open, another CDP client owns the tab, a restricted
- * URL) it leaves the tab unattached and returns false rather than throwing —
- * the page-realm interceptor stays in force.
+ * Whether the session on `tabId` should pause the tab's requests: only while
+ * the tab's rule has a site block pattern. A session attached to watch the
+ * tab's downloads alone leaves its requests alone.
+ */
+function tabNeedsFetch(tabId: number): boolean {
+  return ruleHasBlockPattern(getRuleForTab ? getRuleForTab(tabId) : null);
+}
+
+/**
+ * Attach a CDP session to a tab, enable request interception when the tab's
+ * rule blocks a site, and have the session report the downloads started in
+ * the tab. Fail-safe: on any failure (DevTools open, another CDP client owns
+ * the tab, a restricted URL) it leaves the tab unattached and returns false
+ * rather than throwing — the page-realm interceptor stays in force. A session
+ * that would neither block a site nor report downloads is detached too.
  */
 export async function attachTab(tabId: number): Promise<boolean> {
   if (attachedTabs.has(tabId)) return true;
@@ -450,14 +478,24 @@ export async function attachTab(tabId: number): Promise<boolean> {
   attaching.add(tabId);
   try {
     await chrome.debugger.attach({ tabId }, CDP_PROTOCOL_VERSION);
-    await chrome.debugger.sendCommand({ tabId }, 'Fetch.enable', {});
+    const blocksSites = tabNeedsFetch(tabId);
+    if (blocksSites) await chrome.debugger.sendCommand({ tabId }, 'Fetch.enable', {});
     attachedTabs.add(tabId);
-    // Download starts in this tab. Best-effort: without it the session still
-    // enforces blocked sites, and downloads here are only recorded.
+    if (blocksSites) fetchEnabledTabs.add(tabId);
+    // Download starts in this tab. Best-effort when the session blocks sites:
+    // without it that session still enforces them, and downloads here are
+    // only recorded.
     try {
       await chrome.debugger.sendCommand({ tabId }, 'Page.enable', {});
       if (attachedTabs.has(tabId)) downloadWatchedTabs.add(tabId);
-    } catch { /* downloads in this tab stay record-only */ }
+    } catch {
+      if (!blocksSites) {
+        // Attached only to report downloads, and it cannot: drop the session
+        // rather than show the debugging banner for nothing.
+        await detachTab(tabId);
+        return false;
+      }
+    }
     return true;
   } catch {
     // attach() may have partially succeeded (e.g. Fetch.enable failed) — detach
@@ -474,6 +512,7 @@ export async function detachTab(tabId: number): Promise<void> {
   if (!attachedTabs.has(tabId)) return;
   attachedTabs.delete(tabId);
   downloadWatchedTabs.delete(tabId);
+  fetchEnabledTabs.delete(tabId);
   if (!debuggerAvailable()) return;
   try {
     await chrome.debugger.detach({ tabId });
@@ -483,8 +522,30 @@ export async function detachTab(tabId: number): Promise<void> {
 }
 
 /**
+ * Turn request interception on or off on an attached session as the tab's
+ * rule now needs: on when its rule gained a blocked site (a Limited delegation
+ * with one replaced Read-Only), off when it lost every one. Best-effort: a
+ * failed command is tried again on the next reconcile, and meanwhile every
+ * paused request is still answered (passed through unless a block pattern
+ * matches it).
+ */
+async function syncFetch(tabId: number): Promise<void> {
+  const want = tabNeedsFetch(tabId);
+  if (want === fetchEnabledTabs.has(tabId) || !debuggerAvailable()) return;
+  try {
+    await chrome.debugger.sendCommand({ tabId }, want ? 'Fetch.enable' : 'Fetch.disable', {});
+    if (!attachedTabs.has(tabId)) return;
+    if (want) fetchEnabledTabs.add(tabId);
+    else fetchEnabledTabs.delete(tabId);
+  } catch {
+    // The session may be gone (tab closed); onDetach clears it.
+  }
+}
+
+/**
  * Drive the attached set toward `desired`: detach tabs that no longer qualify,
- * attach those that newly do. Detaches run first so a flip from one tab to
+ * attach those that newly do, and bring request interception on the tabs that
+ * stay in line with their rule. Detaches run first so a flip from one tab to
  * another never holds two sessions longer than needed.
  */
 export function reconcileTabs(desired: Set<number>): Promise<void> {
@@ -503,6 +564,9 @@ async function doReconcile(desired: Set<number>): Promise<void> {
   for (const id of toAttach) {
     await attachTab(id);
   }
+  for (const id of desired) {
+    if (attachedTabs.has(id)) await syncFetch(id);
+  }
 }
 
 /** Whether a tab currently has an enforcement session attached. */
@@ -520,6 +584,7 @@ export function _resetForTest(): void {
   attachedTabs.clear();
   attaching.clear();
   downloadWatchedTabs.clear();
+  fetchEnabledTabs.clear();
   downloadStarts.clear();
   downloadStartWaiters.clear();
   matchedDownloads.clear();
