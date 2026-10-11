@@ -82,6 +82,9 @@ describe('download-block notification lifetime', () => {
     await settle();
     handleMessage({ type: 'DELEGATION_UPDATE', data: withBlockedSite(createRuleFromPreset('readOnly')) }, POPUP_SENDER, vi.fn());
     await settle();
+    // The "Agent detected" notice shown at detection clears on its own 10 s
+    // timer; let it go before watching for clears of the download notification.
+    await vi.advanceTimersByTimeAsync(10_000);
 
     chromeMock.notifications.create.mockClear();
     chromeMock.notifications.clear.mockClear();

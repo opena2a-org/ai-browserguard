@@ -106,7 +106,7 @@ Required to persist session logs, delegation rules, and user settings locally on
 Required to schedule periodic checks for delegation rule expiration and detection sweeps.
 
 ### notifications
-Required to alert the user when an AI agent attempts an action that violates the active delegation rules.
+Required to alert the user when an AI agent is detected driving the browser, and when an AI agent attempts an action that violates the active delegation rules.
 
 ### debugger
 Required to detect when an automation framework (Playwright, Puppeteer) attaches a Chrome DevTools Protocol (CDP) debugger to the browser (one of the core, hard-to-spoof signals that an AI agent has taken control) and, when the user enables the optional Browser-layer blocking setting, to attach a CDP session to tabs the user has delegated to an agent so network requests to the user's blocked sites are blocked at the browser layer, and so a download that starts in such a tab can be told apart from a download in any other tab. The extension does not read page content or inject code through the debugger, and it detaches when the delegation ends, the tab closes, or the setting is turned off.

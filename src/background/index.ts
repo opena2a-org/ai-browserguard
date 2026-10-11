@@ -1019,13 +1019,34 @@ function handleMessage(
   }
 }
 
+/** The agent names shown on the timeline and in notifications. */
+const AGENT_DISPLAY_NAMES: Record<string, string> = {
+  playwright: 'Playwright',
+  puppeteer: 'Puppeteer',
+  selenium: 'Selenium',
+  'anthropic-computer-use': 'Anthropic Computer Use',
+  'openai-operator': 'OpenAI Operator',
+  'cdp-generic': 'CDP Agent',
+  'webdriver-generic': 'WebDriver Agent',
+  unknown: 'Unknown Agent',
+};
+
 async function handleDetection(tabId: number, event: DetectionEvent, fromDebugger = false): Promise<void> {
   if (!event.agent) return;
+
+  // A page's detection is what wakes a stopped worker, so it can arrive before
+  // the stored state has loaded. Without the load, the agent restored for this
+  // tab is not yet known and the Notifications setting reads as its default.
+  // A failed load still lets the detection through.
+  await ensureReady().catch(() => { /* proceed with what is loaded */ });
 
   const replaced = state.activeAgents.get(tabId);
   if (replaced) state.debuggerAgentIds.delete(replaced.id);
   state.activeAgents.set(tabId, event.agent);
   if (fromDebugger) state.debuggerAgentIds.add(event.agent.id);
+  // The same agent type seen again in its tab, as after a navigation, is the
+  // agent already announced; anything else is a new agent in this tab.
+  if (!replaced || replaced.type !== event.agent.type) notifyAgentDetected(event.agent);
 
   // Create a new session. Attribute it to the rule that actually governs this
   // tab's agent (per-agent rule if one exists, else the session-wide rule).
@@ -1048,17 +1069,7 @@ async function handleDetection(tabId: number, event: DetectionEvent, fromDebugge
   };
 
   // Add detection event to timeline
-  const agentDisplayNames: Record<string, string> = {
-    playwright: 'Playwright',
-    puppeteer: 'Puppeteer',
-    selenium: 'Selenium',
-    'anthropic-computer-use': 'Anthropic Computer Use',
-    'openai-operator': 'OpenAI Operator',
-    'cdp-generic': 'CDP Agent',
-    'webdriver-generic': 'WebDriver Agent',
-    unknown: 'Unknown Agent',
-  };
-  const agentDisplayName = agentDisplayNames[event.agent.type] ?? event.agent.type;
+  const agentDisplayName = AGENT_DISPLAY_NAMES[event.agent.type] ?? event.agent.type;
   const timelineEvent = createTimelineEvent('detection', event.url, `Agent detected: ${agentDisplayName}`, {
     outcome: 'informational',
   });
@@ -1963,6 +1974,56 @@ function boundForNotification(text: string): string {
 const DOWNLOAD_NOTIFICATION_COALESCE_MS = 10_000;
 let lastDownloadBlockNotificationAt = 0;
 let lastHostDownloadNoticeAt = 0;
+
+/** Minimum gap between "Agent detected" notifications for one agent type. */
+const AGENT_NOTICE_COALESCE_MS = 10_000;
+const lastAgentNoticeAt = new Map<string, number>();
+
+/**
+ * Tell the user an agent was detected (#103). Otherwise the only sign is the
+ * agent count on the toolbar icon, which Chrome keeps in the Extensions menu
+ * until the icon is pinned, and an agent that triggers no block, such as an
+ * external CDP client, is never surfaced. An attachment seen while DevTools is
+ * open is most likely the user inspecting the page, so it is listed in the
+ * popup but not announced. An agent of one type opening many tabs shows one
+ * notification per 10 seconds; each tab is still listed and counted.
+ */
+function notifyAgentDetected(agent: AgentIdentity): void {
+  if (!state.notificationsEnabled || isDevToolsOnlyAgent(agent)) return;
+  const now = Date.now();
+  const last = lastAgentNoticeAt.get(agent.type);
+  if (last !== undefined && now - last < AGENT_NOTICE_COALESCE_MS) return;
+  lastAgentNoticeAt.set(agent.type, now);
+
+  const name = boundForNotification(AGENT_DISPLAY_NAMES[agent.type] ?? agent.type);
+  const host = boundForNotification(hostOf(agent.originUrl) ?? '');
+  const where = host ? `Seen in a tab on ${host}.` : 'Seen in a tab.';
+  killSwitchShortcut().then((shortcut) => {
+    const stop = shortcut
+      ? `press ${shortcut} (kill switch).`
+      : 'use Kill Switch in the AI Browser Guard popup. You can give it a shortcut at chrome://extensions/shortcuts.';
+    showNoticeNotification(
+      `Agent detected: ${name}`,
+      `${where} To close every tab an agent controls and revoke all delegations, ${stop}`,
+      { enabled: state.notificationsEnabled },
+    );
+  }).catch(() => { /* notification is an aid; the agent is listed regardless */ });
+}
+
+/**
+ * The key currently bound to the kill switch, or '' when none is. The user can
+ * change or remove it, and Chrome leaves it unbound when another extension
+ * already holds the suggested key, so the manifest default cannot be assumed.
+ */
+async function killSwitchShortcut(): Promise<string> {
+  if (typeof chrome.commands?.getAll !== 'function') return '';
+  try {
+    const commands = await chrome.commands.getAll();
+    return commands.find((c) => c.name === 'kill-switch')?.shortcut ?? '';
+  } catch {
+    return '';
+  }
+}
 
 async function handleTabRemoved(tabId: number): Promise<void> {
   state.tabHosts.delete(tabId);
