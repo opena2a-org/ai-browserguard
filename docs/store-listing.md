@@ -8,7 +8,7 @@ AI Browser Guard
 
 ## Detailed Description
 
-BETA — AI Browser Guard is in active development. We are building the security infrastructure that the AI agent ecosystem needs, and we want your feedback to get it right. Report issues or suggest features: https://github.com/opena2a-org/AI-BrowserGuard/issues
+BETA: AI Browser Guard is in active development. We are building the security infrastructure that the AI agent ecosystem needs, and we want your feedback to get it right. Report issues or suggest features: https://github.com/opena2a-org/AI-BrowserGuard/issues
 
 AI Browser Guard detects when AI automation frameworks take control of your browser and gives you tools to manage what they can do.
 
@@ -19,7 +19,7 @@ When an AI agent (Playwright, Puppeteer, Selenium, Anthropic Computer Use, OpenA
 - Detects the takeover using multiple signals: WebDriver flags, Chrome DevTools Protocol markers, behavioral analysis of mouse/keyboard patterns, and framework-specific fingerprints
 - Shows detection status in the popup with confidence level and detection method
 - Logs the agent activity it can observe in a session timeline
-- Can read the site's published safety declaration (/.well-known/ai-safety.txt) and show what the site claims about its own content — off by default, display-only (see PRIVACY)
+- Can read the site's published safety declaration (/.well-known/ai-safety.txt) and show what the site claims about its own content (off by default, display-only; see PRIVACY)
 
 SCOPE AND LIMITATIONS
 
@@ -31,15 +31,15 @@ FIVE CORE FEATURES
    Identifies automation frameworks without requiring agents to self-identify. Uses WebDriver flag detection, CDP connection scanning, behavioral heuristics (click precision, typing cadence, synthetic events), and framework fingerprinting.
 
 2. Emergency Kill Switch
-   One-click stop. Revokes delegated permissions, dispatches a page-realm stop to in-page automation, and closes the tabs an agent controls (the real interruption of an in-progress action). It does not terminate an external CDP session -- an extension cannot -- and a persistent external driver can reopen a tab. Keyboard shortcut: Ctrl+Shift+K (Cmd+Shift+K on Mac).
+   One-click stop. Revokes delegated permissions, dispatches a page-realm stop to in-page automation, and closes the tabs an agent controls (the real interruption of an in-progress action). It does not terminate an external CDP session (an extension cannot), and a persistent external driver can reopen a tab. Keyboard shortcut: Ctrl+Shift+K (Cmd+Shift+K on Mac).
 
 3. Delegation Wizard
    Define what agents can and cannot do before they connect:
    - Read-Only: Navigate and read, no clicking or typing
-   - Limited: Interact with specific sites you choose — and name sites the agent must never touch — with time limits (15min / 1hr / 4hr)
+   - Limited: Interact with specific sites you choose, and name sites the agent must never touch, with time limits (15min / 1hr / 4hr)
    - Full Access: Everything allowed, with logging and alerts
 
-   An optional Browser-layer blocking setting (off by default) enforces the sites you blocked below the page, at the browser's network layer, for tabs under an active delegation. It blocks the paths to a blocked domain that in-page protection cannot reach — page requests, hidden image requests, background workers, and navigating there — and cannot be undone by a page tampering with in-page protections. (WebSocket connections are the one exception this layer does not block; a future update will close that gap.) While it is active on a delegated tab, Chrome shows its standard "AI Browser Guard has started debugging this browser" bar; enforcement and the bar are removed the moment the delegation ends, the tab closes, or you turn it off. It never touches tabs you have not delegated.
+   An optional Browser-layer blocking setting (off by default) enforces the sites you blocked below the page, at the browser's network layer, for tabs under an active delegation. It blocks the paths to a blocked domain that in-page protection cannot reach (page requests, hidden image requests, background workers, and navigating there), and cannot be undone by a page tampering with in-page protections. (WebSocket connections are the one exception this layer does not block; a future update will close that gap.) While it is active on a delegated tab, Chrome shows its standard "AI Browser Guard has started debugging this browser" bar; enforcement and the bar are removed the moment the delegation ends, the tab closes, or you turn it off. It never touches tabs you have not delegated.
 
 4. Boundary Violation Alerts
    When an IN-PAGE agent attempts a scripted navigation, form submission, click, keystroke, or new-tab open outside its delegation scope, the action is blocked (best-effort) and you receive a notification showing what was attempted, which rule blocked it, and the option to allow it once. External CDP frameworks drive via native input these alerts cannot see; for those, rely on detection and the kill switch. When a download is cancelled, for any kind of agent, you get a notification that says why, unless notifications are turned off; a cancelled download cannot be resumed, so it has no allow-once option. A download from the site an agent was detected on that was not seen starting in the agent's tab is left to finish, and you get a notification saying it was not stopped. (DOM reads, injected scripts, and screenshots are not blocked; use the kill switch to close the agent's tab.)
@@ -51,7 +51,7 @@ PRIVACY
 
 By default, all processing happens locally on your device and the extension makes zero network requests. No analytics, no telemetry, no tracking. Session logs and settings are stored in chrome.storage.local and deleted when you uninstall.
 
-Four optional features make network requests, are off by default, and only act after you explicitly enable them. Three contact OpenA2A's own servers: AIM identity lookup and registry trust lookup (which send only the detected agent type, such as "playwright", to look up a trust score), and anonymized contribution (which shares anonymized detection summaries to improve community threat intelligence). The fourth, site safety declarations, requests /.well-known/ai-safety.txt from the website an AI agent has been detected on — the one feature that contacts a website you visit instead of an OpenA2A server. That request carries nothing about you (no cookies, no page address, no referrer), follows no redirects, runs only over HTTPS, and runs only while an agent is detected. Results are cached locally for 24 hours, and turning the setting off deletes every stored declaration. Declarations are display-only: self-asserted claims the extension does not verify, and they never change what it detects, scores, or blocks. None of these features transmit your URLs, page content, keystrokes, or identity, and each can be turned off with one click.
+Four optional features make network requests, are off by default, and only act after you explicitly enable them. Three contact OpenA2A's own servers: AIM identity lookup and registry trust lookup (which send only the detected agent type, such as "playwright", to look up a trust score), and anonymized contribution (which shares anonymized detection summaries to improve community threat intelligence). The fourth, site safety declarations, requests /.well-known/ai-safety.txt from the website an AI agent has been detected on. It is the one feature that contacts a website you visit instead of an OpenA2A server. That request carries nothing about you (no cookies, no page address, no referrer), follows no redirects, runs only over HTTPS, and runs only while an agent is detected. Results are cached locally for 24 hours, and turning the setting off deletes every stored declaration. Declarations are display-only: self-asserted claims the extension does not verify, and they never change what it detects, scores, or blocks. None of these features transmit your URLs, page content, keystrokes, or identity, and each can be turned off with one click.
 
 See full privacy policy: https://opena2a.org/aibrowserguard/privacy
 
@@ -61,18 +61,18 @@ This extension requires host access to all URLs because AI agents can operate on
 
 ABOUT OPENA2A
 
-AI Browser Guard is built by OpenA2A, an open-source security platform building infrastructure for the AI agent ecosystem. AI agents are already making decisions, calling APIs, and accessing production data — without identity, visibility, or accountability. One compromised or misaligned agent can silently exfiltrate data, escalate privileges, or delete critical systems, and most organizations won't notice until damage is done.
+AI Browser Guard is built by OpenA2A, an open-source security platform building infrastructure for the AI agent ecosystem. AI agents are already making decisions, calling APIs, and accessing production data without identity, visibility, or accountability. One compromised or misaligned agent can silently exfiltrate data, escalate privileges, or delete critical systems, and most organizations won't notice until damage is done.
 
 OpenA2A builds the tools to close that gap. 4 npm packages published, 6 security PRs accepted into OpenClaw (205K+ stars), and 2,500+ lines of security code merged into projects used by millions. Our ecosystem includes:
 
-- AIM (Agent Identity Management) — Cryptographic identity, trust scoring, capability-based access control
-- HackMyAgent — 147+ security checks, 75 adversarial attack payloads, OASB compliance scoring
-- Secretless AI — Keeps secrets out of AI context windows across Claude Code, Cursor, Copilot, Windsurf
-- ARP (Agent Runtime Protection) — Multi-layer runtime security monitoring and enforcement
-- OASB (Open Agent Security Benchmark) — 222 attack scenarios across 10 MITRE ATLAS techniques
-- DVAA (Damn Vulnerable AI Agent) — Intentionally vulnerable agents for learning and red-teaming
+- AIM (Agent Identity Management): Cryptographic identity, trust scoring, capability-based access control
+- HackMyAgent: 147+ security checks, 75 adversarial attack payloads, OASB compliance scoring
+- Secretless AI: Keeps secrets out of AI context windows across Claude Code, Cursor, Copilot, Windsurf
+- ARP (Agent Runtime Protection): Multi-layer runtime security monitoring and enforcement
+- OASB (Open Agent Security Benchmark): 222 attack scenarios across 10 MITRE ATLAS techniques
+- DVAA (Damn Vulnerable AI Agent): Intentionally vulnerable agents for learning and red-teaming
 
-AI agents should be powerful — but never unaccountable.
+AI agents should be powerful, but never unaccountable.
 
 Learn more: https://opena2a.org
 Source code: https://github.com/opena2a-org/AI-BrowserGuard
@@ -109,7 +109,7 @@ Required to schedule periodic checks for delegation rule expiration and detectio
 Required to alert the user when an AI agent attempts an action that violates the active delegation rules.
 
 ### debugger
-Required to detect when an automation framework (Playwright, Puppeteer) attaches a Chrome DevTools Protocol (CDP) debugger to the browser — one of the core, hard-to-spoof signals that an AI agent has taken control — and, when the user enables the optional Browser-layer blocking setting, to attach a CDP session to tabs the user has delegated to an agent so network requests to the user's blocked sites are blocked at the browser layer, and so a download that starts in such a tab can be told apart from a download in any other tab. The extension does not read page content or inject code through the debugger, and it detaches when the delegation ends, the tab closes, or the setting is turned off.
+Required to detect when an automation framework (Playwright, Puppeteer) attaches a Chrome DevTools Protocol (CDP) debugger to the browser (one of the core, hard-to-spoof signals that an AI agent has taken control) and, when the user enables the optional Browser-layer blocking setting, to attach a CDP session to tabs the user has delegated to an agent so network requests to the user's blocked sites are blocked at the browser layer, and so a download that starts in such a tab can be told apart from a download in any other tab. The extension does not read page content or inject code through the debugger, and it detaches when the delegation ends, the tab closes, or the setting is turned off.
 
 ### downloads
 Required to save a session report as a JSON file when you choose to export it from the popup, and to monitor the other downloads created while an agent is detected. Downloads created while no agent is detected are ignored. While an agent is detected, each download is recorded in the session log on your device. A download that Chrome reports starting in an agent's tab, on the debugger session Browser-layer blocking holds there, is treated as that agent's download: if your delegation does not permit downloads, it is cancelled, including a download you started there yourself. Downloads from other tabs are never cancelled.

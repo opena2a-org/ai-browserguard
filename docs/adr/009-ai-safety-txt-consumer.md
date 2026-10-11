@@ -1,11 +1,11 @@
-# ADR-009: ai-safety.txt Consumer — Reading Third-Party Domain Declarations
+# ADR-009: ai-safety.txt Consumer (Reading Third-Party Domain Declarations)
 
 **Status:** Accepted
 **Date:** 2026-07-16
-**Refines:** ADR-006 (opt-in network features) — specifically its "the page origin
+**Refines:** ADR-006 (opt-in network features), specifically its "the page origin
 is used only as a local cache key and is never sent" constraint and the privacy
 policy's "the only servers it can contact" claim.
-**Constrained by:** ADR-008 (enforcement scope — display-only), ADR-003 (local-only
+**Constrained by:** ADR-008 (enforcement scope: display-only), ADR-003 (local-only
 engineering measures, still in force).
 
 ## Context
@@ -31,9 +31,9 @@ says we contact only our own servers.
 ADR-006 is binding on two points that a naive design walks straight through:
 
 1. *"The page origin is used only as a local cache key and is never sent."*
-2. Privacy policy §5: *"The only servers it can contact -- and only when you opt
-   into the features in section 2a -- are OpenA2A's own `aim.opena2a.org` and
-   `api.oa2a.org`."*
+2. Privacy policy §5: *"The only servers it can contact [...] are OpenA2A's own
+   `aim.opena2a.org` and `api.oa2a.org`"*, and only *"when you opt into the
+   features in section 2a."*
 
 The second is the harder one. It is a **categorical claim about the set of
 reachable hosts**, and a `/.well-known/` fetch expands that set to "any origin an
@@ -43,7 +43,7 @@ extension was rejected by the Web Store once already (v0.3.0, "Purple Potassium"
 
 ### What the disclosure actually is
 
-The roadmap framing — "this reveals the user's browsing to the domain" — is
+The roadmap framing ("this reveals the user's browsing to the domain") is
 imprecise, and the imprecision matters because it leads to over-claiming in the
 policy text.
 
@@ -54,8 +54,8 @@ visit; the visit is what triggered it.
 
 What the origin actually learns that it did not already know: **that something on
 the visiting client checked for an ai-safety.txt declaration.** Correlatable by IP
-and timing to the page request it already logged. That is a fingerprinting signal
-— it distinguishes a client running a declaration-consuming tool from one that is
+and timing to the page request it already logged. That is a fingerprinting signal:
+it distinguishes a client running a declaration-consuming tool from one that is
 not, and a hostile origin could use it to serve declaration-aware content.
 
 That is a real disclosure and it is why this ADR exists. It is also a materially
@@ -65,7 +65,7 @@ true thing rather than the larger false one.
 Not verified empirically: whether Chrome attaches an identifying
 `Origin: chrome-extension://<id>` header. Because `host_permissions` already
 includes `<all_urls>`, the request is not treated as a CORS request and the header
-is likely omitted — but we have not confirmed this against a live server, so
+is likely omitted, but we have not confirmed this against a live server, so
 **every disclosure statement below is written to be true either way** and none of
 them rests on that header's absence. If we later want to claim the extension is
 not identifiable by name, that claim requires a server-side header capture first.
@@ -118,7 +118,7 @@ can answer for the domain:
 - **`referrerPolicy: 'no-referrer'`.** No page URL, no referrer.
 - **HTTPS-only.** A non-HTTPS page origin is skipped entirely, not upgraded. Draft
   §5.4: a declaration retrieved over an unauthenticated channel MUST NOT be treated
-  as more trustworthy than one not retrieved at all — so we do not retrieve it.
+  as more trustworthy than one not retrieved at all, so we do not retrieve it.
   Upgrading `http://` to `https://` is also rejected: it would contact an origin
   the agent did not load.
 
@@ -130,7 +130,7 @@ Every prior network path (AIM, registry) targets a fixed, HTTPS-validated,
 OpenA2A-controlled base URL. This one targets a URL derived from a hostile input.
 Required, all enforced in `src/aisafety/client.ts`:
 
-- HTTPS-only origin, parsed with `new URL()` (never string prefix matching —
+- HTTPS-only origin, parsed with `new URL()` (never string prefix matching:
   `http://localhost@attacker.com` passes a naive `startsWith`).
 - `AbortSignal.timeout(5000)`.
 - **Response size cap (64 KB), enforced while streaming** on every path Chrome
@@ -178,11 +178,11 @@ truncation is a spoof primitive, not a cosmetic choice:
 
 Under `text-overflow: ellipsis` that reads as `https://google.com.aaaa…`. The
 parser rejects embedded credentials, which kills the `https://google.com@evil.com`
-form — but padding a subdomain needs no credentials, so **no parser rule closes
+form, but padding a subdomain needs no credentials, so **no parser rule closes
 the class.** The renderer does: values wrap and are never elided
 (`ai-safety-row.ts`, pinned by `ai-safety-row.test.ts`), and the parser caps a
 URI at 255 chars so wrapping cannot be turned into a wall of text. `new URL()`
-normalisation carries the rest — a confusable host resolves to its punycode, an
+normalisation carries the rest: a confusable host resolves to its punycode, an
 RTL override is percent-encoded. This punycodes legitimate IDN too
 (`münchen.de` → `xn--mnchen-3ya.de`), which is the intended trade: the punycode
 form is unambiguous, and rendering raw unicode is exactly what makes a confusable
@@ -191,7 +191,7 @@ host work.
 `Attestation` is parsed and displayed but **not dereferenced**. Draft §5.2 says a
 consumer SHOULD retrieve it, but also that it MUST confirm the record corresponds
 to the domain and comes from a verifier the consumer trusts. Following an
-attacker-supplied URI would contact a **second** attacker-chosen origin — a
+attacker-supplied URI would contact a **second** attacker-chosen origin, a
 strictly larger disclosure than this ADR authorizes, and a redirect-to-anywhere
 primitive. Out of scope; needs its own ADR.
 
@@ -205,7 +205,7 @@ zero-network and the ADR-006 disclosure stays true.
 ### 6. Disclosure surfaces, updated in lockstep
 
 The reachable-host set changes from "OpenA2A's own two servers" to "OpenA2A's two
-servers, plus — only with this setting on, and only while an agent is detected —
+servers, plus (only with this setting on, and only while an agent is detected)
 the origin that agent is operating on." Per ADR-006, drift here is a disclosure
 bug, so:
 
@@ -216,14 +216,14 @@ bug, so:
 - **The store listing and the website are deliberately NOT updated here.**
   `docs/chrome-web-store-description.md` and `docs/store-listing.md` are pinned to
   the v0.5.0 submission and describe the build that is currently live. Editing
-  them now would make them claim a feature the shipped extension does not have —
-  drift in the opposite direction, and just as inaccurate. Same for the
+  them now would make them claim a feature the shipped extension does not have,
+  which is drift in the opposite direction, and just as inaccurate. Same for the
   opena2a-website pages. Both are updated at the release that first ships this,
   gated in `docs/testing/release-smoke.md`.
 - **ADR-006's "four surfaces" is an undercount, and that matters.** It lists
   policy, README, listing, and settings UI. But the policy a user actually reads
-  is served from **a different repo** —
-  `opena2a-website/app/aibrowserguard/privacy/page.tsx` — and it is the
+  is served from **a different repo**
+  (`opena2a-website/app/aibrowserguard/privacy/page.tsx`), and it is the
   disclosure of record; `docs/privacy-policy.html` here is only a source copy.
   The product page and the store-launch blog post carry network claims too. Five
   surfaces, across two repos. The release gate enumerates them by path.

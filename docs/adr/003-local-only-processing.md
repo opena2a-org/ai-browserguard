@@ -14,8 +14,8 @@
 ## Context
 
 AI Browser Guard is a security tool that monitors all browser activity to
-detect automation frameworks. This privileged position -- content scripts on
-every page, access to DOM events, visibility into navigation patterns --
+detect automation frameworks. This privileged position (content scripts on
+every page, access to DOM events, visibility into navigation patterns)
 means any data exfiltration, even accidental, would be a severe privacy
 violation.
 

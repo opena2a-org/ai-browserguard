@@ -12,7 +12,7 @@ rule engine must decide: allow or block.
 Two evaluation strategies exist:
 
 - **Fail-open (default-allow):** If no rule explicitly blocks an action, it
-  is permitted. This is simpler but dangerous for a security boundary --
+  is permitted. This is simpler but dangerous for a security boundary:
   any gap in rule coverage becomes an uncontrolled pathway.
 - **Fail-closed (default-deny):** If no rule explicitly allows an action,
   it is blocked. This is safer but may initially over-restrict legitimate

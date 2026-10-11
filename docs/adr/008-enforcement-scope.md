@@ -1,4 +1,4 @@
-# ADR-008: Enforcement Scope — In-Page Automation vs External CDP Drivers
+# ADR-008: Enforcement Scope (In-Page Automation vs External CDP Drivers)
 
 **Status:** Accepted
 **Date:** 2026-07-09
@@ -36,18 +36,18 @@ observation limit rather than an absence of activity.
 ## The capability boundary
 
 An installed browser extension cannot apply per-action policy to, or categorically
-stop, an external CDP/WebDriver driver — this is the extension security model.
+stop, an external CDP/WebDriver driver. This is the extension security model.
 Verified capability survey (sources in the review doc):
 
 | Mechanism | Layer | Stops external CDP? | Cost |
 |---|---|---|---|
-| `RemoteDebuggingAllowed=false` | managed policy | **Fully** — removes the `--remote-debugging-port`/`-pipe` transport | Managed Chrome / MDM / GPO; admin rights |
-| Chrome ≥136 default | built-in | **Partially** — blocks remote debugging of the *default* profile by default; a throwaway profile is still drivable | Zero (already shipping) |
-| Native-messaging host kills the CDP port/process | native host | **Reactive** — can terminate the port/driver; it can relaunch | User installs a signed binary + host manifest |
+| `RemoteDebuggingAllowed=false` | managed policy | **Fully**: removes the `--remote-debugging-port`/`-pipe` transport | Managed Chrome / MDM / GPO; admin rights |
+| Chrome ≥136 default | built-in | **Partially**: blocks remote debugging of the *default* profile by default; a throwaway profile is still drivable | Zero (already shipping) |
+| Native-messaging host kills the CDP port/process | native host | **Reactive**: can terminate the port/driver; it can relaunch | User installs a signed binary + host manifest |
 | CDP MITM proxy filters commands | launch-control | **Only if *you* launch the browser**; not extension-reachable | Must own browser launch |
-| `chrome.tabs.remove` / `discard` | extension | **Partially** — destroys the page target (interrupts the current action); a browser-level driver can reopen | Trivial |
-| declarativeNetRequest blocklist | extension | **Partially** — coarse domain blocklist; no per-initiator attribution | Trivial |
-| `chrome.debugger.attach` contention | extension | **No** — one client per target; cannot steal/evict | Trivial |
+| `chrome.tabs.remove` / `discard` | extension | **Partially**: destroys the page target (interrupts the current action); a browser-level driver can reopen | Trivial |
+| declarativeNetRequest blocklist | extension | **Partially**: coarse domain blocklist; no per-initiator attribution | Trivial |
+| `chrome.debugger.attach` contention | extension | **No**: one client per target; cannot steal/evict | Trivial |
 
 The only categorical prevention is `RemoteDebuggingAllowed=false` (admin-only);
 Chrome 136+ already covers the highest-value case (the default profile) by
@@ -90,27 +90,27 @@ the specific detected agent.
 
 Ordered by value/cost. None shipped; each gets its own ADR before code.
 
-- **R1 — Posture guidance (cheap, high value).** Detect Chrome version and, when
+- **R1: Posture guidance (cheap, high value).** Detect Chrome version and, when
   ≥136, tell the user their default profile is already protected from remote
   debugging; for managed environments, surface a `RemoteDebuggingAllowed=false`
   explainer. Extension-only; ships next.
   *Shipped 0.7.0 (version half):* external-agent cards state the browser's own
-  posture (`src/delegation/posture.ts`) — Chrome 136+ already refuses remote
+  posture (`src/delegation/posture.ts`): Chrome 136+ already refuses remote
   debugging of the default profile; older Chrome gets the concrete fix (update).
   Version-derived only; the managed-policy explainer half stays open with R4.
-- **R2 — declarativeNetRequest domain blocklist (opt-in).** Coarse, zero-banner
+- **R2: declarativeNetRequest domain blocklist (opt-in).** Coarse, zero-banner
   egress blocklist, scoped honestly (no per-initiator attribution). Also the
-  home for **deterministic WebSocket blocking** — the one blocked-domain egress
+  home for **deterministic WebSocket blocking**, the one blocked-domain egress
   vector the ADR-007 CDP layer does not close (the CDP `Fetch` domain cannot
   pause ws handshakes; see ADR-007 Correction 3). DNR blocks
   `resourceTypes: ['websocket']` reliably and supports per-tab session rules, but
   needs the `declarativeNetRequest` permission (a new install-time permission and
   CWS re-review), which is why it is its own increment rather than folded into
   0.7.0.
-- **R3 — Native-messaging companion (opt-in).** A signed host that can detect a
+- **R3: Native-messaging companion (opt-in).** A signed host that can detect a
   listening CDP port and offer to terminate the driver process. Reactive; high
-  distribution cost — gauge demand first.
-- **R4 — Managed-deployment mode.** Ship an ADMX/plist template and docs pairing
+  distribution cost, so gauge demand first.
+- **R4: Managed-deployment mode.** Ship an ADMX/plist template and docs pairing
   ABG (detection/audit) with `RemoteDebuggingAllowed=false` (prevention). The only
   path to categorical prevention, and where ABG is most useful in an enterprise.
 
@@ -126,7 +126,7 @@ forcing `chrome.debugger` detach (no API).
 
 ### Negative
 - The headline scope narrows from "blocks AI agents" to "detects AI agents,
-  closes their tabs, and helps you prevent them" — a real reduction in stated
+  closes their tabs, and helps you prevent them". That is a real reduction in stated
   capability, and the accurate one.
 - Closing tabs is disruptive; the kill switch states that it closes agent tabs.
 
