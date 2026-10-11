@@ -9,6 +9,9 @@
  * communicate with the background via chrome.runtime.
  */
 
+import { classifyViolationSeverity, allowsOneTimeOverride } from '../alerts/boundary';
+import type { AgentCapability } from '../types/agent';
+
 const TOAST_CONTAINER_ID = 'abg-toast-container';
 const MAX_VISIBLE_TOASTS = 3;
 const AUTO_DISMISS_MS = 8000;
@@ -37,7 +40,11 @@ export interface ToastOptions {
   capability: string;
   url: string;
   reason: string;
-  /** "Allow once" — one-shot bypass for this exact (capability, url). */
+  /**
+   * "Allow once" — one-shot bypass for this exact (capability, url). Shown
+   * only when the block's severity is medium or low, the same rule the
+   * Chrome notification applies; a high or critical block offers no override.
+   */
   onAllowOnce?: () => void;
   /** "Whitelist this site" — permanent allow for the domain. */
   onWhitelist?: (domain: string) => void;
@@ -228,11 +235,18 @@ export function showBlockedToast(options: ToastOptions): () => void {
 
   // Quick-action row: Allow once · Whitelist site · Settings.
   // Every block path renders the same set of options so the user has the
-  // same recovery affordances regardless of which detector fired.
+  // same recovery affordances regardless of which detector fired. Allow once
+  // is withheld for high and critical blocks, classified exactly as the
+  // Chrome notification classifies them, so neither surface can let such a
+  // block through (#109).
   const actions = document.createElement('div');
   actions.className = 'abg-toast-actions';
 
-  if (onAllowOnce) {
+  const overridable = allowsOneTimeOverride(
+    classifyViolationSeverity(capability as AgentCapability, url),
+  );
+
+  if (onAllowOnce && overridable) {
     const allowOnceBtn = document.createElement('button');
     allowOnceBtn.className = 'abg-toast-btn abg-toast-btn-allow';
     allowOnceBtn.textContent = 'Allow once';
