@@ -52,7 +52,9 @@ const DASHES = [
   { pattern: /(?:^|\s)–(?:\s|$)/, message: 'spaced en dash' },
 ];
 // Setext underlines, thematic breaks and table delimiter rows are not prose.
-const DELIMITER_ROW = /^\s*\|?[\s:|-]*\|?\s*$/;
+// One character class, not overlapping quantifiers, so a long whitespace run
+// fails in linear time instead of backtracking for seconds.
+const DELIMITER_ROW = /^[\s|:-]*$/;
 
 const WHY_LABEL = /^\s{0,3}(?:#{1,6}\s+|\*\*|__)\s*why this (?:exists|matters)\b/i;
 const WHY_SETEXT_TEXT = /^\s{0,3}why this (?:exists|matters)\b/i;
