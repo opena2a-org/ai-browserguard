@@ -135,7 +135,7 @@ in the build, whatever its default.
 
 | Surface | Where | Status |
 |---|---|---|
-| Store listing | `docs/chrome-web-store-description.md`, `docs/store-listing.md` | pinned to v0.5.0; rewrite at release |
+| Store listing | `docs/chrome-web-store-description.md`, `docs/store-listing.md` | rewritten in 0.6.0; confirm it matches the build at each submission |
 | **Live privacy policy** | `opena2a-website/app/aibrowserguard/privacy/page.tsx` (**different repo**) | still says "only servers it can contact" |
 | Product page | `opena2a-website/app/aibrowserguard/page.tsx` | check its network claims |
 | Store-launch blog post | `opena2a-website/app/blogs/ai-browser-guard-chrome-web-store/page.tsx` | check its network claims |
@@ -144,6 +144,13 @@ All four were deliberately NOT edited when the feature was built: they correctly
 describe the build that is live, and editing them early would claim a feature
 users do not have, which is drift in the other direction. Write the new text at release
 from `docs/privacy-policy.html` §2a, §5 and §7, which are current.
+
+> **Correction (2026-10-11).** Site safety declarations first shipped in 0.6.0,
+> and that release rewrote `docs/chrome-web-store-description.md` and
+> `docs/store-listing.md` to disclose them, so the store listing no longer
+> carries the v0.5.0 claim. The Store listing row above now says so. The three
+> opena2a-website rows are in another repository, are not checked here, and
+> keep their status until someone confirms them there.
 
 Note that ADR-006 speaks of "all four surfaces (policy, README, listing, settings
 UI)". That enumeration is incomplete, and this is where it bites: the policy a

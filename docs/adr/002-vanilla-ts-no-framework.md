@@ -44,6 +44,19 @@ or dynamic imports.
 - TypeScript strict mode (`tsconfig.json`) provides type safety without
   needing framework-specific type wrappers.
 
+> **Correction (2026-10-11).** The 88 KB total above does not match the build.
+> Measured on 2026-10-11 after `npm run build`: `dist/popup/index.html` is 4,760
+> bytes, `dist/popup/styles.css` 28,557 bytes, `dist/popup/popup.js` 116,342
+> bytes without its inline source map, and `fonts/inter-latin.woff2` 230,192
+> bytes. The popup is therefore about 380 KB (379,851 bytes) with the font,
+> which alone is larger than the 88 KB stated. `popup.js` ships with its source
+> map inline (`sourcemap: 'inline'` in `vite.config.ts`), which brings it to
+> 477,412 bytes and the popup to 740,921 bytes as packaged. The React and Preact
+> figures in the same bullet were compared against the 88 KB total and were not
+> re-measured. The decision is unchanged: the popup has no UI framework and no
+> runtime dependencies. To re-measure:
+> `npm run build && wc -c dist/popup/index.html dist/popup/styles.css dist/popup/popup.js dist/fonts/inter-latin.woff2`.
+
 ### Negative
 - DOM updates require manual `document.createElement`, `addEventListener`,
   and element property assignment. This is more verbose than declarative

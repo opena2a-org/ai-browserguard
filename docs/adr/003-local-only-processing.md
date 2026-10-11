@@ -43,6 +43,16 @@ measures:
 - **No update check endpoint.** Chrome handles extension updates via the
   Web Store; no custom update mechanism.
 
+> **Correction (2026-10-11).** `src/popup/index.html` has no Content Security
+> Policy meta tag, and `manifest.json` declares no `content_security_policy`
+> key. External scripts are blocked by Chrome's default Manifest V3 policy for
+> extension pages, which limits scripts to the extension's own files
+> (`script-src 'self'`) and applies because the manifest does not override it.
+> Manifest V3 also
+> rejects an extension-page policy that allows a remote script host. The outcome
+> the "No external scripts" bullet describes holds, but the popup HTML does not
+> provide it.
+
 Storage uses `chrome.storage.local` exclusively, which is sandboxed to the
 extension and not accessible to web pages or other extensions.
 
