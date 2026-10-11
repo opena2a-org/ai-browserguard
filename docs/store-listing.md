@@ -45,7 +45,7 @@ FIVE CORE FEATURES
    When an IN-PAGE agent attempts a scripted navigation, form submission, click, keystroke, or new-tab open outside its delegation scope, the action is blocked (best-effort) and you receive a notification showing what was attempted, which rule blocked it, and the option to allow it once. External CDP frameworks drive via native input these alerts cannot see; for those, rely on detection and the kill switch. When a download is cancelled, for any kind of agent, you get a notification that says why, unless notifications are turned off; a cancelled download cannot be resumed, so it has no allow-once option. A download from the site an agent was detected on that was not seen starting in the agent's tab is left to finish, and you get a notification saying it was not stopped. (DOM reads, injected scripts, and screenshots are not blocked; use the kill switch to close the agent's tab.)
 
 5. Session Timeline
-   Chronological log of all agent actions: timestamps, action types, target URLs, element selectors, and whether each action was allowed or blocked. Last 5 sessions retained.
+   Chronological log of the agent actions it can observe: timestamps, action types, target URLs, element selectors, and whether each action was allowed or blocked. Last 5 sessions retained.
 
 PRIVACY
 
@@ -115,4 +115,4 @@ Required to detect when an automation framework (Playwright, Puppeteer) attaches
 Required to save a session report as a JSON file when you choose to export it from the popup, and to monitor the other downloads created while an agent is detected. Downloads created while no agent is detected are ignored. While an agent is detected, each download is recorded in the session log on your device. A download that Chrome reports starting in an agent's tab, on the debugger session Browser-layer blocking holds there, is treated as that agent's download: if your delegation does not permit downloads, it is cancelled, including a download you started there yourself. Downloads from other tabs are never cancelled.
 
 ### host_permissions (<all_urls>)
-AI agents can operate on any website. The detection content script must run on all pages to identify automation frameworks (WebDriver flags, CDP markers, behavioral patterns). Limiting to specific domains would leave users unprotected on unlisted sites. No page content is read or transmitted; only automation indicators are analyzed locally.
+AI agents can operate on any website. The detection content script must run on all pages to identify automation frameworks (WebDriver flags, CDP markers, behavioral patterns). Limiting to specific domains would leave users unprotected on unlisted sites. Page content is analyzed locally and is never transmitted.
