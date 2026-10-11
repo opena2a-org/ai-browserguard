@@ -46,12 +46,13 @@ or dynamic imports.
 
 > **Correction (2026-10-11).** The 88 KB total above does not match the build.
 > Measured on 2026-10-11 after `npm run build`: `dist/popup/index.html` is 4,760
-> bytes, `dist/popup/styles.css` 28,557 bytes, `dist/popup/popup.js` 116,342
-> bytes without its inline source map, and `fonts/inter-latin.woff2` 230,192
-> bytes. The popup is therefore about 380 KB (379,851 bytes) with the font,
-> which alone is larger than the 88 KB stated. `popup.js` ships with its source
-> map inline (`sourcemap: 'inline'` in `vite.config.ts`), which brings it to
-> 477,412 bytes and the popup to 740,921 bytes as packaged. The React and Preact
+> bytes, `dist/popup/styles.css` 28,557 bytes, `dist/popup/popup.js` about
+> 117 KB without its inline source map, and `fonts/inter-latin.woff2` 230,192
+> bytes. The popup is therefore about 380 KB with the font, which alone is
+> larger than the 88 KB stated. `popup.js` ships with its source map inline
+> (`sourcemap: 'inline'` in `vite.config.ts`), which brings it to about 480 KB
+> and the popup to about 744 KB as packaged. The `popup.js` sizes are rounded
+> because they change whenever the popup's code does. The React and Preact
 > figures in the same bullet were compared against the 88 KB total and were not
 > re-measured. The decision is unchanged: the popup has no UI framework and no
 > runtime dependencies. To re-measure:
