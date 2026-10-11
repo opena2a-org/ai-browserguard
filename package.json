@@ -1,7 +1,7 @@
 {
   "name": "@opena2a/aibrowserguard",
   "version": "0.7.0",
-  "description": "AI Browser Guard - Detect and monitor AI agents in your browser and block their scripted navigations, form submissions, and downloads",
+  "description": "AI Browser Guard - Detect and monitor AI agents in your browser. For in-page automation, block scripted navigations and form submissions (best-effort). Cancel a download in an agent's tab when the opt-in Browser-layer blocking setting is on and the delegation does not permit downloads. The kill switch closes the tabs an agent controls; it does not end an external automation session.",
   "type": "module",
   "scripts": {
     "dev": "vite build --watch --mode development",

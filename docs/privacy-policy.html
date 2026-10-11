@@ -29,17 +29,17 @@
 </head>
 <body>
   <h1>AI Browser Guard - Privacy Policy</h1>
-  <p class="last-updated">Last updated: October 11, 2026</p>
+  <p class="last-updated">Last updated: October 12, 2026</p>
 
   <div class="highlight">
     <p><strong>Summary:</strong> By default, AI Browser Guard processes all data locally on your device and makes zero network requests. There is no analytics, telemetry, or tracking. The extension also offers optional network features (trust lookups, anonymized contribution, and site safety declarations) that are turned <strong>off by default</strong> and act only after you explicitly opt in. When enabled, they transmit only a detected agent type and anonymized detection summaries -- never your URLs, page content, keystrokes, or identity. One of them, site safety declarations, requests a public file from the website your agent is on; it sends no cookies and nothing about you, but that website can see the request was made. See section 2a.</p>
   </div>
 
   <h2>1. What This Extension Does</h2>
-  <p>AI Browser Guard is a Chrome extension that detects and monitors AI agents operating in your browser sessions and blocks their scripted navigations, form submissions, and downloads. It provides:</p>
+  <p>AI Browser Guard is a Chrome extension that detects and monitors AI agents operating in your browser sessions. For in-page and injected automation it can also block scripted navigations and form submissions, on a best-effort basis. If your delegation does not permit downloads, it can cancel a download that Chrome reports starting in an agent's tab, for every kind of agent and including one you start there yourself, only while the Browser-layer blocking setting (off by default) is on. The delegation does not have to block a site for this. Beyond that it cannot block external automation frameworks that drive the browser from outside the page; for those it provides detection, alerts, and a kill switch that closes the tab. It provides:</p>
   <ul>
     <li>Detection of automated browser control (WebDriver flags, CDP connections, behavioral analysis)</li>
-    <li>An emergency kill switch to terminate agent access</li>
+    <li>An emergency kill switch that revokes delegations and closes the tabs an agent controls. It does not terminate an external automation session, and the program driving the browser can reopen a tab</li>
     <li>A delegation wizard to define access boundaries for AI agents</li>
     <li>Boundary violation alerts when agents attempt unauthorized actions</li>
     <li>A session timeline logging agent activity</li>

@@ -8,7 +8,7 @@ All file paths are relative to the repository root unless stated otherwise.
 
 ## 1. System Overview
 
-AI Browser Guard is a Manifest V3 Chrome extension that detects and monitors AI agents operating in browser sessions and blocks their scripted navigations, form submissions, synthetic input, new-tab opens, downloads, DOM writes through the principal DOM-write sinks, and agent network egress (`fetch`/`XHR`). (DOM reads, injected scripts, screenshots, and the DOM-write paths not yet wrapped are observed and logged but not yet blocked; see "Enforcement scope" under the Delegation Engine.) It runs entirely locally with zero external network calls and zero runtime dependencies beyond Chrome APIs.
+AI Browser Guard is a Manifest V3 Chrome extension that detects and monitors AI agents operating in browser sessions. For in-page / injected automation it blocks, best-effort in the page realm, scripted navigations, form submissions, synthetic input, new-tab opens, DOM writes through the principal DOM-write sinks, and agent network egress (`fetch`/`XHR`). It cannot enforce per-action policy against external frameworks that drive the browser over CDP with native input; against those it detects and alerts, and the kill switch closes the tabs the agent controls. Downloads are handled outside the page, for every kind of agent: one is cancelled only when Chrome reports it starting in an agent's tab, with the off-by-default Browser-layer blocking setting on and a delegation that withholds `download-file`, whether or not that delegation blocks a site. (DOM reads, injected scripts, screenshots, and the DOM-write paths not yet wrapped are observed and logged but not yet blocked; see "Enforcement scope" under the Delegation Engine.) It runs entirely locally with zero external network calls and zero runtime dependencies beyond Chrome APIs.
 
 The extension consists of three isolated execution contexts that communicate exclusively via `chrome.runtime.sendMessage`:
 
@@ -299,7 +299,7 @@ The owner can pause the guard from the popup without disabling the extension (`s
 
 ## 5. Kill Switch Mechanism
 
-The kill switch provides one-click revocation of all agent access. Implementation is in `src/killswitch/index.ts`.
+The kill switch is a one-click stop. It revokes delegations, dispatches a page-realm stop to in-page automation, and closes the tabs an agent controls, which is the step that interrupts an in-progress action. It does not terminate an external CDP session (an extension cannot), and a persistent external driver can reopen a tab. Implementation is in `src/killswitch/index.ts`.
 
 ### Activation Triggers
 
