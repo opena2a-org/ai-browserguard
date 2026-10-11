@@ -1,11 +1,11 @@
 /**
  * Release metadata consistency.
  *
- * The version is declared in manifest.json, package.json, and CHANGELOG.md.
- * build.js fails at build time if manifest and package drift, but that is not a
- * CI gate. This test makes the three-way version match (and the homepage URL
- * domain) a unit-test gate so a forgotten bump or a phishing-domain homepage is
- * caught in CI, not at the Web Store.
+ * The version is declared in manifest.json, package.json, CHANGELOG.md, and
+ * STATUS.md. build.js fails at build time if manifest and package drift, but
+ * that is not a CI gate. This test makes the version match (and the homepage
+ * URL domain) a unit-test gate so a forgotten bump or a phishing-domain
+ * homepage is caught in CI, not at the Web Store.
  */
 import { describe, it, expect } from 'vitest';
 import { readFileSync } from 'fs';
@@ -22,6 +22,11 @@ describe('release metadata is consistent', () => {
     const changelogVer = read('CHANGELOG.md').match(/^## ([\d.]+)/m)?.[1];
     expect(pkg.version).toBe(manifest.version);
     expect(changelogVer).toBe(manifest.version);
+  });
+
+  it('STATUS.md states the current version', () => {
+    const statusVer = read('STATUS.md').match(/currently at v(\d+\.\d+\.\d+)/)?.[1];
+    expect(statusVer).toBe(manifest.version);
   });
 
   it('homepage_url points to the official opena2a.org domain over https', () => {

@@ -6,7 +6,7 @@
 
 ## Stage rationale
 
-ai-browserguard is a Chrome MV3 extension currently at v0.4.0, published in the Chrome Web Store. Core agent-detection surface (Playwright, Puppeteer, Selenium, Anthropic Computer Use, OpenAI Operator) is mature, but the version is still pre-1.0 and the detection rule set continues to evolve with new AI browser-control tools.
+ai-browserguard is a Chrome MV3 extension currently at v0.7.0, published in the Chrome Web Store. Core agent-detection surface (Playwright, Puppeteer, Selenium, Anthropic Computer Use, OpenAI Operator) is mature, but the version is still pre-1.0 and the detection rule set continues to evolve with new AI browser-control tools.
 
 ## Stage definitions
 
