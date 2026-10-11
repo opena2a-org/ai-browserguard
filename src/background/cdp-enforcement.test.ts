@@ -12,6 +12,7 @@ import {
   reconcileTabs,
   isTabAttached,
   getAttachedTabs,
+  getTabEnforcementFault,
   _resetForTest,
   CDP_PROTOCOL_VERSION,
   TAB_DOWNLOAD_START_GRACE_MS,
@@ -371,6 +372,169 @@ describe('CDP enforcement orchestration', () => {
     onDetach._fire({ tabId: 12 }, 'target_closed');
     expect(isTabAttached(12)).toBe(false);
     expect(isTabDownloadWatched(12)).toBe(false);
+  });
+});
+
+describe('a fallback from the CDP layer is recorded for the tab (#110)', () => {
+  let attach: ReturnType<typeof vi.fn>;
+  let detach: ReturnType<typeof vi.fn>;
+  let sendCommand: ReturnType<typeof vi.fn>;
+  let onDetach: ReturnType<typeof createEventMock>;
+
+  beforeEach(() => {
+    _resetForTest();
+    attach = vi.fn(() => Promise.resolve());
+    detach = vi.fn(() => Promise.resolve());
+    sendCommand = vi.fn(() => Promise.resolve({}));
+    onDetach = createEventMock();
+    vi.stubGlobal('chrome', {
+      debugger: { attach, detach, sendCommand, onEvent: createEventMock(), onDetach },
+      runtime: { lastError: null, id: 'self' },
+    });
+    initCdpEnforcement({ getRuleForTab: () => makeRule() });
+  });
+
+  afterEach(() => {
+    _resetForTest();
+    vi.unstubAllGlobals();
+    vi.restoreAllMocks();
+  });
+
+  it('a tab with a session, and a tab never attached, have nothing recorded', async () => {
+    await attachTab(1);
+    expect(getTabEnforcementFault(1)).toBeNull();
+    expect(getTabEnforcementFault(2)).toBeNull();
+  });
+
+  it('a refused attach is recorded with the error Chrome gave', async () => {
+    attach.mockRejectedValueOnce(new Error('Another debugger is already attached to the tab with id: 7.'));
+    expect(await attachTab(7)).toBe(false);
+    expect(getTabEnforcementFault(7)).toEqual({
+      cause: 'attach-failed',
+      detail: 'Another debugger is already attached to the tab with id: 7.',
+      at: expect.any(Number),
+    });
+  });
+
+  it('a session Chrome attached and then refused Fetch.enable on is recorded as a failed attach', async () => {
+    initCdpEnforcement({ getRuleForTab: () => blockPatternRule() });
+    sendCommand.mockImplementation((_t: unknown, method: string) =>
+      method === 'Fetch.enable' ? Promise.reject(new Error('Not allowed')) : Promise.resolve({}));
+    expect(await attachTab(8)).toBe(false);
+    expect(isTabAttached(8)).toBe(false);
+    expect(getTabEnforcementFault(8)).toMatchObject({ cause: 'attach-failed', detail: 'Not allowed' });
+  });
+
+  it('a session held only to report downloads that Chrome refused Page.enable on is recorded as a failed attach', async () => {
+    // The rule blocks no site, so the session is dropped rather than kept for
+    // nothing. The tab still warrants one, so the drop is a fallback to report.
+    sendCommand.mockImplementation((_t: unknown, method: string) =>
+      method === 'Page.enable' ? Promise.reject(new Error('Not allowed')) : Promise.resolve({}));
+    expect(await attachTab(21)).toBe(false);
+    expect(isTabAttached(21)).toBe(false);
+    expect(detach).toHaveBeenCalledWith({ tabId: 21 });
+    expect(getTabEnforcementFault(21)).toEqual({ cause: 'attach-failed', detail: 'Not allowed', at: expect.any(Number) });
+  });
+
+  it('a blocked-site session that Chrome refused Page.enable on stays attached, with nothing recorded', async () => {
+    initCdpEnforcement({ getRuleForTab: () => blockPatternRule() });
+    sendCommand.mockImplementation((_t: unknown, method: string) =>
+      method === 'Page.enable' ? Promise.reject(new Error('Not allowed')) : Promise.resolve({}));
+    expect(await attachTab(22)).toBe(true);
+    expect(isTabAttached(22)).toBe(true);
+    expect(getTabEnforcementFault(22)).toBeNull();
+  });
+
+  it('a download-only session refused once is attached by the next reconcile, which clears the record', async () => {
+    sendCommand.mockImplementationOnce(() => Promise.reject(new Error('Not allowed')));
+    await reconcileTabs(new Set([23]));
+    expect(getTabEnforcementFault(23)).toMatchObject({ cause: 'attach-failed', detail: 'Not allowed' });
+    await reconcileTabs(new Set([23]));
+    expect(isTabAttached(23)).toBe(true);
+    expect(getTabEnforcementFault(23)).toBeNull();
+  });
+
+  it('the error text is kept as one short line', async () => {
+    attach.mockRejectedValueOnce(new Error(`first line\n  second line ${'x'.repeat(400)}`));
+    await attachTab(9);
+    const detail = getTabEnforcementFault(9)!.detail;
+    expect(detail.startsWith('first line second line x')).toBe(true);
+    expect(detail.length).toBe(160);
+  });
+
+  it('a rejection that is not an Error is recorded without text', async () => {
+    attach.mockRejectedValueOnce({ code: -32000 });
+    await attachTab(10);
+    expect(getTabEnforcementFault(10)).toMatchObject({ cause: 'attach-failed', detail: '' });
+  });
+
+  it('with no chrome.debugger to attach through, the tab is recorded as a failed attach', async () => {
+    vi.stubGlobal('chrome', { runtime: { lastError: null, id: 'self' } });
+    expect(await attachTab(11)).toBe(false);
+    expect(getTabEnforcementFault(11)).toMatchObject({ cause: 'attach-failed', detail: '' });
+  });
+
+  it('a session Chrome ends is recorded with the reason Chrome gave', async () => {
+    await attachTab(12);
+    onDetach._fire({ tabId: 12 }, 'canceled_by_user');
+    expect(isTabAttached(12)).toBe(false);
+    expect(getTabEnforcementFault(12)).toEqual({ cause: 'detached', detail: 'canceled_by_user', at: expect.any(Number) });
+  });
+
+  it('a detach event for a tab we hold no session on records nothing', () => {
+    onDetach._fire({ tabId: 13 }, 'target_closed');
+    expect(getTabEnforcementFault(13)).toBeNull();
+  });
+
+  it('detaching a tab ourselves records nothing, even when Chrome then reports the detach', async () => {
+    await attachTab(14);
+    await detachTab(14);
+    onDetach._fire({ tabId: 14 }, 'canceled_by_user');
+    expect(getTabEnforcementFault(14)).toBeNull();
+  });
+
+  it('the next attach that succeeds clears what was recorded', async () => {
+    attach.mockRejectedValueOnce(new Error('Another debugger is already attached'));
+    await reconcileTabs(new Set([15]));
+    expect(getTabEnforcementFault(15)).toMatchObject({ cause: 'attach-failed' });
+    await reconcileTabs(new Set([15]));
+    expect(isTabAttached(15)).toBe(true);
+    expect(getTabEnforcementFault(15)).toBeNull();
+  });
+
+  it('a retry that fails again keeps the tab recorded, with the newer error', async () => {
+    attach.mockRejectedValueOnce(new Error('first'));
+    await reconcileTabs(new Set([16]));
+    attach.mockRejectedValueOnce(new Error('second'));
+    await reconcileTabs(new Set([16]));
+    expect(getTabEnforcementFault(16)).toMatchObject({ cause: 'attach-failed', detail: 'second' });
+  });
+
+  it('a session Chrome ended is attached again by the next reconcile, which clears the record', async () => {
+    await reconcileTabs(new Set([17]));
+    onDetach._fire({ tabId: 17 }, 'canceled_by_user');
+    expect(getTabEnforcementFault(17)).toMatchObject({ cause: 'detached' });
+    await reconcileTabs(new Set([17]));
+    expect(attach).toHaveBeenCalledTimes(2);
+    expect(getTabEnforcementFault(17)).toBeNull();
+  });
+
+  it('a reconcile that no longer wants the tab drops what was recorded for it, and keeps other tabs', async () => {
+    attach.mockRejectedValue(new Error('Another debugger is already attached'));
+    await reconcileTabs(new Set([18, 19]));
+    expect(getTabEnforcementFault(18)).not.toBeNull();
+    await reconcileTabs(new Set([19]));
+    expect(getTabEnforcementFault(18)).toBeNull();
+    expect(getTabEnforcementFault(19)).toMatchObject({ cause: 'attach-failed' });
+    await reconcileTabs(new Set());
+    expect(getTabEnforcementFault(19)).toBeNull();
+  });
+
+  it('closing a tab whose attach failed drops what was recorded for it', async () => {
+    attach.mockRejectedValueOnce(new Error('Another debugger is already attached'));
+    await attachTab(20);
+    await detachTab(20);
+    expect(getTabEnforcementFault(20)).toBeNull();
   });
 });
 

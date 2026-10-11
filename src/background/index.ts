@@ -47,7 +47,9 @@ import {
   awaitTabDownloadStart,
   isTabDownloadWatched,
   isTabAttached,
+  getTabEnforcementFault,
 } from './cdp-enforcement';
+import type { BrowserLayerState } from '../delegation/enforceability';
 import { lookupAgentIdentity } from '../aim/client';
 import { lookupRegistryTrust } from '../registry/client';
 import { lookupAiSafetyDeclaration, declarationOriginFor } from '../aisafety/client';
@@ -701,6 +703,10 @@ function handleMessage(
         downloadWatchedAgentIds: Array.from(state.activeAgents.entries())
           .filter(([tabId]) => tabDownloadsCancellable(tabId))
           .map(([, agent]) => agent.id),
+        // Per agent, what Browser-layer blocking is doing in its tab: holding
+        // its session (why Chrome's debugging banner is showing) or fallen
+        // back, with why. No entry where the layer does not apply.
+        browserLayerByAgentId: collectBrowserLayerStates(),
         // Agents whose tab a live owner pause covers, by the page now in it:
         // no rule applies there, so a download it blocked can be retried.
         pausedAgentIds: Array.from(state.activeAgents.entries())
@@ -1378,6 +1384,25 @@ function isDevToolsOnlyAgent(agent: AgentIdentity): boolean {
 function tabDownloadsCancellable(tabId: number): boolean {
   const agent = state.activeAgents.get(tabId);
   return agent !== undefined && !isDevToolsOnlyAgent(agent) && isTabDownloadWatched(tabId);
+}
+
+/**
+ * What Browser-layer blocking is doing in the tab of each detected agent,
+ * keyed by agent id: `attached` while its session is held there, `unavailable`
+ * while the tab warrants a session and Chrome refused or ended it. An agent
+ * whose tab warrants none has no entry.
+ */
+function collectBrowserLayerStates(): Record<string, BrowserLayerState> {
+  const entries: Array<[string, BrowserLayerState]> = [];
+  for (const [tabId, agent] of state.activeAgents) {
+    if (isTabAttached(tabId)) {
+      entries.push([agent.id, { state: 'attached' }]);
+      continue;
+    }
+    const fault = getTabEnforcementFault(tabId);
+    if (fault) entries.push([agent.id, { state: 'unavailable', cause: fault.cause, detail: fault.detail }]);
+  }
+  return Object.fromEntries(entries);
 }
 
 /** The session-wide rule currently active, if any (for the popup panel). */

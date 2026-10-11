@@ -16,6 +16,7 @@ import type { WizardState } from '../delegation/wizard';
 import { createRuleFromPreset, FULL_ACCESS_MAX_MINUTES } from '../delegation/rules';
 import { selectEffectiveRule } from '../delegation/effective';
 import { presentAgent } from '../delegation/enforceability';
+import type { BrowserLayerState } from '../delegation/enforceability';
 import { chromeMajorVersion, remoteDebuggingPosture } from '../delegation/posture';
 import type { AIMAuthState } from '../aim/auth';
 import { getAIMAuthState } from '../aim/auth';
@@ -47,6 +48,12 @@ interface PopupState {
    * delegation can cancel.
    */
   downloadWatchedAgentIds: string[];
+  /**
+   * By agent id, what Browser-layer blocking is doing in the agent's tab:
+   * holding its debugger session, or fallen back because Chrome refused or
+   * ended it. No entry where the layer does not apply.
+   */
+  browserLayerByAgentId: Record<string, BrowserLayerState>;
   /** Detected agents whose tab a live owner pause (#71) covers. */
   pausedAgentIds: string[];
   /**
@@ -117,6 +124,7 @@ interface PopupState {
 let popupState: PopupState = {
   detectedAgents: [],
   downloadWatchedAgentIds: [],
+  browserLayerByAgentId: {},
   pausedAgentIds: [],
   aiSafetyDeclarations: {},
   activeDelegation: null,
@@ -173,6 +181,7 @@ async function queryBackgroundStatus(): Promise<void> {
       const data = response as {
         detectedAgents?: AgentIdentity[];
         downloadWatchedAgentIds?: string[];
+        browserLayerByAgentId?: Record<string, BrowserLayerState>;
         pausedAgentIds?: string[];
         aiSafetyDeclarations?: Record<string, AiSafetyLookupResult>;
         activeDelegation?: DelegationRule | null;
@@ -182,6 +191,7 @@ async function queryBackgroundStatus(): Promise<void> {
       };
       popupState.detectedAgents = data.detectedAgents ?? [];
       popupState.downloadWatchedAgentIds = data.downloadWatchedAgentIds ?? [];
+      popupState.browserLayerByAgentId = data.browserLayerByAgentId ?? {};
       popupState.pausedAgentIds = data.pausedAgentIds ?? [];
       popupState.aiSafetyDeclarations = data.aiSafetyDeclarations ?? {};
       popupState.activeDelegation = data.activeDelegation ?? null;
@@ -344,6 +354,7 @@ async function onKillSwitchClick(): Promise<void> {
       (resp as { event?: KillSwitchEvent } | null)?.event ?? popupState.killSwitchLastEvent;
     popupState.detectedAgents = [];
     popupState.downloadWatchedAgentIds = [];
+    popupState.browserLayerByAgentId = {};
     popupState.pausedAgentIds = [];
     // The stop ends every owner pause too (#71).
     popupState.guardPauses = [];
@@ -696,6 +707,9 @@ function renderDetectionPanel(): void {
     // "Managed", because we cannot enforce it against them.
     const presentation = presentAgent(agent, agentRule, {
       downloadsWatched: popupState.downloadWatchedAgentIds.includes(agent.id),
+      browserLayer: Object.prototype.hasOwnProperty.call(popupState.browserLayerByAgentId, agent.id)
+        ? popupState.browserLayerByAgentId[agent.id]
+        : undefined,
     });
 
     const trustBadge = document.createElement('span');
@@ -856,6 +870,16 @@ function renderDetectionPanel(): void {
       caveat.className = 'agent-scope-caveat';
       caveat.textContent = presentation.ruleCaveat;
       card.appendChild(caveat);
+    }
+    // ADR-007: say why Chrome's debugging banner is showing for this tab, or
+    // that Browser-layer blocking fell back there, instead of leaving either
+    // for the user to infer. It is about how the grant is enforced, so it
+    // stays with the grant row and its caveat.
+    if (presentation.browserLayerNote) {
+      const layerNote = document.createElement('div');
+      layerNote.className = `agent-layer-note agent-layer-note-${presentation.browserLayerNote.kind}`;
+      layerNote.textContent = presentation.browserLayerNote.text;
+      card.appendChild(layerNote);
     }
     // What the SITE says about itself, kept visually separate from the agent
     // trust badge above it. The badge is about the agent and is partly derived

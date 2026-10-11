@@ -1345,6 +1345,21 @@ kbd {
   color: var(--text-primary);
 }
 
+/* What Browser-layer blocking is doing in the agent's tab (issue #110) */
+.agent-layer-note {
+  margin-top: 6px;
+  padding-left: 8px;
+  border-left: 2px solid var(--color-info);
+  font-size: var(--font-size-xs);
+  line-height: 1.45;
+  color: var(--text-primary);
+  overflow-wrap: anywhere;
+}
+
+.agent-layer-note-unavailable {
+  border-left-color: var(--color-warning);
+}
+
 /* Staged update call-out (issue #68) */
 .update-callout-text {
   margin: 4px 0 8px;

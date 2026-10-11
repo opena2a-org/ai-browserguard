@@ -202,6 +202,46 @@ const downloadStartWaiters = new Set<() => void>();
 /** Download items that took a start, by download id, with when they took it. */
 const matchedDownloads = new Map<number, number>();
 
+/** Longest text kept from a Chrome error, so a fault stays one short line. */
+const FAULT_DETAIL_MAX_LENGTH = 160;
+
+/**
+ * Why a tab that should hold an enforcement session holds none:
+ *  - `attach-failed`: Chrome refused the session, or the command the session
+ *    exists for: the one that turns request interception on (a rule that
+ *    blocks a site), or the one that reports the tab's downloads (a rule that
+ *    only withholds downloads).
+ *  - `detached`: Chrome ended a session we held there.
+ */
+export interface EnforcementFault {
+  cause: 'attach-failed' | 'detached';
+  /**
+   * Chrome's own account of it, when it gave one: the error text of a refused
+   * attach, or the reason it ended the session (`canceled_by_user`,
+   * `target_closed`).
+   */
+  detail: string;
+  /** When it happened (ms since epoch). */
+  at: number;
+}
+
+/**
+ * Tabs enforcement fell back from, with why. An entry lasts until a session
+ * attaches there, we detach the tab ourselves, or a reconcile finds the tab no
+ * longer warrants a session, so it never outlives the fallback it describes.
+ */
+const enforcementFaults = new Map<number, EnforcementFault>();
+
+/** One short line from whatever Chrome rejected or reported with. */
+function faultDetail(value: unknown): string {
+  const text = value instanceof Error ? value.message : typeof value === 'string' ? value : '';
+  return text.replace(/\s+/g, ' ').trim().slice(0, FAULT_DETAIL_MAX_LENGTH);
+}
+
+function recordFault(tabId: number, cause: EnforcementFault['cause'], detail: unknown): void {
+  enforcementFaults.set(tabId, { cause, detail: faultDetail(detail), at: Date.now() });
+}
+
 /** Whether `chrome.debugger` (with the methods we need) is available. */
 function debuggerAvailable(): boolean {
   return (
@@ -265,10 +305,13 @@ function handleDebuggerEvent(source: chrome.debugger.Debuggee, method: string, p
 /**
  * Browser terminated our debugger session for a tab (tab closed, DevTools
  * opened, or another client took the slot). Drop it from the attached set so we
- * fall back to page-realm enforcement — never leave a phantom-attached tab.
+ * fall back to page-realm enforcement — never leave a phantom-attached tab —
+ * and keep why, so the fallback is reported rather than silent. A tab we hold
+ * no session on (one we detached ourselves) has nothing to report.
  */
-function handleDebuggerDetach(source: chrome.debugger.Debuggee): void {
+function handleDebuggerDetach(source: chrome.debugger.Debuggee, reason?: string): void {
   if (source.tabId !== undefined) {
+    if (attachedTabs.has(source.tabId)) recordFault(source.tabId, 'detached', reason);
     attachedTabs.delete(source.tabId);
     downloadWatchedTabs.delete(source.tabId);
     fetchEnabledTabs.delete(source.tabId);
@@ -466,7 +509,9 @@ function tabNeedsFetch(tabId: number): boolean {
  * the tab. Fail-safe: on any failure (DevTools open, another CDP client owns
  * the tab, a restricted URL) it leaves the tab unattached and returns false
  * rather than throwing — the page-realm interceptor stays in force. A session
- * that would neither block a site nor report downloads is detached too.
+ * that would neither block a site nor report downloads is detached too. The
+ * failure is kept for the tab (see {@link getTabEnforcementFault}) until a
+ * later attach succeeds.
  */
 export async function attachTab(tabId: number): Promise<boolean> {
   if (attachedTabs.has(tabId)) return true;
@@ -474,7 +519,10 @@ export async function attachTab(tabId: number): Promise<boolean> {
   // (rather than racing a second chrome.debugger.attach) avoids the second
   // attach rejecting and its catch detaching the first call's live session.
   if (attaching.has(tabId)) return false;
-  if (!debuggerAvailable()) return false;
+  if (!debuggerAvailable()) {
+    recordFault(tabId, 'attach-failed', '');
+    return false;
+  }
   attaching.add(tabId);
   try {
     await chrome.debugger.attach({ tabId }, CDP_PROTOCOL_VERSION);
@@ -482,22 +530,27 @@ export async function attachTab(tabId: number): Promise<boolean> {
     if (blocksSites) await chrome.debugger.sendCommand({ tabId }, 'Fetch.enable', {});
     attachedTabs.add(tabId);
     if (blocksSites) fetchEnabledTabs.add(tabId);
+    enforcementFaults.delete(tabId);
     // Download starts in this tab. Best-effort when the session blocks sites:
     // without it that session still enforces them, and downloads here are
     // only recorded.
     try {
       await chrome.debugger.sendCommand({ tabId }, 'Page.enable', {});
       if (attachedTabs.has(tabId)) downloadWatchedTabs.add(tabId);
-    } catch {
+    } catch (err) {
       if (!blocksSites) {
         // Attached only to report downloads, and it cannot: drop the session
-        // rather than show the debugging banner for nothing.
+        // rather than show the debugging banner for nothing. The tab still
+        // warrants one, so keep why it holds none (after the detach, which
+        // clears what was recorded for the tab).
         await detachTab(tabId);
+        recordFault(tabId, 'attach-failed', err);
         return false;
       }
     }
     return true;
-  } catch {
+  } catch (err) {
+    recordFault(tabId, 'attach-failed', err);
     // attach() may have partially succeeded (e.g. Fetch.enable failed) — detach
     // so we never leave a tab attached-but-uncontrolled.
     try { await chrome.debugger.detach({ tabId }); } catch { /* may not be attached */ }
@@ -507,8 +560,12 @@ export async function attachTab(tabId: number): Promise<boolean> {
   }
 }
 
-/** Detach the CDP session from a tab, if attached. */
+/**
+ * Detach the CDP session from a tab, if attached. Ending enforcement there is
+ * our decision, not a fallback, so nothing is left to report for the tab.
+ */
 export async function detachTab(tabId: number): Promise<void> {
+  enforcementFaults.delete(tabId);
   if (!attachedTabs.has(tabId)) return;
   attachedTabs.delete(tabId);
   downloadWatchedTabs.delete(tabId);
@@ -557,6 +614,10 @@ export function reconcileTabs(desired: Set<number>): Promise<void> {
 }
 
 async function doReconcile(desired: Set<number>): Promise<void> {
+  // A tab that no longer warrants a session is not falling back from one.
+  for (const id of Array.from(enforcementFaults.keys())) {
+    if (!desired.has(id)) enforcementFaults.delete(id);
+  }
   const { toAttach, toDetach } = reconcile(desired, attachedTabs);
   for (const id of toDetach) {
     await detachTab(id);
@@ -579,10 +640,20 @@ export function getAttachedTabs(): number[] {
   return Array.from(attachedTabs);
 }
 
+/**
+ * Why `tabId` holds no enforcement session although the last reconcile wanted
+ * one there, or null when it holds one or none is wanted.
+ */
+export function getTabEnforcementFault(tabId: number): EnforcementFault | null {
+  if (attachedTabs.has(tabId)) return null;
+  return enforcementFaults.get(tabId) ?? null;
+}
+
 /** Reset module state. Test-only. */
 export function _resetForTest(): void {
   attachedTabs.clear();
   attaching.clear();
+  enforcementFaults.clear();
   downloadWatchedTabs.clear();
   fetchEnabledTabs.clear();
   downloadStarts.clear();
