@@ -54,7 +54,7 @@ FIVE CORE FEATURES
 
 4. Boundary Violation Alerts: when an IN-PAGE agent attempts a scripted navigation, form submission, click, keystroke, or new-tab open outside its delegation scope, the action is blocked (best-effort) and you receive a notification showing what was attempted, which rule blocked it, and the option to allow it once. External CDP frameworks drive via native input these alerts cannot see; for those, rely on detection and the kill switch. When a download is cancelled, for any kind of agent, you get a notification that says why, unless notifications are turned off; a cancelled download cannot be resumed, so it has no allow-once option. A download from the site an agent was detected on that was not seen starting in the agent's tab is left to finish, and you get a notification saying it was not stopped. (DOM reads, injected scripts, and screenshots are not blocked; use the kill switch to close the agent's tab.)
 
-5. Session Timeline: chronological log of all agent actions: timestamps, action types, target URLs, element selectors, and whether each action was allowed or blocked. Last 5 sessions retained.
+5. Session Timeline: chronological log of the agent actions it can observe: timestamps, action types, target URLs, element selectors, and whether each action was allowed or blocked. Last 5 sessions retained.
 
 PRIVACY
 
