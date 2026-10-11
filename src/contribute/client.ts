@@ -13,6 +13,11 @@ const CONTRIBUTOR_ID_KEY = 'contributorId';
 const REGISTRY_CONTRIBUTE_URL = 'https://api.oa2a.org/api/v1/contribute';
 const FLUSH_THRESHOLD = 10; // Flush after 10 events
 
+/** The consent tip shows once this many detections have been recorded... */
+export const TIP_AFTER_DETECTIONS = 5;
+/** ...or once this long has passed since the first detection, whichever comes first. */
+export const TIP_AFTER_FIRST_DETECTION_MS = 3 * 24 * 60 * 60 * 1000;
+
 /**
  * Get the anonymous contributor token, generating and persisting a random
  * per-install UUID on first use.
@@ -95,13 +100,12 @@ export function shouldShowTip(consent: ContributeConsent): boolean {
   if (consent.tipDismissed) return false; // Already dismissed
 
   // Show after 5th detection
-  if (consent.detectionsSinceInstall >= 5) return true;
+  if (consent.detectionsSinceInstall >= TIP_AFTER_DETECTIONS) return true;
 
-  // Show after 3 days of use
+  // Show 3 days after the first detection
   if (consent.firstDetectionAt) {
-    const threeDaysMs = 3 * 24 * 60 * 60 * 1000;
     const elapsed = Date.now() - new Date(consent.firstDetectionAt).getTime();
-    if (elapsed >= threeDaysMs) return true;
+    if (elapsed >= TIP_AFTER_FIRST_DETECTION_MS) return true;
   }
 
   return false;

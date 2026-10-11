@@ -30,6 +30,13 @@ export interface PendingOverride {
 export const pendingOverrides: Map<string, PendingOverride> = new Map();
 
 /**
+ * How many recent boundary alerts the service worker holds in memory for the
+ * popup. The list is never written to storage; the durable record of each
+ * violation is its session timeline event.
+ */
+export const MAX_RECENT_ALERTS = 20;
+
+/**
  * Process a boundary violation:
  *  1. Create a BoundaryAlert from the violation and the active rule.
  *  2. Show a Chrome notification.
