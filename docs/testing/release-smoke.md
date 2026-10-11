@@ -68,7 +68,10 @@ focused OS window); the export logic itself is locked in by
    Hover: tooltip "Settings". Click: settings panel toggles.
 3. Trigger a block (e.g. run an automation tool against a page, or use a
    detection fixture) and confirm the inline toast renders a monochrome shield
-   icon, not an emoji, with WHAT / WHY / Allow once / Whitelist / Settings.
+   icon, not an emoji, with WHAT / WHY / Settings. Allow once appears only for
+   a medium or low severity block (for example a text input or a new tab on an
+   ordinary site); a click, a form submission or any block on a sensitive site
+   such as a bank shows no Allow once.
 4. Report export download (the regression that prompted this doc):
    - Generate at least one session report (let a detected session end, or seed
      `chrome.storage.local` with a `reports` array).

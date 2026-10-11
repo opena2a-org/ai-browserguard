@@ -46,9 +46,18 @@ export function createBoundaryAlert(
     severity,
     title,
     message,
-    allowOneTimeOverride: severity === 'medium' || severity === 'low',
+    allowOneTimeOverride: allowsOneTimeOverride(severity),
     acknowledged: false,
   };
+}
+
+/**
+ * Whether a block of this severity may be overridden once by the user.
+ * Only medium and low may; high and critical blocks offer no override on any
+ * surface (the Chrome notification and the in-page toast both use this).
+ */
+export function allowsOneTimeOverride(severity: AlertSeverity): boolean {
+  return severity === 'medium' || severity === 'low';
 }
 
 /**
