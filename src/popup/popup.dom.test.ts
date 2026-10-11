@@ -142,6 +142,7 @@ afterEach(() => {
 interface PopupStatus {
   detectedAgents: unknown[];
   downloadWatchedAgentIds?: string[];
+  browserLayerByAgentId?: Record<string, unknown>;
   activeDelegation: DelegationRule | null;
   delegationRules: DelegationRule[];
   killSwitchActive: boolean;
@@ -227,10 +228,13 @@ function status(opts: {
   watched?: boolean;
   /** The agent's detection confidence as the background reports it (default: high). */
   confidence?: unknown;
+  /** What Browser-layer blocking reports for the agent's tab (default: nothing). */
+  browserLayer?: unknown;
 }): PopupStatus {
   const rule = opts.rule === undefined ? agentRule('readOnly', 'a1') : opts.rule;
   return {
     downloadWatchedAgentIds: opts.watched === false ? [] : ['a1'],
+    browserLayerByAgentId: opts.browserLayer === undefined ? {} : { a1: opts.browserLayer },
     detectedAgents: [
       {
         id: 'a1',
@@ -412,6 +416,88 @@ describe('popup render: detection confidence on the agent card (#104)', () => {
       expect(document.querySelector('.detection-card')!.textContent).not.toMatch(/Confidence/);
     },
   );
+});
+
+describe('popup render: what Browser-layer blocking is doing in the agent tab (#110)', () => {
+  function layerNotes(): Element[] {
+    return Array.from(document.querySelectorAll('.detection-card .agent-layer-note'));
+  }
+
+  it('shows nothing on a card whose tab the layer does not apply to', async () => {
+    await renderPopup(status({}));
+    expect(layerNotes()).toHaveLength(0);
+  });
+
+  it('attached: the card says why the debugging banner is showing, under the grant row and its caveat', async () => {
+    await renderPopup(status({ browserLayer: { state: 'attached' } }));
+    const notes = layerNotes();
+    expect(notes).toHaveLength(1);
+    expect(notes[0].classList.contains('agent-layer-note-active')).toBe(true);
+    expect(notes[0].textContent).toContain('That is why Chrome shows its "debugging this browser" banner.');
+    expect(notes[0].previousElementSibling?.classList.contains('agent-scope-caveat')).toBe(true);
+  });
+
+  it('attached under Read-Only with no blocked site: the card says the session is there for downloads, not for sites', async () => {
+    await renderPopup(status({ browserLayer: { state: 'attached' } }));
+    const text = layerNotes()[0].textContent ?? '';
+    expect(text).toMatch(/^Browser-layer blocking is attached to this tab to cancel downloads started in it\. /);
+    expect(text).not.toContain('sites');
+  });
+
+  it('attached under a delegation with a blocked site: the card names the sites and the downloads', async () => {
+    const readOnly = agentRule('readOnly', 'a1');
+    const rule: DelegationRule = {
+      ...readOnly,
+      scope: { ...readOnly.scope, sitePatterns: [{ pattern: 'blocked.example', action: 'block' }] },
+    };
+    await renderPopup(status({ rule, browserLayer: { state: 'attached' } }));
+    expect(layerNotes()[0].textContent).toMatch(
+      /^Browser-layer blocking is attached to this tab to enforce the sites your delegation blocks and to cancel downloads started in it\. /,
+    );
+  });
+
+  it('refused attach: the card says the layer could not attach, with the reason Chrome gave', async () => {
+    await renderPopup(
+      status({
+        watched: false,
+        browserLayer: { state: 'unavailable', cause: 'attach-failed', detail: 'Another debugger is already attached to the tab with id: 7.' },
+      }),
+    );
+    const notes = layerNotes();
+    expect(notes).toHaveLength(1);
+    expect(notes[0].classList.contains('agent-layer-note-unavailable')).toBe(true);
+    expect(notes[0].textContent).toContain('Browser-layer blocking could not attach to this tab. Chrome reported: Another debugger is already attached to the tab with id: 7.');
+    // Read-Only with no blocked site: downloads are what is lost, and no site is named.
+    expect(notes[0].textContent).toContain('Until it attaches, downloads started in this tab are not cancelled.');
+    expect(notes[0].textContent).not.toContain('sites');
+    // The pill agrees: nothing is cancelled in a tab that holds no session.
+    expect(document.querySelector('.detection-card-header .agent-pill')?.textContent).toBe('Monitor only');
+  });
+
+  it('session ended by Chrome: the card says so', async () => {
+    await renderPopup(
+      status({ watched: false, browserLayer: { state: 'unavailable', cause: 'detached', detail: 'canceled_by_user' } }),
+    );
+    expect(layerNotes()[0].textContent).toContain(
+      "Chrome ended Browser-layer blocking's debugger session on this tab when its debugging banner was cancelled.",
+    );
+  });
+
+  it('renders text from Chrome as text, never as markup', async () => {
+    await renderPopup(
+      status({ watched: false, browserLayer: { state: 'unavailable', cause: 'attach-failed', detail: '<img src=x onerror=alert(1)>' } }),
+    );
+    const note = layerNotes()[0];
+    expect(note.querySelector('img')).toBeNull();
+    expect(note.textContent).toContain('<img src=x onerror=alert(1)>');
+  });
+
+  it('a state reported for another agent is not shown on this card', async () => {
+    const s = status({});
+    s.browserLayerByAgentId = { 'someone-else': { state: 'attached' } };
+    await renderPopup(s);
+    expect(layerNotes()).toHaveLength(0);
+  });
 });
 
 describe('popup render: ending the session delegation without Full Access', () => {

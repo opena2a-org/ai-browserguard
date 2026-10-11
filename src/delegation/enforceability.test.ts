@@ -15,6 +15,7 @@ import {
   downloadsEnforced,
   EXTERNAL_DRIVER_DOWNLOADS_ENFORCED_LABEL,
   type AgentLike,
+  type BrowserLayerState,
 } from './enforceability';
 import { createRuleFromPreset } from './rules';
 import type { DelegationRule } from '../types/delegation';
@@ -184,5 +185,143 @@ describe('presentAgent — external-driver downloads (#69, one predicate for pil
     const p = presentAgent(driverOn('https://a.example/'), createRuleFromPreset('readOnly'));
     expect(p.badgeTitle).toContain('cannot block the actions it takes in the page');
     expect(p.badgeTitle).not.toMatch(/individual actions/);
+  });
+});
+
+describe('presentAgent — what Browser-layer blocking is doing in the tab (#110)', () => {
+  const inPage = agent('unknown', ['synthetic-event']);
+  const driver = agent('playwright', ['cdp-connection']);
+  const withBlockedSite = (rule: DelegationRule): DelegationRule => ({
+    ...rule,
+    scope: { ...rule.scope, sitePatterns: [{ pattern: 'blocked.example', action: 'block' }] },
+  });
+  // Read-Only as the wizard creates it: it blocks downloads and no site, and
+  // still gets a session, to report the downloads started in the tab.
+  const readOnly = createRuleFromPreset('readOnly');
+  const readOnlyWithSite = withBlockedSite(readOnly);
+  const fullAccess = createRuleFromPreset('fullAccess');
+  const fullAccessWithSite = withBlockedSite(fullAccess);
+  const REFUSED: BrowserLayerState = {
+    state: 'unavailable',
+    cause: 'attach-failed',
+    detail: 'Another debugger is already attached to the tab with id: 7.',
+  };
+  const ATTACHED: BrowserLayerState = { state: 'attached' };
+  const BANNER_AND_END =
+    ' That is why Chrome shows its "debugging this browser" banner. It detaches when the delegation or the agent\'s session ends, the tab closes, or the setting is turned off.';
+
+  it('says nothing for a tab the layer does not apply to', () => {
+    expect(presentAgent(inPage, readOnly).browserLayerNote).toBeNull();
+    expect(presentAgent(driver, readOnly, { downloadsWatched: true }).browserLayerNote).toBeNull();
+  });
+
+  it('attached under a delegation that blocks no site: says the session is there for downloads, and names no site', () => {
+    for (const a of [inPage, driver]) {
+      const note = presentAgent(a, readOnly, { downloadsWatched: true, browserLayer: ATTACHED }).browserLayerNote;
+      expect(note).toEqual({
+        kind: 'active',
+        text: `Browser-layer blocking is attached to this tab to cancel downloads started in it.${BANNER_AND_END}`,
+      });
+      expect(note!.text).not.toContain('sites');
+    }
+  });
+
+  it('attached under a delegation that blocks a site and downloads: names both', () => {
+    for (const a of [inPage, driver]) {
+      const note = presentAgent(a, readOnlyWithSite, { downloadsWatched: true, browserLayer: ATTACHED }).browserLayerNote;
+      expect(note).toEqual({
+        kind: 'active',
+        text: `Browser-layer blocking is attached to this tab to enforce the sites your delegation blocks and to cancel downloads started in it.${BANNER_AND_END}`,
+      });
+    }
+  });
+
+  it('attached under a delegation that blocks a site and permits downloads: names the sites only', () => {
+    const note = presentAgent(inPage, fullAccessWithSite, { downloadsWatched: true, browserLayer: ATTACHED }).browserLayerNote;
+    expect(note!.text).toBe(
+      `Browser-layer blocking is attached to this tab to enforce the sites your delegation blocks.${BANNER_AND_END}`,
+    );
+    expect(note!.text).not.toContain('downloads');
+  });
+
+  it('attached to a tab whose downloads are not cancelled: claims no cancellation', () => {
+    // The pill reads the same input, so the note and the pill cannot disagree.
+    expect(presentAgent(driver, readOnly, { browserLayer: ATTACHED }).browserLayerNote!.text).toBe(
+      `Browser-layer blocking is attached to this tab.${BANNER_AND_END}`,
+    );
+    expect(presentAgent(driver, readOnlyWithSite, { downloadsWatched: false, browserLayer: ATTACHED }).browserLayerNote!.text).toBe(
+      `Browser-layer blocking is attached to this tab to enforce the sites your delegation blocks.${BANNER_AND_END}`,
+    );
+  });
+
+  it('refused attach, in-page agent: quotes Chrome, names what is not enforced, and the page-level fallback', () => {
+    const note = presentAgent(inPage, readOnlyWithSite, { browserLayer: REFUSED }).browserLayerNote;
+    expect(note).toEqual({
+      kind: 'unavailable',
+      text: 'Browser-layer blocking could not attach to this tab. Chrome reported: Another debugger is already attached to the tab with id: 7. Until it attaches, the sites your delegation blocks are not enforced at the browser layer on this tab, and downloads started in it are not cancelled. Page-level enforcement still applies on a best-effort basis. AI Browser Guard retries automatically.',
+    });
+  });
+
+  it('refused attach under a delegation that blocks no site: names downloads only, and no page-level fallback for them', () => {
+    const note = presentAgent(inPage, readOnly, { browserLayer: REFUSED }).browserLayerNote;
+    expect(note).toEqual({
+      kind: 'unavailable',
+      text: "Browser-layer blocking could not attach to this tab. Chrome reported: Another debugger is already attached to the tab with id: 7. Until it attaches, downloads started in this tab are not cancelled. Page-level enforcement of the agent's other actions still applies on a best-effort basis. AI Browser Guard retries automatically.",
+    });
+    expect(note!.text).not.toContain('sites');
+  });
+
+  it('refused attach, external driver: never claims a page-level fallback that does not stop it', () => {
+    const text = presentAgent(driver, readOnlyWithSite, { browserLayer: REFUSED }).browserLayerNote!.text;
+    expect(text).toContain('Page-level policy does not stop this agent, so those sites are not blocked for it here.');
+    expect(text).not.toContain('Page-level enforcement');
+
+    const noSite = presentAgent(driver, readOnly, { browserLayer: REFUSED }).browserLayerNote!.text;
+    expect(noSite).toContain(
+      'Until it attaches, downloads started in this tab are not cancelled. Page-level policy does not stop this agent. AI Browser Guard retries automatically.',
+    );
+    expect(noSite).not.toContain('sites');
+    expect(noSite).not.toContain('Page-level enforcement');
+  });
+
+  it('mentions downloads only under a delegation that blocks them', () => {
+    expect(presentAgent(inPage, readOnlyWithSite, { browserLayer: REFUSED }).browserLayerNote!.text).toContain('downloads started in it are not cancelled');
+    expect(presentAgent(inPage, fullAccessWithSite, { browserLayer: REFUSED }).browserLayerNote!.text).not.toContain('downloads');
+  });
+
+  it('a delegation that gives the session nothing to do: says only that it could not attach', () => {
+    expect(presentAgent(inPage, fullAccess, { browserLayer: REFUSED }).browserLayerNote!.text).toBe(
+      'Browser-layer blocking could not attach to this tab. Chrome reported: Another debugger is already attached to the tab with id: 7. AI Browser Guard retries automatically.',
+    );
+  });
+
+  it('refused attach with no text from Chrome: states the refusal alone, and ends an unpunctuated one', () => {
+    const bare = presentAgent(inPage, readOnly, { browserLayer: { state: 'unavailable', cause: 'attach-failed', detail: '' } });
+    expect(bare.browserLayerNote!.text).toMatch(/^Browser-layer blocking could not attach to this tab\. Until it attaches, /);
+    const unpunctuated = presentAgent(inPage, readOnly, { browserLayer: { state: 'unavailable', cause: 'attach-failed', detail: 'Not allowed' } });
+    expect(unpunctuated.browserLayerNote!.text).toContain('Chrome reported: Not allowed. Until it attaches, ');
+  });
+
+  it('session ended by Chrome: says so, with the reason when it is one Chrome documents', () => {
+    const ended = (detail?: string) =>
+      presentAgent(inPage, readOnly, { browserLayer: { state: 'unavailable', cause: 'detached', detail } }).browserLayerNote!;
+    expect(ended('canceled_by_user').text).toMatch(/^Chrome ended Browser-layer blocking's debugger session on this tab when its debugging banner was cancelled\. Until it attaches, /);
+    expect(ended('target_closed').text).toMatch(/^Chrome ended Browser-layer blocking's debugger session on this tab when the page it was attached to closed\. /);
+    expect(ended('some_future_reason').text).toMatch(/^Chrome ended Browser-layer blocking's debugger session on this tab\. /);
+    expect(ended().text).toMatch(/^Chrome ended Browser-layer blocking's debugger session on this tab\. /);
+    expect(ended('canceled_by_user').kind).toBe('unavailable');
+  });
+
+  it('says nothing without a rule, or for a state it does not know', () => {
+    expect(presentAgent(inPage, null, { browserLayer: { state: 'attached' } }).browserLayerNote).toBeNull();
+    expect(presentAgent(driver, null, { browserLayer: REFUSED }).browserLayerNote).toBeNull();
+    const unknown = { state: 'paused' } as unknown as BrowserLayerState;
+    expect(presentAgent(inPage, readOnly, { browserLayer: unknown }).browserLayerNote).toBeNull();
+  });
+
+  it('leaves the pill and the caveat as they were', () => {
+    const without = presentAgent(driver, readOnly, { downloadsWatched: true });
+    const withNote = presentAgent(driver, readOnly, { downloadsWatched: true, browserLayer: ATTACHED });
+    expect({ ...withNote, browserLayerNote: null }).toEqual(without);
   });
 });

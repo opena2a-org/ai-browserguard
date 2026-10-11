@@ -197,6 +197,18 @@ when CDP is off or attach is unavailable. DNR left open as a future complement.
   **kill switch remains absolute** regardless of attach state (it does not
   depend on the debugger session). `chrome.debugger.onDetach` triggers the same
   fail-safe fallback + notice.
+  *As built (issue #110):* the notice, and the §3 explanation of why the banner
+  is showing, are one line on the agent's card in the popup, driven by a per-tab
+  record of refused attaches and of sessions Chrome ended
+  (`getTabEnforcementFault`). The wording differs from the draft above in three
+  ways. It quotes the error or detach reason Chrome reported instead of naming
+  DevTools, because `attach()` was later measured to succeed with DevTools open
+  (Chrome 145, docs/architecture.md §8). It names the page-level fallback only
+  for an in-page agent, because page-level policy does not stop an external
+  driver (ADR-008). And it names only what the delegation in force has the
+  session do: the sites it blocks, the downloads it cancels in the tab, or
+  both, because a session is also held under a delegation that withholds
+  downloads and blocks no site (issue #100), where it enforces no site.
 - **Restricted targets** (`chrome://`, Web Store, `devtools://`): not
   attachable and not agent-navigable content; skipped, consistent with
   `isInternalUrl` in detection.
