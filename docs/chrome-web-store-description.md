@@ -76,7 +76,10 @@ AI Browser Guard requests host access to all URLs because AI agents can operate 
 
 ABOUT OPENA2A
 
-AI Browser Guard is built by OpenA2A, an open-source security platform building infrastructure for the AI agent ecosystem. Learn more: https://opena2a.org. Source code: https://github.com/opena2a-org/AI-BrowserGuard
+AI Browser Guard is built by OpenA2A, an open-source security platform building infrastructure for the AI agent ecosystem.
+
+Learn more: https://opena2a.org
+Source code: https://github.com/opena2a-org/AI-BrowserGuard
 
 This is a beta release. We are actively improving detection accuracy, adding framework signatures, and expanding delegation controls. Open an issue on GitHub with feedback: https://github.com/opena2a-org/AI-BrowserGuard/issues
 
