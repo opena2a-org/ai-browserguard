@@ -40,7 +40,7 @@ or dynamic imports.
 - Popup renders in a single synchronous pass with no framework initialization
   overhead.
 - Zero runtime dependencies means zero supply chain attack surface from
-  UI libraries -- important for a security extension.
+  UI libraries, which is important for a security extension.
 - TypeScript strict mode (`tsconfig.json`) provides type safety without
   needing framework-specific type wrappers.
 

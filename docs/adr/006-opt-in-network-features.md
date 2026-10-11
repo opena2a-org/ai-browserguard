@@ -12,12 +12,12 @@ requiring a separate ADR and explicit consent. That separate tier did not
 materialize. Instead, three optional, consent-gated network features were
 added directly to the free extension:
 
-1. **AIM identity lookup** -- when an agent is detected, optionally query
+1. **AIM identity lookup**: when an agent is detected, optionally query
    `aim.opena2a.org` for a published identity and trust score for that agent
    type, to enrich the detection display.
-2. **Registry trust lookup** -- optionally query `api.oa2a.org` for a registry
+2. **Registry trust lookup**: optionally query `api.oa2a.org` for a registry
    trust score for the detected agent type.
-3. **Anonymized contribution** -- optionally share anonymized detection and
+3. **Anonymized contribution**: optionally share anonymized detection and
    behavior summaries with `api.oa2a.org` to improve community threat
    intelligence.
 

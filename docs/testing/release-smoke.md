@@ -49,7 +49,7 @@ popup (`chrome.action.openPopup`), walks the Configure wizard to activate a
 Read-Only rule, asserts the rule persisted, then drives the in-page agent
 fixture and asserts the monitor block fires and the toast renders. It needs an
 OS-focused Chrome window, which a background-spawned Chrome cannot obtain
-while you are actively using the machine — on `SKIP-ENV` (exit 3), keep hands
+while you are actively using the machine. On `SKIP-ENV` (exit 3), keep hands
 off the keyboard/mouse for ~60 seconds and re-run. It must report ALL GREEN at
 least once per release.
 
@@ -64,7 +64,7 @@ focused OS window); the export logic itself is locked in by
 
 1. Load `dist/` unpacked. Open the popup from the toolbar.
 2. Settings button: confirm it shows a cog icon (SVG), not a gear emoji.
-   Hover -- tooltip "Settings". Click -- settings panel toggles.
+   Hover: tooltip "Settings". Click: settings panel toggles.
 3. Trigger a block (e.g. run an automation tool against a page, or use a
    detection fixture) and confirm the inline toast renders a monochrome shield
    icon, not an emoji, with WHAT / WHY / Allow once / Whitelist / Settings.
@@ -93,13 +93,13 @@ focused OS window); the export logic itself is locked in by
      content = Claimed, Injection-hardened = **Not claimed**, Consistent rendering
      = Claimed, Contact, Last verified, no Attestation row, plus the self-asserted
      caveat. Confirm "Not claimed" reads as neutral information and not as a
-     warning -- that site publishes injection payloads deliberately, and the UI
+     warning. That site publishes injection payloads deliberately, and the UI
      must not shame it for saying so.
    - **A site with no declaration** (any other HTTPS site) shows "No declaration
      published" in muted text, never a warning or a lowered score.
    - **The request carries nothing.** In the Network panel, inspect the
      `ai-safety.txt` request: no `Cookie` header, no referrer, and no redirect
-     followed. If a `Cookie` header is present, stop -- that contradicts the
+     followed. If a `Cookie` header is present, stop: that contradicts the
      privacy policy and is a release blocker.
    - **Opt-out clears state.** Turn the setting back off; declarations disappear
      from the popup and `chrome.storage.local` no longer holds
@@ -131,14 +131,14 @@ in the build, whatever its default.
 
 | Surface | Where | Status |
 |---|---|---|
-| Store listing | `docs/chrome-web-store-description.md`, `docs/store-listing.md` | pinned to v0.5.0 — rewrite at release |
+| Store listing | `docs/chrome-web-store-description.md`, `docs/store-listing.md` | pinned to v0.5.0; rewrite at release |
 | **Live privacy policy** | `opena2a-website/app/aibrowserguard/privacy/page.tsx` (**different repo**) | still says "only servers it can contact" |
 | Product page | `opena2a-website/app/aibrowserguard/page.tsx` | check its network claims |
 | Store-launch blog post | `opena2a-website/app/blogs/ai-browser-guard-chrome-web-store/page.tsx` | check its network claims |
 
 All four were deliberately NOT edited when the feature was built: they correctly
 describe the build that is live, and editing them early would claim a feature
-users do not have -- drift in the other direction. Write the new text at release
+users do not have, which is drift in the other direction. Write the new text at release
 from `docs/privacy-policy.html` §2a, §5 and §7, which are current.
 
 Note that ADR-006 speaks of "all four surfaces (policy, README, listing, settings
