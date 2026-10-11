@@ -29,7 +29,8 @@
  *
  * The render tests at the end drive the real popup module in jsdom with a
  * mocked background: the download-block recovery block (one per screen,
- * never in a title) and the external-driver pill and caveat (#69).
+ * never in a title), the external-driver pill and caveat (#69) and the
+ * detection confidence on the agent card (#104).
  */
 import { describe, it, expect, vi, afterEach } from 'vitest';
 import { readFileSync, readdirSync } from 'fs';
@@ -224,6 +225,8 @@ function status(opts: {
   violations?: unknown[];
   /** Whether the agent's tab holds the extension's debugger session (default: yes). */
   watched?: boolean;
+  /** The agent's detection confidence as the background reports it (default: high). */
+  confidence?: unknown;
 }): PopupStatus {
   const rule = opts.rule === undefined ? agentRule('readOnly', 'a1') : opts.rule;
   return {
@@ -233,7 +236,7 @@ function status(opts: {
         id: 'a1',
         type: 'anthropic-computer-use',
         detectionMethods: ['cdp-connection'],
-        confidence: 'high',
+        confidence: 'confidence' in opts ? opts.confidence : 'high',
         detectedAt: new Date().toISOString(),
         originUrl: opts.origin ?? AGENT_ORIGIN,
         observedCapabilities: [],
@@ -372,6 +375,43 @@ describe('popup render: external-driver pill and caveat (#69)', () => {
     expect(r.pill).toBe('Monitor only');
     expect(r.caveat).toBeNull();
   });
+});
+
+describe('popup render: detection confidence on the agent card (#104)', () => {
+  function confidenceRow(): Element | null {
+    return document.querySelector('.detection-card .detection-confidence');
+  }
+
+  it.each([
+    ['low', 'Confidence: Low'],
+    ['medium', 'Confidence: Medium'],
+    ['high', 'Confidence: High'],
+    ['confirmed', 'Confidence: Confirmed'],
+  ])('shows a %s detection as "%s"', async (confidence, text) => {
+    await renderPopup(status({ confidence }));
+    expect(confidenceRow()?.textContent).toBe(text);
+  });
+
+  it('sits between the card header and the row of detection methods', async () => {
+    await renderPopup(status({}));
+    const row = confidenceRow()!;
+    expect(row.previousElementSibling?.classList.contains('detection-card-header')).toBe(true);
+    expect(row.nextElementSibling?.querySelector('.method-tag')?.textContent).toBe('cdp-connection');
+  });
+
+  it('lists the four levels in rising order in its tooltip', async () => {
+    await renderPopup(status({}));
+    expect(confidenceRow()?.getAttribute('title')).toContain('lowest to highest: Low, Medium, High, Confirmed');
+  });
+
+  it.each([[undefined], [null], ['certain'], [3]])(
+    'shows no confidence row for a value that is not a known level (%s)',
+    async (confidence) => {
+      await renderPopup(status({ confidence }));
+      expect(confidenceRow()).toBeNull();
+      expect(document.querySelector('.detection-card')!.textContent).not.toMatch(/Confidence/);
+    },
+  );
 });
 
 describe('popup render: ending the session delegation without Full Access', () => {

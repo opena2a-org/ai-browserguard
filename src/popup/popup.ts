@@ -5,7 +5,7 @@
  */
 
 import type { MessagePayload, MessageType, KillSwitchEvent } from '../types/events';
-import type { AgentIdentity } from '../types/agent';
+import type { AgentIdentity, DetectionConfidence } from '../types/agent';
 import type { DelegationRule } from '../types/delegation';
 import type { AgentSession, LifetimeStats, UserSettings } from '../session/types';
 import { DEFAULT_SETTINGS } from '../session/types';
@@ -741,6 +741,18 @@ function renderDetectionPanel(): void {
     }
     headerRow.appendChild(trustBadge);
 
+    // How strongly the signals behind this detection indicate automation. An
+    // agent stored without a level this version knows gets no row, so the card
+    // never shows "Confidence: undefined".
+    const confidenceLabel = formatConfidence(agent.confidence);
+    let confidenceRow: HTMLElement | null = null;
+    if (confidenceLabel) {
+      confidenceRow = document.createElement('div');
+      confidenceRow.className = 'detection-confidence';
+      confidenceRow.textContent = `Confidence: ${confidenceLabel}`;
+      confidenceRow.title = CONFIDENCE_SCALE_TITLE;
+    }
+
     const metaRow = document.createElement('div');
     metaRow.style.cssText = 'font-size: 12px; color: var(--text-secondary); font-weight: 500;';
 
@@ -832,6 +844,7 @@ function renderDetectionPanel(): void {
     }
 
     card.appendChild(headerRow);
+    if (confidenceRow) card.appendChild(confidenceRow);
     card.appendChild(metaRow);
     card.appendChild(urlRow);
     card.appendChild(quickAllowRow);
@@ -2203,6 +2216,23 @@ function formatAgentType(type: string): string {
     unknown: 'Unknown Agent',
   };
   return names[type] ?? type;
+}
+
+const CONFIDENCE_LABELS: Record<DetectionConfidence, string> = {
+  low: 'Low',
+  medium: 'Medium',
+  high: 'High',
+  confirmed: 'Confirmed',
+};
+
+// The four levels in rising order, so "High" is not read as the top of the scale.
+const CONFIDENCE_SCALE_TITLE =
+  'How strongly the detection signals indicate automation. Levels, lowest to highest: Low, Medium, High, Confirmed.';
+
+/** The display name of a detection confidence level, or null for any other value. */
+function formatConfidence(confidence: unknown): string | null {
+  if (typeof confidence !== 'string' || !Object.hasOwn(CONFIDENCE_LABELS, confidence)) return null;
+  return CONFIDENCE_LABELS[confidence as DetectionConfidence];
 }
 
 function truncateUrl(url: string, maxLength: number = 40): string {
