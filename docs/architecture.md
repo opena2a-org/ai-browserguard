@@ -50,7 +50,7 @@ Declared in `manifest.json`:
 | `storage` | Persist sessions, rules, settings to `chrome.storage.local` |
 | `alarms` | Periodic delegation expiration checks (every 1 minute) |
 | `tabs` | Query all tabs to broadcast kill switch / delegation updates |
-| `notifications` | Chrome system notifications for boundary violations and kill switch |
+| `notifications` | Chrome system notifications for detected agents, boundary violations and kill switch |
 | `<all_urls>` (host) | Content script injection on every page for agent detection |
 
 ### Keyboard Shortcut
