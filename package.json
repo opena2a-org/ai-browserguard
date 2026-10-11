@@ -8,7 +8,7 @@
     "build": "tsc --noEmit && node scripts/build.js",
     "test": "vitest run",
     "test:watch": "vitest",
-    "lint": "tsc --noEmit --strict",
+    "lint": "tsc --noEmit --strict && node scripts/check-docs-prose.mjs",
     "watch": "vite build --watch",
     "smoke:export": "node scripts/smoke-export.mjs",
     "smoke:load": "node scripts/smoke-load.mjs",
