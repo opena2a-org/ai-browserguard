@@ -108,18 +108,17 @@ export function detectAnthropicComputerUse(): FrameworkDetectionResult {
 /**
  * Detect OpenAI Operator agent environment.
  *
- * OpenAI Operator uses Playwright under the hood to control a cloud-hosted
- * Chromium instance on Azure infrastructure. It does NOT send a custom user
- * agent string (unlike ChatGPT-User bot).
+ * Environment signals only, separate from Playwright detection: this function
+ * takes no input from the WebDriver, CDP or stack-trace checks. It reports
+ * Operator when any two of these hold:
+ * 1. navigator.platform starts with "Linux"
+ * 2. the user agent contains "Operator" or "OpenAI" (as of 2025 Operator
+ *    does not send a custom user agent string, unlike the ChatGPT-User bot)
+ * 3. zero browser plugins
+ * 4. a WebGL renderer naming SwiftShader, llvmpipe, or ANGLE with Google
  *
- * Detection relies on:
- * 1. CDP/Playwright detection (handled by chrome.debugger and stack trace
- *    modules — if Playwright is detected, Operator is a possible source)
- * 2. Environment fingerprinting: Linux platform, datacenter-like WebGL
- *    renderer, homogeneous browser fingerprint across sessions
- *
- * The Playwright-level detection is the primary mechanism (Layers 1 & 2).
- * This function provides supplementary environment signals.
+ * The signals come from published third-party research, not from a run
+ * against Operator.
  *
  * Sources: OpenAI CUA sample app (github.com/openai/openai-cua-sample-app),
  * CHEQ research on Operator fingerprinting, Stytch bot detection analysis.
@@ -128,9 +127,8 @@ export function detectOpenAIOperator(): FrameworkDetectionResult {
   const signals: Record<string, unknown> = {};
   const found: string[] = [];
 
-  // Operator runs on Linux in Azure cloud VMs.
-  // Combined with Playwright detection (from other layers), this
-  // strengthens the Operator attribution.
+  // The research cited above places Operator on Linux cloud VMs. A Linux
+  // platform counts as one signal; Playwright detection is not consulted.
   const platform = navigator.platform ?? '';
   signals.platform = platform;
   if (platform.startsWith('Linux')) {

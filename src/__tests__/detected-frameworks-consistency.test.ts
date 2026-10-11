@@ -8,6 +8,10 @@
  * harness drives Operator, and detectOpenAIOperator() in
  * src/detection/automation.ts reads environment signals only, with no input
  * from Playwright detection.
+ *
+ * The comments on detectOpenAIOperator() once said the same thing the README
+ * did: that Playwright detection was the primary mechanism and the function
+ * only added to it. They are held to the README row here.
  */
 import { describe, it, expect } from 'vitest';
 import { existsSync, readFileSync } from 'fs';
@@ -28,6 +32,31 @@ function tableRow(section: string, framework: string): string {
   const row = section.split('\n').find((line) => line.startsWith(`| ${framework} |`));
   expect(row, `no "${framework}" row in the Detected Frameworks table`).toBeDefined();
   return row as string;
+}
+
+/**
+ * The docblock above detectOpenAIOperator() and the line comments inside it,
+ * each unwrapped to one line so a phrase split across lines still matches.
+ */
+function operatorComments(): { docblock: string; inline: string } {
+  const source = read('src/detection/automation.ts');
+  const declaration = source.indexOf('export function detectOpenAIOperator(');
+  expect(declaration, 'automation.ts has no detectOpenAIOperator()').toBeGreaterThanOrEqual(0);
+  const docStart = source.lastIndexOf('/**', declaration);
+  const rawDocblock = source.slice(docStart, declaration);
+  expect(rawDocblock.trimEnd().endsWith('*/'), 'detectOpenAIOperator() has no docblock').toBe(true);
+  const nextDocblock = source.indexOf('\n/**', declaration);
+  const body = source.slice(declaration, nextDocblock === -1 ? undefined : nextDocblock);
+  const docblock = rawDocblock
+    .split('\n')
+    .map((line) => line.replace(/^\s*(?:\/\*\*|\*\/|\*)\s?/, '').trim())
+    .join(' ');
+  const inline = body
+    .split('\n')
+    .filter((line) => /^\s*\/\//.test(line))
+    .map((line) => line.replace(/^\s*\/\/\s?/, '').trim())
+    .join(' ');
+  return { docblock, inline };
 }
 
 describe('README Detected Frameworks section', () => {
@@ -52,5 +81,28 @@ describe('README Detected Frameworks section', () => {
       expect(row, `Operator row does not name "${signal}"`).toContain(signal);
     }
     expect(row).toMatch(/any two/i);
+  });
+});
+
+describe('detectOpenAIOperator() comments', () => {
+  it('do not describe Playwright detection as part of the Operator check', () => {
+    const { docblock, inline } = operatorComments();
+    for (const text of [docblock, inline]) {
+      expect(text).not.toMatch(/primary mechanism/i);
+      expect(text).not.toMatch(/supplementary/i);
+      expect(text).not.toMatch(/if playwright is detected/i);
+      expect(text).not.toMatch(/combined with playwright/i);
+    }
+  });
+
+  it('describe the check as the README row does', () => {
+    const { docblock } = operatorComments();
+    expect(docblock).toMatch(/environment signals only, separate from playwright detection/i);
+    // The signals detectOpenAIOperator() checks, and its two-signal threshold.
+    for (const signal of ['Linux', '"Operator"', '"OpenAI"', 'zero browser plugins', 'SwiftShader', 'llvmpipe', 'ANGLE', 'Google']) {
+      expect(docblock, `Operator docblock does not name "${signal}"`).toContain(signal);
+    }
+    expect(docblock).toMatch(/any two/i);
+    expect(docblock).toMatch(/not from a run against Operator/i);
   });
 });
