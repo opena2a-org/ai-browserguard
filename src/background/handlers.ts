@@ -30,9 +30,11 @@ export interface PendingOverride {
 export const pendingOverrides: Map<string, PendingOverride> = new Map();
 
 /**
- * How many recent boundary alerts the service worker holds in memory for the
- * popup. The list is never written to storage; the durable record of each
- * violation is its session timeline event.
+ * How many recent boundary alerts, from any tab, the service worker holds in
+ * memory for the popup. The list is never written to storage. A violation has
+ * a durable record, its session timeline event, only when its tab has a
+ * session (see processBoundaryViolation); one in a tab with no session, such
+ * as a tab where no agent was detected, is held in this list alone.
  */
 export const MAX_RECENT_ALERTS = 20;
 
