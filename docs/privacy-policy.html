@@ -53,7 +53,7 @@
     <li><strong>Session logs:</strong> A chronological record of detected agent actions (timestamps, action types, target URLs, CSS selectors, and outcomes), including the address of each download made while an agent is detected, and its file name when Chrome provides one, whoever started it. The last 5 sessions are stored locally.</li>
     <li><strong>Session reports:</strong> a summary saved when a session ends (agent type, start and end times, action and violation counts, the host names of up to five most-visited sites, network request counts, and the delegation preset). Up to 20 are kept on your device; a report older than 30 days is removed when the next report is saved.</li>
     <li><strong>Delegation rules:</strong> Access control rules you configure (presets, site patterns, time bounds). Stored locally in <code>chrome.storage.local</code>.</li>
-    <li><strong>Violation records:</strong> Each boundary violation (what was attempted, which rule blocked it) is recorded in its session log, so violation records are kept with the last 5 sessions. The 20 most recent are also held in memory, not saved, for the popup's Violations panel.</li>
+    <li><strong>Violation records:</strong> A boundary violation (what was attempted, which rule blocked it) in a tab during a detected agent's session is recorded in that session's log, so those records are kept with the last 5 sessions. A violation in a tab with no session, such as a tab where no agent was detected, is recorded in no session log. The 20 most recent violations from any tab are held in memory, not saved, for the popup's Violations panel.</li>
   </ul>
 
   <h2>2a. Optional Network Features (Off by Default)</h2>
