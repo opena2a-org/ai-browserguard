@@ -24,8 +24,8 @@ npm run smoke:devtools   # real-extension: user download in a tab with DevTools 
 ```
 
 `npm run smoke:downloads` loads the built extension with a session delegation
-set to Read-Only and one external CDP client attached to one tab, the setup in
-#69. With Browser-layer blocking off and then on, it asserts that the user's
+set to Read-Only, built as the wizard builds it (no site patterns), and one
+external CDP client attached to one tab, the setup in #69. With Browser-layer blocking off and then on, it asserts that the user's
 own downloads in other tabs complete (one from another site, one from the
 agent's site), are recorded as uncertain and as a host match, and are not
 counted as blocked actions. It also asserts that a download the client starts
@@ -34,7 +34,8 @@ cancelled, recorded as started in the agent's tab and counted once. It opens a
 browser window and needs no OS focus. It must report 0 failed.
 
 `npm run smoke:devtools` loads the built extension with a session delegation
-set to Read-Only, Browser-layer blocking on, and DevTools open on every tab
+set to Read-Only as the wizard builds it (no site patterns), Browser-layer
+blocking on, and DevTools open on every tab
 (`--auto-open-devtools-for-tabs`, the same front end F12 opens). No automation
 client touches a page. It first records what an open DevTools window looks
 like to the extension: the inspected page reports `attached: true` in

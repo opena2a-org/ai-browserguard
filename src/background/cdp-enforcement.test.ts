@@ -4,6 +4,7 @@ import {
   decideFetchRequest,
   shouldEnforceTab,
   ruleHasBlockPattern,
+  ruleWithholdsDownloads,
   reconcile,
   initCdpEnforcement,
   attachTab,
@@ -39,6 +40,18 @@ function allowNetworkRule(): DelegationRule {
     scope: {
       sitePatterns: [],
       actionRestrictions: [{ capability: 'network-request', action: 'allow' }],
+      timeBound: null,
+    },
+  });
+}
+
+/** A rule that permits downloads and blocks no site: nothing for a session to do. */
+function allowDownloadsRule(): DelegationRule {
+  return makeRule({
+    preset: 'fullAccess',
+    scope: {
+      sitePatterns: [],
+      actionRestrictions: [{ capability: 'download-file', action: 'allow' }],
       timeBound: null,
     },
   });
@@ -108,6 +121,17 @@ describe('ruleHasBlockPattern', () => {
   });
 });
 
+describe('ruleWithholdsDownloads', () => {
+  it('is true when download-file is blocked or unlisted, false when it is allowed', () => {
+    expect(ruleWithholdsDownloads(null)).toBe(false);
+    expect(ruleWithholdsDownloads(makeRule())).toBe(true); // unlisted -> default block
+    expect(ruleWithholdsDownloads(makeRule({
+      scope: { sitePatterns: [], actionRestrictions: [{ capability: 'download-file', action: 'block' }], timeBound: null },
+    }))).toBe(true);
+    expect(ruleWithholdsDownloads(allowDownloadsRule())).toBe(false);
+  });
+});
+
 describe('shouldEnforceTab', () => {
   const base = { settingEnabled: true, hasAgent: true, rule: blockPatternRule() };
 
@@ -127,8 +151,12 @@ describe('shouldEnforceTab', () => {
     expect(shouldEnforceTab({ ...base, rule: null })).toBe(false);
   });
 
-  it('does not enforce when the rule has no block pattern (nothing to enforce -> no banner)', () => {
-    expect(shouldEnforceTab({ ...base, rule: makeRule() })).toBe(false);
+  it('enforces a rule that withholds downloads and blocks no site (Read-Only): the session reports downloads', () => {
+    expect(shouldEnforceTab({ ...base, rule: makeRule() })).toBe(true);
+  });
+
+  it('does not enforce a rule that permits downloads and blocks no site (nothing to do -> no banner)', () => {
+    expect(shouldEnforceTab({ ...base, rule: allowDownloadsRule() })).toBe(false);
   });
 
   it('does not enforce under an inactive rule', () => {
@@ -197,12 +225,44 @@ describe('CDP enforcement orchestration', () => {
     vi.restoreAllMocks();
   });
 
-  it('attachTab attaches at the pinned protocol version and enables the Fetch domain', async () => {
+  it('attachTab attaches at the pinned protocol version and enables the Fetch domain under a blocked site', async () => {
+    initCdpEnforcement({ getRuleForTab: () => blockPatternRule() });
     const ok = await attachTab(42);
     expect(ok).toBe(true);
     expect(attach).toHaveBeenCalledWith({ tabId: 42 }, CDP_PROTOCOL_VERSION);
     expect(sendCommand).toHaveBeenCalledWith({ tabId: 42 }, 'Fetch.enable', {});
     expect(isTabAttached(42)).toBe(true);
+  });
+
+  it('attachTab under a rule that blocks no site (Read-Only) watches downloads and pauses no request', async () => {
+    initCdpEnforcement({ getRuleForTab: () => makeRule() });
+    expect(await attachTab(44)).toBe(true);
+    const methods = sendCommand.mock.calls.map((c: unknown[]) => c[1]);
+    expect(methods).toEqual(['Page.enable']);
+    expect(isTabAttached(44)).toBe(true);
+    expect(isTabDownloadWatched(44)).toBe(true);
+  });
+
+  it('reconcileTabs turns request interception on when the rule gains a blocked site, and off when it loses it', async () => {
+    let rule = makeRule();
+    initCdpEnforcement({ getRuleForTab: () => rule });
+    await reconcileTabs(new Set([45]));
+    expect(sendCommand).not.toHaveBeenCalledWith({ tabId: 45 }, 'Fetch.enable', {});
+
+    rule = blockPatternRule();
+    await reconcileTabs(new Set([45]));
+    expect(sendCommand).toHaveBeenCalledWith({ tabId: 45 }, 'Fetch.enable', {});
+    expect(attach).toHaveBeenCalledTimes(1); // same session, no re-attach
+
+    sendCommand.mockClear();
+    await reconcileTabs(new Set([45]));
+    expect(sendCommand).not.toHaveBeenCalled(); // already in line
+
+    rule = makeRule();
+    await reconcileTabs(new Set([45]));
+    expect(sendCommand).toHaveBeenCalledWith({ tabId: 45 }, 'Fetch.disable', {});
+    expect(isTabAttached(45)).toBe(true);
+    expect(isTabDownloadWatched(45)).toBe(true);
   });
 
   it('attachTab fails safe: a rejected attach() leaves the tab unattached and detaches any partial session', async () => {
@@ -339,6 +399,7 @@ describe('download starts reported on our sessions (Page.downloadWillBegin)', ()
   });
 
   it('attachTab enables the Page domain on the same session, after Fetch', async () => {
+    initCdpEnforcement({ getRuleForTab: () => blockPatternRule() });
     await attachTab(42);
     const methods = sendCommand.mock.calls.map((c: unknown[]) => c[1]);
     expect(methods).toEqual(['Fetch.enable', 'Page.enable']);
@@ -346,11 +407,20 @@ describe('download starts reported on our sessions (Page.downloadWillBegin)', ()
   });
 
   it('a failed Page.enable keeps the blocked-site session and leaves downloads there unwatched', async () => {
+    initCdpEnforcement({ getRuleForTab: () => blockPatternRule() });
     sendCommand.mockImplementation((_t: unknown, method: string) =>
       method === 'Page.enable' ? Promise.reject(new Error('not allowed')) : Promise.resolve({}));
     expect(await attachTab(43)).toBe(true);
     expect(isTabAttached(43)).toBe(true);
     expect(isTabDownloadWatched(43)).toBe(false);
+  });
+
+  it('a failed Page.enable drops a session that blocks no site: it would do nothing but show the banner', async () => {
+    sendCommand.mockImplementation((_t: unknown, method: string) =>
+      method === 'Page.enable' ? Promise.reject(new Error('not allowed')) : Promise.resolve({}));
+    expect(await attachTab(46)).toBe(false);
+    expect(isTabAttached(46)).toBe(false);
+    expect(isTabDownloadWatched(46)).toBe(false);
   });
 
   it('a start on an attached tab is matched to its download item once', async () => {

@@ -20,8 +20,9 @@
  * browser in #69 was started with a debugging port and showed neither. So
  * this browser has a window, no --enable-automation, and
  * --disable-blink-features=AutomationControlled for the pipe. The session
- * delegation is Read-Only (downloads blocked) with one site block pattern, so
- * Browser-layer blocking has a rule to enforce and attaches when it is on.
+ * delegation is Read-Only (downloads blocked) as the wizard builds it, with no
+ * site patterns: Browser-layer blocking attaches to the agent's tab because
+ * the rule withholds download-file (#100).
  *
  * Each phase runs three downloads, each a 256 KB file served over about 2 s:
  *   other site   the user's tab on other.localhost        complete, attribution none
@@ -78,9 +79,8 @@ const readOnlyRule = {
   id: 'smoke-downloads-read-only',
   preset: 'readOnly',
   scope: {
-    // One block pattern: Browser-layer blocking attaches only to a tab whose
-    // rule has something to enforce at that layer.
-    sitePatterns: [{ pattern: 'blocked.localhost', action: 'block' }],
+    // No site patterns: the wizard offers no sites step for Read-Only.
+    sitePatterns: [],
     actionRestrictions: ALL.map((c) => ({ capability: c, action: READ_ONLY.includes(c) ? 'allow' : 'block' })),
     timeBound: null,
   },

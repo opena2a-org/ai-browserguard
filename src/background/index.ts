@@ -1353,8 +1353,9 @@ function getEffectiveRuleForTab(tabId: number): DelegationRule | null {
  * Whether `agent` was registered only from a debugger attachment seen while the
  * built-in DevTools was open (`medium` confidence). Measured on Chrome 145, an
  * open DevTools window makes the page it inspects report an attachment, so the
- * periodic check registers that tab as an agent and, under a delegation with a
- * blocked site, Browser-layer blocking attaches its session there. That tab is
+ * periodic check registers that tab as an agent and, under a delegation that
+ * blocks a site or withholds downloads, Browser-layer blocking attaches its
+ * session there. That tab is
  * most likely the user's own: a download started in it is never treated as
  * started in an agent's tab, so it is not cancelled.
  */

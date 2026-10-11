@@ -69,8 +69,9 @@ const readOnlyRule = {
   id: 'smoke-devtools-read-only',
   preset: 'readOnly',
   scope: {
-    // One block pattern, so Browser-layer blocking attaches to agent tabs.
-    sitePatterns: [{ pattern: 'blocked.localhost', action: 'block' }],
+    // No site patterns, as the wizard builds Read-Only. Browser-layer blocking
+    // attaches to agent tabs because the rule withholds download-file.
+    sitePatterns: [],
     actionRestrictions: ALL.map((c) => ({ capability: c, action: READ_ONLY.includes(c) ? 'allow' : 'block' })),
     timeBound: null,
   },
