@@ -5,7 +5,7 @@
  */
 
 import type { DelegationPreset, DelegationRule, SitePattern } from '../types/delegation';
-import { createRuleFromPreset } from './rules';
+import { createRuleFromPreset, FULL_ACCESS_MAX_MINUTES } from './rules';
 
 export type WizardStep = 'preset' | 'sites' | 'time' | 'confirm';
 
@@ -273,7 +273,7 @@ const PRESET_DESCRIPTIONS: Record<DelegationPreset, { title: string; description
   },
   fullAccess: {
     title: 'Full Access',
-    description: 'Agent can perform any action. All activity is logged with boundary alerts.',
+    description: `Agent can perform any action on any site for ${FULL_ACCESS_MAX_MINUTES} minutes, then the grant expires. All activity is logged.`,
   },
 };
 

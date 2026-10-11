@@ -37,7 +37,7 @@ FIVE CORE FEATURES
    Define what agents can and cannot do before they connect:
    - Read-Only: Navigate and read, no clicking or typing
    - Limited: Interact with specific sites you choose, and name sites the agent must never touch, with time limits (15min / 1hr / 4hr)
-   - Full Access: Everything allowed, with logging and alerts
+   - Full Access: Every action on every site for 60 minutes, then the grant expires; actions are still logged
 
    An optional Browser-layer blocking setting (off by default) enforces the sites you blocked below the page, at the browser's network layer, for tabs under an active delegation. It blocks the paths to a blocked domain that in-page protection cannot reach (page requests, hidden image requests, background workers, and navigating there), and cannot be undone by a page tampering with in-page protections. (WebSocket connections are the one exception this layer does not block; a future update will close that gap.) While it is active on a delegated tab, Chrome shows its standard "AI Browser Guard has started debugging this browser" bar; enforcement and the bar are removed the moment the delegation ends, the tab closes, or you turn it off. It never touches tabs you have not delegated.
 
