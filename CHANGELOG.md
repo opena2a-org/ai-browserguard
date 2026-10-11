@@ -39,22 +39,22 @@ All notable changes to AI Browser Guard are documented here.
 
 ## 0.7.0 - 2026-08-03
 
-Browser-layer (CDP/debugger) enforcement of blocked domains — the repatch-immune
-egress layer ADR-007 designed — taken from unit-tested to validated against a
+Browser-layer (CDP/debugger) enforcement of blocked domains (the repatch-immune
+egress layer ADR-007 designed), taken from unit-tested to validated against a
 real Chrome, plus the review-follow-up hardening batch, in one Web Store
 submission.
 
 ### Added
-- **Browser-layer blocking (opt-in, default off) — ADR-007.** For the sites a
+- **Browser-layer blocking (opt-in, default off), ADR-007.** For the sites a
   user explicitly *blocks* in a delegation, egress is now enforced below the page
   on the `chrome.debugger` CDP `Fetch` domain, for tabs under an active
   delegation. A hostile page that re-patches the in-page interceptor cannot
-  undo it, and it closes the vectors the page-realm deny left unwrapped —
+  undo it, and it closes the vectors the page-realm deny left unwrapped:
   EventSource, element-`src` (`new Image().src`, `<script>`/`<link>`), Worker and
   iframe fetch, and navigation to the blocked domain. (WebSocket is the one
   vector this layer does NOT close: the CDP `Fetch` domain cannot pause ws
   handshakes and Network-level ws blocking proved unreliable on the live
-  debugger session — a ws to a blocked domain still connects, disclosed in the
+  debugger session; a ws to a blocked domain still connects, disclosed in the
   docs and store listing; deterministic ws blocking is deferred to a future
   `declarativeNetRequest` complement, ADR-008 R2.) Enabled by the
   new `cdpEnforcementEnabled` setting; attaches only when an agent is detected in
@@ -64,11 +64,11 @@ submission.
   attach failure it falls back to the page-realm interceptor and never
   hard-blocks the user's own browsing. It carries no agent-vs-user attribution,
   so the per-action `network-request` *capability* withhold stays in the page
-  realm — the CDP layer enforces only the deliberate, tab-wide domain blocks.
+  realm: the CDP layer enforces only the deliberate, tab-wide domain blocks.
 - **Block patterns are authorable in the delegation wizard, and validated at
   input time.** The Limited-preset sites step now offers an Allow/Block choice
   per site (it previously created allow patterns only, so no rule a user could
-  build ever carried a block pattern — the browser-layer enforcement above had
+  build ever carried a block pattern; the browser-layer enforcement above had
   nothing to act on). Block patterns are normalized and validated where they are
   entered (as the URL matcher's contract requires), so a user-typed block cannot
   be silently inert: a full URL is reduced to its host (a bare `https://evil.com`
@@ -76,18 +76,18 @@ submission.
   subdomains (`evil.com` also blocks `www.evil.com`), and empty / path / lone-`*`
   / over-broad inputs are refused with a plain-language reason instead of a false
   sense of safety. The host is canonicalized to exactly what the matcher compares
-  against — lowercased and trailing-dot-stripped (so `Evil.Com` and `evil.com.`
+  against: lowercased and trailing-dot-stripped (so `Evil.Com` and `evil.com.`
   are not silently inert), with a backslash authority folded the way the browser
   folds it, and a wildcard on the registrable tail (`*.com`, `**.com`) refused so
   a block cannot swallow a whole public suffix. The confirm step shows each
   pattern's action.
 - **A `block` site pattern is now a hard deny that wins over any `allow`,** in
   both enforcement layers. Previously the page-realm evaluator was first-match-
-  wins, so a broad allow listed before a specific block shadowed it — the monitor
+  wins, so a broad allow listed before a specific block shadowed it: the monitor
   and download paths permitted a host the CDP layer blocked, i.e. the two layers
   disagreed on the same rule. A matching block now denies regardless of order,
   matching the CDP layer (which is block-only).
-- **`npm run smoke:cdp` — real-browser release gate.** A headful Chrome exercise
+- **`npm run smoke:cdp`: real-browser release gate.** A headful Chrome exercise
   on the built `dist/` that proves, against a receipt-logging fixture server,
   that each CDP-closable egress vector is blocked only while enforcement is armed
   and flows again on every teardown path (setting-off, tab close, delegation
@@ -128,14 +128,14 @@ Web Store submission carries the full set.
 - **In-page delegation is now reachable (F-P, the field test's core gap).** The
   per-action block engine worked but could not be armed: the in-memory agent
   maps die with every MV3 worker restart, and the load path force-ended every
-  un-ended session as `agent-disconnected` — so the popup showed "No agents
+  un-ended session as `agent-disconnected`, so the popup showed "No agents
   detected" mid-session and there was no agent card to grant Read-Only from. A
   persisted active-agent registry now rehydrates agents whose tab still exists
-  **on the same origin** (tab identity is existence + origin — Chrome reuses
+  **on the same origin** (tab identity is existence + origin: Chrome reuses
   tab ids across restarts, and the kill switch closes the tabs in this map, so
   a bare id match could aim it at an unrelated restored tab). Malformed
   entries are dropped and pruned; origin mismatches and dead tabs end their
-  sessions honestly. The registry stores no new data class — it is a pointer
+  sessions honestly. The registry stores no new data class: it is a pointer
   over the agent/session data the privacy policy already describes as stored
   locally.
 - **The kill switch's own actions are attributed (F-M / F-D).** Sessions it
@@ -146,7 +146,7 @@ Web Store submission carries the full set.
   produces a coalesced notification (max one per 10s burst; honoring the
   Notifications setting) and a recent-violations entry with a plain-language
   why and the honest recovery path. Previously badge-only: the download
-  vanished with no explanation anywhere. No "Allow once" button — the
+  vanished with no explanation anywhere. No "Allow once" button: the
   download is already cancelled and cannot be resumed.
 - **"Allow once" works on the monitor path (F-B).** The toast's grant used to
   land only in the MAIN-world interceptor's set; the ISOLATED-world monitor
@@ -155,23 +155,23 @@ Web Store submission carries the full set.
   consumed on first matching event; kill-switch activation purges pending
   grants, mirroring the MAIN world.
 - **The downloads-permission wording is accurate (F-F).** The store listing no
-  longer claims "user-initiated exports only" — the extension detects and
+  longer claims "user-initiated exports only": the extension detects and
   cancels agent downloads per delegation rules, and the listing now says so
   (the privacy policy was already accurate).
 
-### Fixed (content-messaging repair — found by the new arming smoke)
+### Fixed (content-messaging repair, found by the new arming smoke)
 - **The content -> background pipeline works again.** Three stacked bugs had
   silently disabled it in production, invisible to the unit suite:
   1. Sender validation's origin check required the extension's own origin on
      EVERY message, but Chrome sets a content script's `sender.origin` to the
-     PAGE's origin — so every content-script message (in-page detections,
+     PAGE's origin, so every content-script message (in-page detections,
      action reports, boundary violations) was rejected. The suite stayed green
      because its content-sender fixtures omitted/faked the origin; fixtures
      now carry the production shape, and the origin requirement applies only
      to popup-class messages (where it correctly guards against a future
      `externally_connectable` misconfiguration).
   2. Any `chrome.runtime.lastError` on a sent message was treated as
-     "extension context invalidated", permanently muting the content script —
+     "extension context invalidated", permanently muting the content script,
      but `lastError` also fires for the routine "message port closed" produced
      by any declined message. One declined startup message and the tab dropped
      ALL background traffic (rules, kill-switch broadcasts, allow-once) for
@@ -181,7 +181,7 @@ Web Store submission carries the full set.
      so it was (correctly) rejected: tabs opened after a delegation activated
      never received their rule, and a navigation during an active kill switch
      did not re-arm the MAIN-world sentinel. A new content-only
-     TAB_STATE_QUERY returns exactly the tab's slice — its effective rule and
+     TAB_STATE_QUERY returns exactly the tab's slice: its effective rule and
      the kill-switch latch, answered from loaded state.
 
 ### Hardened (adversarial-review follow-ups)
@@ -191,7 +191,7 @@ Web Store submission carries the full set.
   ACTIVATE no longer depends on a successful state load; the popup renders
   "Killed"/"Monitoring" only on a confirmed response.
 - `getKillSwitchState` fails loud on storage read errors instead of returning
-  the inactive default — a storage blip must not silently lift a latched
+  the inactive default: a storage blip must not silently lift a latched
   emergency stop (missing/malformed keys still return the fresh-install
   default).
 - The content script's message handler mirrors the background's
@@ -200,12 +200,12 @@ Web Store submission carries the full set.
   observation is delegation-scoped since 0.6.1) instead of hiding.
 
 ### Added
-- `npm run smoke:arming` — release-smoke step 3, exercised end to end for the
+- `npm run smoke:arming`, release-smoke step 3, exercised end to end for the
   first time: drives the REAL toolbar popup wizard to activate a Read-Only
   rule, asserts the rule persists, then fires the in-page agent fixture's
   synthetic violations and asserts the monitor block and toast. Reports an
   explicit SKIP-ENV on a desktop without OS focus, never a false pass.
-- `scripts/inpage-agent-fixture.html` — the field test's self-driving in-page
+- `scripts/inpage-agent-fixture.html`: the field test's self-driving in-page
   agent fixture, now a repo asset.
 
 ## 0.6.1 - 2026-07-28
@@ -219,7 +219,7 @@ Two fixes from the 2026-07-28 field test of the store-installed 0.6.0
   silently lift an emergency stop), but the message listener was registered
   before that state finished loading. A `Resume Monitoring` / `KILL_SWITCH_RESET`
   handled during the load window was overwritten when the load reassigned
-  `state.killSwitch`, so the latch never cleared — leaving the user stuck in a
+  `state.killSwitch`, so the latch never cleared, leaving the user stuck in a
   KILLED state that stopped protecting them, with no in-product recovery (the
   only escape was uninstalling and reinstalling the extension). State-dependent
   handlers now await a memoized state load (`ensureReady`) before touching the
@@ -230,8 +230,8 @@ Two fixes from the 2026-07-28 field test of the store-installed 0.6.0
 - **Page network failures no longer attributed to the extension.** The MAIN-world
   `fetch`/`sendBeacon` wrappers were installed on every page unconditionally, so
   the extension's frame sat in the call chain of every page request. When a page's
-  own request failed — e.g. a site's Content-Security-Policy refusing its own
-  analytics beacon — Chrome attributed that failure to AI Browser Guard in
+  own request failed (e.g. a site's Content-Security-Policy refusing its own
+  analytics beacon), Chrome attributed that failure to AI Browser Guard in
   `chrome://extensions`, making a local-first, no-telemetry tool look like the
   source of blocked or suspicious traffic. The wrappers are now installed only
   while there is something to enforce (an active delegation rule or the kill
@@ -245,7 +245,7 @@ Two fixes from the 2026-07-28 field test of the store-installed 0.6.0
   monitor-only mode the popup's Network Activity panel and the session report's
   network summary stay empty (they previously recorded agent `fetch`/`XHR`/
   beacon traffic on every page); and a `fetch`/`sendBeacon` reference a page
-  captured while disarmed stays native, so arming later cannot reach it — one
+  captured while disarmed stays native, so arming later cannot reach it, one
   more route in the documented best-effort MAIN-world boundary (see
   "Enforcement scope" in `docs/architecture.md`; the class fix is CDP-layer
   enforcement, ADR-007). Regression test:
