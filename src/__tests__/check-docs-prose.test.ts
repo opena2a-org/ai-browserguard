@@ -46,6 +46,15 @@ describe('findProseIssues: dashes in prose', () => {
     ].join('\n');
     expect(lines(text)).toEqual([]);
   });
+
+  it('checks a line with a long whitespace run without stalling', () => {
+    const run = ' '.repeat(4000);
+    const started = Date.now();
+    expect(lines(`${run}x`)).toEqual([]);
+    expect(lines(`${run}x -- y`)).toEqual([1]);
+    expect(lines(`${run}|---|:--:|${run}`)).toEqual([]);
+    expect(Date.now() - started).toBeLessThan(1000);
+  });
 });
 
 describe('findProseIssues: code is exempt', () => {
