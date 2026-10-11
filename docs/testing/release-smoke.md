@@ -70,8 +70,9 @@ focused OS window); the export logic itself is locked in by
    detection fixture) and confirm the inline toast renders a monochrome shield
    icon, not an emoji, with WHAT / WHY / Settings. Allow once appears only for
    a medium or low severity block (for example a text input or a new tab on an
-   ordinary site); a click, a form submission or any block on a sensitive site
-   such as a bank shows no Allow once.
+   ordinary site). A click or a form submission shows no Allow once, and on a
+   sensitive site (an address containing `.bank.`, for example) neither does a
+   text input; a new tab there still offers it.
 4. Report export download (the regression that prompted this doc):
    - Generate at least one session report (let a detected session end, or seed
      `chrome.storage.local` with a `reports` array).
