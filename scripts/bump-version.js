@@ -10,6 +10,7 @@
  * What it updates:
  *   - manifest.json (version)
  *   - package.json (version)
+ *   - STATUS.md (current version in the stage rationale)
  *   - README.md (test count badge + dev section test count)
  *   - popup HTML __VERSION__ placeholder is handled at build time by build.js
  *   - popup.ts reads chrome.runtime.getManifest().version at runtime as safety net
@@ -34,6 +35,7 @@ if (!arg) {
 const manifestPath = resolve(root, 'manifest.json');
 const packagePath = resolve(root, 'package.json');
 const readmePath = resolve(root, 'README.md');
+const statusPath = resolve(root, 'STATUS.md');
 
 const manifest = JSON.parse(readFileSync(manifestPath, 'utf-8'));
 const pkg = JSON.parse(readFileSync(packagePath, 'utf-8'));
@@ -62,11 +64,16 @@ switch (arg) {
     }
 }
 
-// 1. Update manifest.json and package.json
+// 1. Update manifest.json, package.json, and STATUS.md
 manifest.version = newVersion;
 pkg.version = newVersion;
 writeFileSync(manifestPath, JSON.stringify(manifest, null, 2) + '\n');
 writeFileSync(packagePath, JSON.stringify(pkg, null, 2) + '\n');
+const status = readFileSync(statusPath, 'utf-8');
+writeFileSync(
+  statusPath,
+  status.replace(/currently at v\d+\.\d+\.\d+/, `currently at v${newVersion}`)
+);
 console.log(`Version: ${current} -> ${newVersion}`);
 
 // 2. Run tests and capture the count
@@ -91,6 +98,7 @@ try {
     pkg.version = current;
     writeFileSync(manifestPath, JSON.stringify(manifest, null, 2) + '\n');
     writeFileSync(packagePath, JSON.stringify(pkg, null, 2) + '\n');
+    writeFileSync(statusPath, status);
     process.exit(1);
   }
 }
@@ -127,6 +135,7 @@ try {
 console.log(`\nDone. Files updated:`);
 console.log(`  manifest.json      ${newVersion}`);
 console.log(`  package.json       ${newVersion}`);
+console.log(`  STATUS.md          v${newVersion}`);
 console.log(`  README.md          ${testCount} tests`);
 console.log(`  dist/popup HTML    v${newVersion} (injected at build)`);
 console.log(`  popup.ts runtime   reads from manifest (automatic)`);
