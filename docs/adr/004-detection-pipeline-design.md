@@ -41,6 +41,16 @@ script on each page load:
    patterns, Selenium WebDriver protocol artifacts, Anthropic Computer Use
    screenshot-then-click sequences, and OpenAI Operator navigation patterns.
 
+> **Correction (2026-10-11).** No sequence or navigation-pattern analysis
+> exists for Computer Use or Operator. `detectAnthropicComputerUse` and
+> `detectOpenAIOperator` in `src/detection/automation.ts` check the environment
+> the browser runs in. For Computer Use they check the WebGL renderer string,
+> the screen resolution and the platform. For Operator they check the platform,
+> the user agent, the plugin count and the WebGL renderer string. Each detector
+> needs two of its indicators and reports `medium` confidence at most. These
+> two detections match the environment an agent typically runs in, not the
+> actions it takes.
+
 Detection results carry a confidence level (`low`, `medium`, `high`,
 `confirmed`). The `aggregateBehavioralAnalysis` function in
 `src/detection/behavioral.ts` escalates confidence when multiple signals

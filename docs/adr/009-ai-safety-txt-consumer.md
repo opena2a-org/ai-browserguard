@@ -220,6 +220,16 @@ bug, so:
   which is drift in the opposite direction, and just as inaccurate. Same for the
   opena2a-website pages. Both are updated at the release that first ships this,
   gated in `docs/testing/release-smoke.md`.
+
+  > **Correction (2026-10-11).** This bullet describes the store copy as it was
+  > when the feature was built. Site safety declarations first shipped in 0.6.0,
+  > and that release rewrote `docs/chrome-web-store-description.md` and
+  > `docs/store-listing.md` to disclose them (see the 0.6.0 entry in
+  > `CHANGELOG.md`). Neither file is pinned to the v0.5.0 submission now: the
+  > first is headed v0.7.0, the second carries no version, and both describe
+  > site safety declarations. The opena2a-website pages are in another
+  > repository and are not checked here; `docs/testing/release-smoke.md` still
+  > lists them.
 - **ADR-006's "four surfaces" is an undercount, and that matters.** It lists
   policy, README, listing, and settings UI. But the policy a user actually reads
   is served from **a different repo**
