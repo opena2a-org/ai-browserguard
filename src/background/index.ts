@@ -33,7 +33,7 @@ import {
 import { shouldIgnoreDownload, attributeDownload, describeDownload, hostOf, originOf } from './download-monitor';
 import { setupNotificationHandlers, clearAllNotifications, showBoundaryNotification, showNoticeNotification } from '../alerts/notification';
 import type { BoundaryAlert } from '../alerts/boundary';
-import { processBoundaryViolation, handleAllowOnce } from './handlers';
+import { processBoundaryViolation, handleAllowOnce, MAX_RECENT_ALERTS } from './handlers';
 import { isValidSender } from './sender-validation';
 import { createUpdateController } from './update-policy';
 import { computeBadge, BLOCK_BADGE_TTL_MS } from './badge';
@@ -1294,7 +1294,7 @@ function handleBoundaryViolation(tabId: number | undefined, violation: BoundaryV
   const alert = processBoundaryViolation(tabId, violation, activeRule, state.activeSessions, state.notificationsEnabled);
 
   state.recentAlerts.push(alert);
-  if (state.recentAlerts.length > 20) {
+  if (state.recentAlerts.length > MAX_RECENT_ALERTS) {
     state.recentAlerts.shift();
   }
 
@@ -1928,7 +1928,7 @@ async function handleDownloadCreated(item: chrome.downloads.DownloadItem): Promi
       showBoundaryNotification(alert, { enabled: state.notificationsEnabled, autoDismissMs: 0 });
     }
     state.recentAlerts.push(alert);
-    if (state.recentAlerts.length > 20) {
+    if (state.recentAlerts.length > MAX_RECENT_ALERTS) {
       state.recentAlerts.shift();
     }
   }

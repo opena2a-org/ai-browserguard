@@ -57,7 +57,7 @@ const DEFAULT_CACHE_TTL_MS = 24 * 60 * 60 * 1000;
  * back, long enough to stop a broken origin from being re-hit on every
  * detection. Longer than AIM's 30s equivalent because nothing here is urgent.
  */
-const UNREACHABLE_CACHE_TTL_MS = 5 * 60 * 1000;
+export const UNREACHABLE_CACHE_TTL_MS = 5 * 60 * 1000;
 
 /**
  * Ceiling for the unreachable-refetch backoff. Consecutive failures double the
@@ -67,7 +67,7 @@ const UNREACHABLE_CACHE_TTL_MS = 5 * 60 * 1000;
  * — each one being a fingerprintable signal to a third party (ADR-009 counts
  * this as a privacy control, not a latency knob).
  */
-const UNREACHABLE_BACKOFF_CAP_MS = 4 * 60 * 60 * 1000;
+export const UNREACHABLE_BACKOFF_CAP_MS = 4 * 60 * 60 * 1000;
 
 /** Doublings beyond this cannot change the capped TTL; also bounds 2**n. */
 const MAX_BACKOFF_DOUBLINGS = 10;
