@@ -11,7 +11,7 @@ import type { AgentCapability } from './agent';
  * Built-in delegation presets that provide quick configuration.
  * - "readOnly": Agent can navigate and read DOM, but cannot interact.
  * - "limited": Agent can interact with specific allowlisted sites, time-bounded.
- * - "fullAccess": Agent can do anything, but all actions are logged and boundary alerts fire.
+ * - "fullAccess": Agent can do anything, logged, for at most FULL_ACCESS_MAX_MINUTES (always time-bounded).
  */
 export type DelegationPreset = 'readOnly' | 'limited' | 'fullAccess';
 
@@ -68,7 +68,7 @@ export interface DelegationScope {
   /** Action-level restrictions. If an action is not listed, it is blocked by default. */
   actionRestrictions: ActionRestriction[];
 
-  /** Time bounds for this delegation. Null means no time limit (fullAccess preset). */
+  /** Time bounds for this delegation. Null means no time limit (readOnly preset). */
   timeBound: TimeBound | null;
 }
 
