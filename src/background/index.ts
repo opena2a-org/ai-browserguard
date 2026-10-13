@@ -1037,6 +1037,62 @@ const AGENT_DISPLAY_NAMES: Record<string, string> = {
   unknown: 'Unknown Agent',
 };
 
+/**
+ * Write a detection to the session of the tab it was made in.
+ *
+ * One tab can report several detections, and storing each as a session let a
+ * single tab fill the session store. A further detection is added to the
+ * tab's open session, which takes the agent now registered for the tab.
+ * A new session is started only when the tab has none, or the one it had has
+ * ended or is no longer among the stored sessions.
+ */
+async function recordDetectionInSession(
+  tabId: number,
+  agent: AgentIdentity,
+  detection: AgentEvent,
+): Promise<{ sessionId: string; started: boolean }> {
+  const openSessionId = state.activeSessions.get(tabId);
+  if (openSessionId) {
+    let continued = false;
+    await updateSession(openSessionId, (session) => {
+      if (session.endedAt) return session;
+      continued = true;
+      return appendEventToSession({ ...session, agent: { ...agent } }, detection);
+    });
+    if (continued) return { sessionId: openSessionId, started: false };
+    // Another detection for this tab may have started the replacement while
+    // this one waited on storage; continue that one.
+    if (state.activeSessions.get(tabId) !== openSessionId) {
+      return recordDetectionInSession(tabId, agent, detection);
+    }
+  }
+
+  // Attribute the session to the rule that actually governs this tab's agent
+  // (per-agent rule if one exists, else the session-wide rule).
+  const session: AgentSession = {
+    id: crypto.randomUUID(),
+    agent,
+    delegationRule: getEffectiveRuleForTab(tabId),
+    events: [],
+    startedAt: new Date().toISOString(),
+    endedAt: null,
+    endReason: null,
+    summary: {
+      totalActions: 0,
+      allowedActions: 0,
+      blockedActions: 0,
+      violations: 0,
+      topUrls: [],
+      durationSeconds: null,
+    },
+  };
+  // Claimed before the write, so a detection that arrives for this tab while
+  // the session is being stored is added to it. Storage writes run in order.
+  state.activeSessions.set(tabId, session.id);
+  await saveSession(appendEventToSession(session, detection));
+  return { sessionId: session.id, started: true };
+}
+
 async function handleDetection(tabId: number, event: DetectionEvent, fromDebugger = false): Promise<void> {
   if (!event.agent) return;
 
@@ -1054,35 +1110,13 @@ async function handleDetection(tabId: number, event: DetectionEvent, fromDebugge
   // agent already announced; anything else is a new agent in this tab.
   if (!replaced || replaced.type !== event.agent.type) notifyAgentDetected(event.agent);
 
-  // Create a new session. Attribute it to the rule that actually governs this
-  // tab's agent (per-agent rule if one exists, else the session-wide rule).
-  const session: AgentSession = {
-    id: crypto.randomUUID(),
-    agent: event.agent,
-    delegationRule: getEffectiveRuleForTab(tabId),
-    events: [],
-    startedAt: new Date().toISOString(),
-    endedAt: null,
-    endReason: null,
-    summary: {
-      totalActions: 0,
-      allowedActions: 0,
-      blockedActions: 0,
-      violations: 0,
-      topUrls: [],
-      durationSeconds: null,
-    },
-  };
-
-  // Add detection event to timeline
+  // Add the detection to the tab's session timeline, starting a session when
+  // the tab has none open.
   const agentDisplayName = AGENT_DISPLAY_NAMES[event.agent.type] ?? event.agent.type;
   const timelineEvent = createTimelineEvent('detection', event.url, `Agent detected: ${agentDisplayName}`, {
     outcome: 'informational',
   });
-  const updatedSession = appendEventToSession(session, timelineEvent);
-
-  await saveSession(updatedSession);
-  state.activeSessions.set(tabId, updatedSession.id);
+  const { sessionId, started: sessionStarted } = await recordDetectionInSession(tabId, event.agent, timelineEvent);
   // Persist the agent+session pairing so a worker restart can rehydrate it
   // while the tab lives (F-P) — without this, any restart mid-session empties
   // the popup and there is no agent card left to grant a delegation from.
@@ -1090,7 +1124,7 @@ async function handleDetection(tabId: number, event: DetectionEvent, fromDebugge
     ...reg,
     [String(tabId)]: {
       agent: event.agent!,
-      sessionId: updatedSession.id,
+      sessionId,
       ...(fromDebugger ? { fromDebugger: true } : {}),
     },
   })).catch(() => { /* availability aid — next detection re-persists */ });
@@ -1124,7 +1158,7 @@ async function handleDetection(tabId: number, event: DetectionEvent, fromDebugge
   state.lifetimeStats = {
     ...state.lifetimeStats,
     firstActiveAt: state.lifetimeStats.firstActiveAt ?? new Date().toISOString(),
-    totalSessions: state.lifetimeStats.totalSessions + 1,
+    totalSessions: state.lifetimeStats.totalSessions + (sessionStarted ? 1 : 0),
     agentTypesDetected: updatedTypes,
   };
   updateLifetimeStats(() => state.lifetimeStats).catch(() => { /* non-critical */ });

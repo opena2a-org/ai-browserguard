@@ -345,8 +345,12 @@ function getToastStyles(): string {
       transform: translateX(120%);
       opacity: 0;
       transition: transform 0.3s ease, opacity 0.3s ease;
-      width: 340px;
-      max-width: 90vw;
+      /* The width counts the padding and border, so the cap below is the
+         whole box: the viewport less the container's 16px offset on the
+         right and the same margin on the left. */
+      box-sizing: border-box;
+      width: 366px;
+      max-width: calc(100vw - 32px);
     }
 
     .abg-toast-visible {

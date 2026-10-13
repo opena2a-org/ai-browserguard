@@ -194,3 +194,68 @@ describe('release gate: the manual block step states "Allow once" as the toast o
     expect(manualBlockStep()).not.toMatch(/any block on a sensitive site/i);
   });
 });
+
+/**
+ * The store copy listed "a scripted navigation, form submission, click,
+ * keystroke, or new-tab open" and promised "the option to allow it once" for
+ * the lot (#122). A click is high severity and a form submission critical, so
+ * neither the notice on the page nor the Chrome notification offers it for
+ * those. Each test reads what the two surfaces offer and requires the Boundary
+ * Violation Alerts item to say the same.
+ */
+describe.each([
+  'docs/chrome-web-store-description.md',
+  'docs/store-listing.md',
+  'docs/store-description-v0.5.0.txt',
+])('store copy %s: Boundary Violation Alerts states "Allow once" as it is offered', (relPath) => {
+  const ORDINARY = 'https://example.com/page';
+  const SENSITIVE = 'https://online.bank.example/transfer';
+
+  function toastOffers(capability: AgentCapability, url: string): boolean {
+    document.getElementById('abg-toast-container')?.remove();
+    showBlockedToast({ capability, url, reason: '', onAllowOnce: () => {} });
+    return allowOnceButton() !== null;
+  }
+
+  function notificationOffers(capability: AgentCapability, url: string): boolean {
+    const violation: BoundaryViolation = {
+      id: 'v', timestamp: new Date(0).toISOString(), agentId: '', attemptedAction: capability, url,
+      blockingRuleId: 'rule', reason: '', userOverride: false,
+    };
+    return createBoundaryAlert(violation, createRuleFromPreset('readOnly')).allowOneTimeOverride;
+  }
+
+  /** The Boundary Violation Alerts item, up to the next blank line. */
+  function alertsItem(): string {
+    const text = readFileSync(resolve(__dirname, '../..', relPath), 'utf-8');
+    const start = text.indexOf('4. Boundary Violation Alerts');
+    expect(start, `${relPath} must keep its "4. Boundary Violation Alerts" item`).toBeGreaterThanOrEqual(0);
+    return text.slice(start, text.indexOf('\n\n', start)).replace(/\s+/g, ' ');
+  }
+
+  it('says it is offered for a text input, navigation or new tab on an ordinary site', () => {
+    for (const capability of ['type-text', 'navigate', 'open-tab'] as AgentCapability[]) {
+      expect(toastOffers(capability, ORDINARY)).toBe(true);
+      expect(notificationOffers(capability, ORDINARY)).toBe(true);
+    }
+
+    expect(alertsItem()).toContain(
+      'Allow once is offered for a blocked text input, navigation or new tab on an ordinary site',
+    );
+  });
+
+  it('says it is not offered for a click or a form submission', () => {
+    for (const url of [ORDINARY, SENSITIVE]) {
+      for (const capability of ['click', 'submit-form'] as AgentCapability[]) {
+        expect(toastOffers(capability, url)).toBe(false);
+        expect(notificationOffers(capability, url)).toBe(false);
+      }
+    }
+
+    expect(alertsItem()).toContain('and not for a click or a form submission');
+  });
+
+  it('does not promise the option for every blocked action it lists', () => {
+    expect(alertsItem()).not.toMatch(/and the option to allow it once/i);
+  });
+});

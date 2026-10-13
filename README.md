@@ -2,7 +2,7 @@
 
 [![Status: beta](https://img.shields.io/badge/status-beta-yellow)](./STATUS.md)
 [![Build](https://github.com/opena2a-org/AI-BrowserGuard/actions/workflows/ci.yml/badge.svg)](https://github.com/opena2a-org/AI-BrowserGuard/actions/workflows/ci.yml)
-[![Tests](https://img.shields.io/badge/tests-1365%20passing-brightgreen)](https://github.com/opena2a-org/AI-BrowserGuard)
+[![Tests](https://img.shields.io/badge/tests-1397%20passing-brightgreen)](https://github.com/opena2a-org/AI-BrowserGuard)
 [![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
 [![Chrome MV3](https://img.shields.io/badge/Chrome-Manifest%20V3-4285F4)](https://developer.chrome.com/docs/extensions/mv3/)
 
@@ -26,6 +26,8 @@ An AI agent takes over a tab. AI Browser Guard detects it without the agent iden
 - **Kill switch**: one-click stop. Revokes delegations, dispatches a page-realm stop to in-page automation, and **closes the tabs an agent controls** (the real interruption of an in-progress action). It does **not** terminate an external CDP session (an extension cannot), and a persistent external driver can reopen a tab. Keyboard shortcut: Ctrl+Shift+K / Cmd+Shift+K.
 
 > **Scope of enforcement.** Detection and monitoring work against every framework above; per-action blocking does not. External frameworks drive the browser over CDP with native input the page realm cannot intercept, so against them AI Browser Guard detects, alerts, and closes the tab, but cannot enforce per-action policy. Downloads are the exception, for every kind of agent: under Read-Only or Limited, a download that Chrome reports starting in an agent's tab is cancelled through Chrome's downloads API, which does not depend on intercepting the agent's input. The report comes from the debugger session Browser-layer blocking (Settings) attaches to that tab, so downloads are cancelled only while that setting is on; a download you start in the agent's tab is cancelled too. An open DevTools window makes the page it inspects look attached to a debugger, so an agent first seen through an attachment while DevTools is open in any tab is treated as most likely you inspecting a page: a download in its tab is recorded, not cancelled. A download from any other tab is recorded in the session log and not cancelled, including one from the same site as the agent's page: Chrome's downloads API does not say which tab a download came from. For the same reason, when a download of the same URL started in another tab in the 5 seconds before Chrome reports the one in the agent's tab, the report does not say which of the two is the agent's, so neither is cancelled; both are recorded. Nor is it paused for you to keep or discard: in Chrome, a paused download from a short-lived link without range support is lost when the server closes the connection while it waits (`node scripts/measure-download-hold.mjs` measures this). When such a download comes from the site of the agent's page, you get a notification that it was not stopped. The only categorical prevention is a managed-Chrome policy, `RemoteDebuggingAllowed=false`; Chrome 136+ already blocks remote debugging of your default profile by default. The per-action blocking below applies only to in-page / injected automation, is best-effort (a hostile page can re-patch the wrapped globals), and does not yet cover every in-page sink. See [ADR-008](docs/adr/008-enforcement-scope.md) for the rationale and boundary.
+>
+> **Tabs with no detected agent.** A session delegation is the rule in a tab where no agent was detected too, and in-page blocking does not wait for a detection. While a rule is in effect in a tab, it blocks an untrusted `click`, `keydown`, `input` or `submit` event that the rule does not permit, whether an agent or the page's own script dispatched it: both arrive as events the browser marks untrusted. So under Read-Only, a page that dispatches such an event itself, from a timer for example, has it blocked in a tab where nothing was detected: you get the block notification, the toolbar badge shows `!` and the block is listed in the popup, while nothing is added to the detection log or to a session log. To let a site's own scripted events through, pause the guard on that site.
 
 ## Detected Frameworks
 
@@ -92,7 +94,7 @@ One-click opt out for each. See [ADR-006](docs/adr/006-opt-in-network-features.m
 npm install          # Install dependencies
 npm run build        # Build to dist/
 npm run dev          # Watch mode
-npm run test         # 1365 tests
+npm run test         # 1397 tests
 npm run lint         # TypeScript strict checking and the docs prose check
 ```
 

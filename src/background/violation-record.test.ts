@@ -124,6 +124,41 @@ describe('where a boundary violation is recorded', () => {
     expect(item).not.toMatch(/Each boundary violation/i);
   });
 
+  // #122: the README stated the scope of enforcement without saying that a
+  // session delegation governs a tab with no detected agent, where a block is
+  // shown with no detection to explain it.
+  it('a tab where no agent was detected is given the session delegation, and a block there adds no detection', async () => {
+    const h = await workerWithOneAgent();
+
+    const respond = vi.fn();
+    h({ type: 'TAB_STATE_QUERY', data: {} }, tabSender(OTHER_TAB, OTHER_URL), respond);
+    await step();
+    expect((respond.mock.calls[0][0] as { effectiveRule: { preset: string } | null }).effectiveRule?.preset).toBe('readOnly');
+
+    chromeMock.notifications.create.mockClear();
+    chromeMock.action.setBadgeText.mockClear();
+    await blockTextInput(h, OTHER_TAB, OTHER_URL, 'v-other');
+
+    const titles = (chromeMock.notifications.create.mock.calls as unknown as Array<[string, { title?: string }]>)
+      .map(([, options]) => options.title);
+    expect(titles).toEqual(['AI Browser Guard - Text input blocked']);
+    const badges = (chromeMock.action.setBadgeText.mock.calls as unknown as Array<[{ text: string }]>).map(([b]) => b.text);
+    expect(badges[badges.length - 1]).toBe('!');
+    expect(recentViolationIds(h)).toEqual(['v-other']);
+
+    const { detectionLog } = (await chromeMock.storage.local.get('detectionLog')) as { detectionLog?: Array<{ url: string }> };
+    expect((detectionLog ?? []).map((entry) => entry.url)).toEqual([AGENT_URL]);
+
+    const readme = readFileSync(new URL('../../README.md', import.meta.url), 'utf-8');
+    const start = readme.indexOf('> **Scope of enforcement.**');
+    expect(start, 'the README must keep its "Scope of enforcement" note').toBeGreaterThanOrEqual(0);
+    const note = readme.slice(start, readme.indexOf('\n\n', start));
+    expect(note).toContain('A session delegation is the rule in a tab where no agent was detected too');
+    expect(note).toContain(
+      'you get the block notification, the toolbar badge shows `!` and the block is listed in the popup, while nothing is added to the detection log or to a session log',
+    );
+  });
+
   it("a violation in a detected agent's tab is also written to that agent's session log", async () => {
     const h = await workerWithOneAgent();
 

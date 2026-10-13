@@ -403,7 +403,9 @@ interface StorageSchema {
 ### Session Lifecycle
 
 ```
-AgentSession created (handleDetection)
+AgentSession created (handleDetection, for a tab with no open stored session)
+  -> a further detection in the tab appended as a 'detection' event; the
+     session takes the agent now registered for the tab
   -> events appended (handleAgentAction, handleBoundaryViolation)
   -> session ended with endReason:
      - 'kill-switch' (kill switch activated; stamped BEFORE the tabs close so
@@ -496,7 +498,6 @@ The content script is injected at `document_start`, before the DOM is constructe
 - **Passive listeners**: Behavioral data collectors use `{ passive: true }` to avoid blocking scroll and input.
 - **Capture phase**: Both boundary monitoring and behavioral collection use `{ capture: true }` to intercept events before they reach page scripts.
 - **Buffer limits**: Behavioral event buffers are capped at `behavioralSampleSize * 3` (default: 60 events). Excess events are shifted from the front.
-- **Violation cap**: The monitor's `recentViolations` array is capped at 50 entries.
 - **Minimal memory footprint**: No external dependencies; all logic is inline TypeScript compiled to a single IIFE bundle.
 - **Detection polling**: The 5-second recheck interval, 2-second CDP monitor, and 3-second WebDriver monitor use `setInterval`. All are cleared on cleanup.
 
@@ -579,6 +580,8 @@ The detection/enforcement code runs in two realms: the **ISOLATED** content-scri
 ```
 
 When a violation occurs on a sensitive URL, severity is upgraded by one level (e.g., `medium` becomes `high`, `high` becomes `critical`).
+
+An address is sensitive only when it contains one of these patterns. `https://www.irs.gov/` and `https://www.chase.com/` contain none of them (`.gov.` needs a dot after `gov`), so a violation there keeps its base severity.
 
 ### One-Time Override Controls
 

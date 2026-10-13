@@ -17,7 +17,6 @@ export interface MonitorState {
   isMonitoring: boolean;
   allowedCount: number;
   blockedCount: number;
-  recentViolations: BoundaryViolation[];
 }
 
 export interface BoundaryCheckResult {
@@ -32,7 +31,6 @@ let monitorState: MonitorState = {
   isMonitoring: false,
   allowedCount: 0,
   blockedCount: 0,
-  recentViolations: [],
 };
 
 /**
@@ -175,7 +173,6 @@ export function startBoundaryMonitor(
     isMonitoring: true,
     allowedCount: 0,
     blockedCount: 0,
-    recentViolations: [],
   };
 
   const cleanups: Array<() => void> = [];
@@ -266,10 +263,6 @@ export function startBoundaryMonitor(
         reason: result.reason,
         userOverride: false,
       };
-      monitorState.recentViolations.push(violation);
-      if (monitorState.recentViolations.length > 50) {
-        monitorState.recentViolations.shift();
-      }
       onViolation(violation);
 
       const event = createTimelineEvent('action-blocked', url, `${capability} blocked: ${result.reason}`, {
