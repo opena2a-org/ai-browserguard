@@ -9,9 +9,11 @@
  * registered on the SAME node at the SAME phase run. The handler uses
  * `stopImmediatePropagation()` so a blocked synthetic event is truly halted.
  */
-import { describe, it, expect, beforeEach, vi } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
+import { readFileSync } from 'fs';
+import { resolve } from 'path';
 import '../__tests__/setup';
-import { startBoundaryMonitor } from './monitor';
+import { startBoundaryMonitor, getMonitorState } from './monitor';
 import { createRuleFromPreset } from '../delegation/rules';
 
 describe('boundary monitor interception (DOM)', () => {
@@ -68,5 +70,81 @@ describe('boundary monitor interception (DOM)', () => {
 
     document.removeEventListener('click', pageHandler, { capture: true });
     stop();
+  });
+
+  // #122: each blocked event was also pushed to a list of up to 50 in the
+  // monitor state, which no code read. A block is handed to onViolation; the
+  // state keeps the two counts.
+  it('counts a blocked event and keeps no list of blocked events', () => {
+    const stop = startBoundaryMonitor(createRuleFromPreset('readOnly'), vi.fn(), vi.fn());
+
+    const button = document.createElement('button');
+    document.body.appendChild(button);
+    button.dispatchEvent(new Event('click', { bubbles: true, cancelable: true }));
+
+    const state = getMonitorState();
+    stop();
+    expect(state.blockedCount).toBe(1);
+    expect(Object.keys(state).sort()).toEqual(['activeRule', 'allowedCount', 'blockedCount', 'isMonitoring']);
+
+    const architecture = readFileSync(resolve(__dirname, '../..', 'docs/architecture.md'), 'utf-8');
+    expect(architecture).not.toContain('recentViolations');
+  });
+});
+
+/**
+ * #122: the monitor acts on the rule in its tab and on whether an event is
+ * trusted. It is told nothing about a detected agent, so a page's own script
+ * that dispatches an event is blocked like an agent's. The README's scope of
+ * enforcement must say so.
+ */
+describe('a page\'s own scripted event under Read-Only, with no agent in the tab', () => {
+  beforeEach(() => {
+    document.body.innerHTML = '';
+    vi.useFakeTimers();
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  const SCRIPTED_EVENTS: Array<[string, () => Event]> = [
+    ['click', () => new MouseEvent('click', { bubbles: true, cancelable: true })],
+    ['keydown', () => new KeyboardEvent('keydown', { bubbles: true, cancelable: true })],
+    ['input', () => new Event('input', { bubbles: true, cancelable: true })],
+    ['submit', () => new Event('submit', { bubbles: true, cancelable: true })],
+  ];
+
+  it.each(SCRIPTED_EVENTS)('blocks a %s event the page dispatches from a timer', (type, create) => {
+    const onViolation = vi.fn();
+    const stop = startBoundaryMonitor(createRuleFromPreset('readOnly'), onViolation, vi.fn());
+
+    const form = document.createElement('form');
+    const input = document.createElement('input');
+    form.appendChild(input);
+    document.body.appendChild(form);
+    const pageHandler = vi.fn();
+    form.addEventListener(type, pageHandler);
+
+    const event = create();
+    setTimeout(() => (type === 'submit' ? form : input).dispatchEvent(event), 1000);
+    vi.advanceTimersByTime(1000);
+
+    expect(event.defaultPrevented).toBe(true);
+    expect(pageHandler).not.toHaveBeenCalled();
+    expect(onViolation).toHaveBeenCalledTimes(1);
+    stop();
+  });
+
+  it('the README says so where it states the scope of enforcement', () => {
+    const readme = readFileSync(resolve(__dirname, '../..', 'README.md'), 'utf-8');
+    const start = readme.indexOf('> **Scope of enforcement.**');
+    expect(start, 'the README must keep its "Scope of enforcement" note').toBeGreaterThanOrEqual(0);
+    const note = readme.slice(start, readme.indexOf('\n\n', start));
+
+    expect(note).toContain('**Tabs with no detected agent.**');
+    expect(note).toContain(
+      'it blocks an untrusted `click`, `keydown`, `input` or `submit` event that the rule does not permit, whether an agent or the page\'s own script dispatched it',
+    );
   });
 });

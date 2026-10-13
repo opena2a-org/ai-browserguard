@@ -20,7 +20,13 @@ export interface BoundaryAlert {
   acknowledged: boolean;
 }
 
-const SENSITIVE_URL_PATTERNS = [
+/**
+ * An address is treated as sensitive when it contains one of these, anywhere
+ * in it. The list is short: `https://www.irs.gov/` and `https://www.chase.com/`
+ * contain none of them (`.gov.` needs a dot after `gov`) and are not raised.
+ * Text that describes the rule to a user names the patterns, not a kind of site.
+ */
+export const SENSITIVE_URL_PATTERNS = [
   /\.bank\./i,
   /\.gov\./i,
   /paypal/i,

@@ -1,5 +1,7 @@
 import { describe, it, expect } from 'vitest';
+import { readFileSync } from 'fs';
 import {
+  SENSITIVE_URL_PATTERNS,
   createBoundaryAlert,
   classifyViolationSeverity,
   generateAlertTitle,
@@ -46,6 +48,60 @@ describe('classifyViolationSeverity', () => {
   it('upgrades severity for sensitive URLs', () => {
     expect(classifyViolationSeverity('navigate', 'https://my.bank.com')).toBe('high');
     expect(classifyViolationSeverity('click', 'https://secure.gov.uk/portal')).toBe('critical');
+  });
+});
+
+/**
+ * #122: the changelog entry for #109 said each level rises "on a sensitive
+ * site such as a bank, payment or government site". The rule is a short list
+ * of patterns looked for in the address, and most bank and government
+ * addresses contain none of them, so the rule is described by its patterns.
+ */
+describe('a sensitive address is described by the patterns that make it one', () => {
+  /** What a pattern looks for, as text: /\.bank\./i looks for ".bank.". */
+  const fragment = (pattern: RegExp): string => pattern.source.replace(/\\\./g, '.');
+
+  function read(relPath: string): string {
+    return readFileSync(new URL(`../../${relPath}`, import.meta.url), 'utf-8');
+  }
+
+  /** The changelog entry on the in-page notice's "Allow once" rule (#109). */
+  function changelogEntry(): string {
+    const changelog = read('CHANGELOG.md');
+    const start = changelog.indexOf(
+      '- **The in-page block notice no longer offers "Allow once" for a high or critical severity block (#109).**',
+    );
+    expect(start, 'the changelog must keep its entry for #109').toBeGreaterThanOrEqual(0);
+    return changelog.slice(start, changelog.indexOf('\n', start));
+  }
+
+  it('raises a text input from medium to high on an address containing any one pattern', () => {
+    expect(SENSITIVE_URL_PATTERNS.map(fragment)).toEqual([
+      '.bank.', '.gov.', 'paypal', 'stripe', '.financial', 'healthcare', '.mil.',
+    ]);
+    for (const pattern of SENSITIVE_URL_PATTERNS) {
+      expect(classifyViolationSeverity('type-text', `https://example.test/x${fragment(pattern)}x`)).toBe('high');
+    }
+  });
+
+  it('does not raise an address that contains none of them, such as these bank and government sites', () => {
+    expect(classifyViolationSeverity('type-text', 'https://www.irs.gov/')).toBe('medium');
+    expect(classifyViolationSeverity('type-text', 'https://www.chase.com/')).toBe('medium');
+  });
+
+  it('the changelog entry names each pattern and no kind of site', () => {
+    const entry = changelogEntry();
+    for (const pattern of SENSITIVE_URL_PATTERNS) {
+      expect(entry).toContain(`\`${fragment(pattern)}\``);
+    }
+    expect(entry).toContain('`https://www.irs.gov/` or `https://www.chase.com/`, is not raised');
+    expect(entry).not.toMatch(/such as a bank, payment or government site/i);
+  });
+
+  it('the architecture document says which addresses the patterns leave out', () => {
+    expect(read('docs/architecture.md')).toContain(
+      '`https://www.irs.gov/` and `https://www.chase.com/` contain none of them',
+    );
   });
 });
 

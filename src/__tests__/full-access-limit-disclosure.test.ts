@@ -40,6 +40,7 @@ const SURFACES: Array<[string, () => string]> = [
   ['README.md delegation presets table', () => fullAccessLine('README.md', '| Full Access |')],
   ['docs/chrome-web-store-description.md', () => fullAccessLine('docs/chrome-web-store-description.md', 'Full Access (')],
   ['docs/store-listing.md', () => fullAccessLine('docs/store-listing.md', '- Full Access:')],
+  ['docs/store-description-v0.5.0.txt', () => fullAccessLine('docs/store-description-v0.5.0.txt', 'Full Access (')],
   ['wizard preset description', wizardFullAccessDescription],
 ];
 
