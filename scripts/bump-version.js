@@ -1,5 +1,5 @@
 /**
- * Bump version across all files and update test count in README.
+ * Bump version across all files, after the test suite passes.
  *
  * Single command to keep everything in sync:
  *   npm run bump -- patch    # 0.2.0 -> 0.2.1
@@ -11,7 +11,6 @@
  *   - manifest.json (version)
  *   - package.json (version)
  *   - STATUS.md (current version in the stage rationale)
- *   - README.md (test count badge + dev section test count)
  *   - popup HTML __VERSION__ placeholder is handled at build time by build.js
  *   - popup.ts reads chrome.runtime.getManifest().version at runtime as safety net
  */
@@ -34,7 +33,6 @@ if (!arg) {
 // Read current version from manifest (single source of truth)
 const manifestPath = resolve(root, 'manifest.json');
 const packagePath = resolve(root, 'package.json');
-const readmePath = resolve(root, 'README.md');
 const statusPath = resolve(root, 'STATUS.md');
 
 const manifest = JSON.parse(readFileSync(manifestPath, 'utf-8'));
@@ -103,25 +101,9 @@ try {
   }
 }
 
-// 3. Update README.md — test badge and dev section
+// 3. Report the test count (the README states none, so no file is updated)
 if (testCount) {
-  let readme = readFileSync(readmePath, 'utf-8');
-
-  // Update badge: tests-NNN%20passing
-  readme = readme.replace(
-    /tests-\d+%20passing/g,
-    `tests-${testCount}%20passing`
-  );
-
-  // Update dev section: # NNN tests
-  readme = readme.replace(
-    /# \d+ tests/g,
-    `# ${testCount} tests`
-  );
-
-  writeFileSync(readmePath, readme);
   console.log(`Tests: ${testCount} passing`);
-  console.log(`  Updated: README.md badge + dev section`);
 }
 
 // 4. Run build to verify and inject version into dist
@@ -136,6 +118,5 @@ console.log(`\nDone. Files updated:`);
 console.log(`  manifest.json      ${newVersion}`);
 console.log(`  package.json       ${newVersion}`);
 console.log(`  STATUS.md          v${newVersion}`);
-console.log(`  README.md          ${testCount} tests`);
 console.log(`  dist/popup HTML    v${newVersion} (injected at build)`);
 console.log(`  popup.ts runtime   reads from manifest (automatic)`);

@@ -136,14 +136,22 @@ describe('a page\'s own scripted event under Read-Only, with no agent in the tab
     stop();
   });
 
-  it('the README says so where it states the scope of enforcement', () => {
+  it('the README says so where it states the scope of enforcement, and links the page that says it in full', () => {
     const readme = readFileSync(resolve(__dirname, '../..', 'README.md'), 'utf-8');
     const start = readme.indexOf('> **Scope of enforcement.**');
     expect(start, 'the README must keep its "Scope of enforcement" note').toBeGreaterThanOrEqual(0);
     const note = readme.slice(start, readme.indexOf('\n\n', start));
 
     expect(note).toContain('**Tabs with no detected agent.**');
-    expect(note).toContain(
+    expect(note).toContain("a page's own scripted `click`, `keydown`, `input` or `submit` event can be blocked there");
+    expect(note).toContain('(docs/enforcement-scope.md#tabs-with-no-detected-agent)');
+
+    const page = readFileSync(resolve(__dirname, '../..', 'docs/enforcement-scope.md'), 'utf-8');
+    const heading = page.indexOf('\n## Tabs with no detected agent\n');
+    expect(heading, 'docs/enforcement-scope.md must keep its "Tabs with no detected agent" section').toBeGreaterThanOrEqual(0);
+    const end = page.indexOf('\n## ', heading + 1);
+    const section = page.slice(heading, end === -1 ? undefined : end);
+    expect(section).toContain(
       'it blocks an untrusted `click`, `keydown`, `input` or `submit` event that the rule does not permit, whether an agent or the page\'s own script dispatched it',
     );
   });
