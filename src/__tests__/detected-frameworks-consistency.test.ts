@@ -1,7 +1,7 @@
 /**
- * The README's Detected Frameworks section states what each detection checks
- * and what it has been checked against. Those statements must match the code
- * and the harnesses in scripts/.
+ * The Detected Frameworks page (docs/detected-frameworks.md, moved there from
+ * the README) states what each detection checks and what it has been checked
+ * against. Those statements must match the code and the harnesses in scripts/.
  *
  * The section once said every method had been verified against the real
  * framework, and that Operator was detected the same way as Playwright. No
@@ -11,7 +11,7 @@
  *
  * The comments on detectOpenAIOperator() once said the same thing the README
  * did: that Playwright detection was the primary mechanism and the function
- * only added to it. They are held to the README row here.
+ * only added to it. They are held to the page's Operator row here.
  */
 import { describe, it, expect } from 'vitest';
 import { existsSync, readFileSync } from 'fs';
@@ -21,11 +21,11 @@ function read(relPath: string): string {
 }
 
 function detectedFrameworksSection(): string {
-  const readme = read('README.md');
-  const start = readme.indexOf('## Detected Frameworks');
-  expect(start, 'README.md has no "## Detected Frameworks" section').toBeGreaterThanOrEqual(0);
-  const end = readme.indexOf('\n## ', start + 1);
-  return readme.slice(start, end === -1 ? undefined : end);
+  const page = read('docs/detected-frameworks.md');
+  const start = page.indexOf('# Detected Frameworks');
+  expect(start, 'docs/detected-frameworks.md has no "# Detected Frameworks" heading').toBeGreaterThanOrEqual(0);
+  const end = page.indexOf('\n## ', start + 1);
+  return page.slice(start, end === -1 ? undefined : end);
 }
 
 function tableRow(section: string, framework: string): string {
@@ -59,7 +59,7 @@ function operatorComments(): { docblock: string; inline: string } {
   return { docblock, inline };
 }
 
-describe('README Detected Frameworks section', () => {
+describe('Detected Frameworks page', () => {
   it('does not claim every method was verified against the real framework', () => {
     expect(detectedFrameworksSection()).not.toMatch(/every method[^.]*verified/i);
   });
@@ -95,7 +95,7 @@ describe('detectOpenAIOperator() comments', () => {
     }
   });
 
-  it('describe the check as the README row does', () => {
+  it('describe the check as the page row does', () => {
     const { docblock } = operatorComments();
     expect(docblock).toMatch(/environment signals only, separate from playwright detection/i);
     // The signals detectOpenAIOperator() checks, and its two-signal threshold.

@@ -1,6 +1,7 @@
 /**
- * The storage limits and triggers the privacy policy, README and store
- * description state, checked against the values the code applies.
+ * The storage limits and triggers the privacy policy, README, privacy page
+ * (docs/privacy.md) and store description state, checked against the values
+ * the code applies.
  *
  * Every number asserted here is read from the code, not written into this file,
  * so changing a limit fails this test until the copy that states it changes
@@ -41,6 +42,7 @@ function line(markdown: string, marker: string): string {
 
 const policy = read('docs/privacy-policy.html');
 const readme = read('README.md');
+const privacyPage = read('docs/privacy.md');
 const storeDescription = read('docs/chrome-web-store-description.md');
 
 describe('privacy policy: records kept on the device', () => {
@@ -79,7 +81,8 @@ describe('privacy policy: site safety declaration caching', () => {
 
 describe.each([
   ['the privacy policy', () => listItem(policy, 'Anonymized contribution')],
-  ['the README', () => line(readme, '**Anonymized contribution**')],
+  ['the privacy page', () => line(privacyPage, '**Anonymized contribution**')],
+  ['the README', () => line(readme, '**Contribution**')],
   ['the store description', () => line(storeDescription, '- Anonymized contribution')],
 ])('%s: contribution tip', (_surface, text) => {
   it('names both conditions that show the tip', () => {

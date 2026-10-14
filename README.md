@@ -18,26 +18,13 @@ An AI agent takes over a tab. AI Browser Guard detects it without the agent iden
 ## What It Does
 
 - **Detects agent takeover without notice**: browser-based AI agents can control your session via CDP, WebDriver, or behavioral automation. AI Browser Guard detects their presence using three independent detection layers: CDP debugger monitoring, V8 stack trace analysis, and environment fingerprinting. Detection works against external frameworks; enforcement does not (see Scope of enforcement).
-- **Constrains in-page automation**: delegation rules define what an in-page/injected agent can do. Scripted navigations, form submissions, synthetic clicks and typing, and new-tab opens are blocked best-effort in the page realm, with a notification for each block. **This does not apply to external CDP frameworks**, which act via native input the page realm cannot intercept. Downloads are handled outside the page, for every kind of agent (see Scope of enforcement).
+- **Constrains in-page automation**: delegation rules define what an in-page/injected agent can do. Scripted navigations, form submissions, synthetic clicks and typing, and new-tab opens are blocked best-effort in the page realm, with a notification for each block. **This does not apply to external CDP frameworks**, which act via native input the page realm cannot intercept.
 - **Logs what it can see**: page-realm agent actions are logged to a session timeline with timestamps, target URLs, elements, and outcomes (allowed/blocked). The last 5 sessions are retained. A session driven by an external CDP framework will show few or no actions **because its native input is not observable, not because nothing happened**. Reports state this scope explicitly.
 - **Kill switch**: one-click stop. Revokes delegations, dispatches a page-realm stop to in-page automation, and **closes the tabs an agent controls** (the real interruption of an in-progress action). It does **not** terminate an external CDP session (an extension cannot), and a persistent external driver can reopen a tab. Keyboard shortcut: Ctrl+Shift+K / Cmd+Shift+K.
 
-> **Scope of enforcement.** Detection and monitoring work against every framework above; per-action blocking does not. External frameworks drive the browser over CDP with native input the page realm cannot intercept, so against them AI Browser Guard detects, alerts, and closes the tab, but cannot enforce per-action policy. Downloads are the exception, for every kind of agent: under Read-Only or Limited, a download that Chrome reports starting in an agent's tab is cancelled through Chrome's downloads API, which does not depend on intercepting the agent's input. The report comes from the debugger session Browser-layer blocking (Settings) attaches to that tab, so downloads are cancelled only while that setting is on; a download you start in the agent's tab is cancelled too. An open DevTools window makes the page it inspects look attached to a debugger, so an agent first seen through an attachment while DevTools is open in any tab is treated as most likely you inspecting a page: a download in its tab is recorded, not cancelled. A download from any other tab is recorded in the session log and not cancelled, including one from the same site as the agent's page: Chrome's downloads API does not say which tab a download came from. For the same reason, when a download of the same URL started in another tab in the 5 seconds before Chrome reports the one in the agent's tab, the report does not say which of the two is the agent's, so neither is cancelled; both are recorded. Nor is it paused for you to keep or discard: in Chrome, a paused download from a short-lived link without range support is lost when the server closes the connection while it waits (`node scripts/measure-download-hold.mjs` measures this). When such a download comes from the site of the agent's page, you get a notification that it was not stopped. The only categorical prevention is a managed-Chrome policy, `RemoteDebuggingAllowed=false`; Chrome 136+ already blocks remote debugging of your default profile by default. The per-action blocking below applies only to in-page / injected automation, is best-effort (a hostile page can re-patch the wrapped globals), and does not yet cover every in-page sink. See [ADR-008](docs/adr/008-enforcement-scope.md) for the rationale and boundary.
+> **Scope of enforcement.** Detection and monitoring work against every framework above; per-action blocking does not. External frameworks drive the browser over CDP with native input the page realm cannot intercept, so against them AI Browser Guard detects, alerts, and closes the tab, but cannot enforce per-action policy. Downloads, and the Chrome policy that blocks remote debugging: [docs/enforcement-scope.md](docs/enforcement-scope.md).
 >
-> **Tabs with no detected agent.** A session delegation is the rule in a tab where no agent was detected too, and in-page blocking does not wait for a detection. While a rule is in effect in a tab, it blocks an untrusted `click`, `keydown`, `input` or `submit` event that the rule does not permit, whether an agent or the page's own script dispatched it: both arrive as events the browser marks untrusted. So under Read-Only, a page that dispatches such an event itself, from a timer for example, has it blocked in a tab where nothing was detected: you get the block notification, the toolbar badge shows `!` and the block is listed in the popup, while nothing is added to the detection log or to a session log. To let a site's own scripted events through, pause the guard on that site.
-
-## Detected Frameworks
-
-Not every method below has been run against the real framework. Puppeteer and Selenium have harnesses that drive the real framework in Chrome and record the signals a page sees (`scripts/test-puppeteer-detection.js`, `scripts/test-selenium-detection.js`), and the smoke tests (`npm run smoke:scope`, `npm run smoke:scenarios`) drive pages with Puppeteer while the built extension is loaded and check that it detects the agent. No harness here drives Playwright or OpenAI Operator; the Playwright stack-trace pattern is covered by unit tests on sample stack traces. The Anthropic Computer Use harness (`scripts/test-computer-use-detection.py`) drives Firefox to a probe page (`scripts/detection-probe.html`) in the reference container, not Chrome with the extension loaded.
-
-| Framework | Detection Method |
-|-----------|-----------------|
-| Playwright | CDP debugger attachment, `UtilityScript.evaluate` in V8 stack traces |
-| Puppeteer | CDP debugger, `pptr:evaluate` stack traces, `navigator.webdriver`, dimension inversion |
-| Selenium | CDP debugger, `callFunction`/`executeScript` stack traces, dimension equality |
-| Anthropic Computer Use | Software WebGL renderer (llvmpipe/Mesa), Xvfb screen resolution, Linux fingerprint |
-| OpenAI Operator | Environment signals only, separate from Playwright detection: any two of a Linux platform, `Operator` or `OpenAI` in the user agent, zero browser plugins, and a WebGL renderer naming SwiftShader, llvmpipe, or ANGLE with Google. The signals come from published third-party research, not from a run against Operator. |
-| Generic CDP/WebDriver | `chrome.debugger.getTargets()`, `navigator.webdriver` flag |
+> **Tabs with no detected agent.** A session delegation is the rule in a tab where no agent was detected too, and in-page blocking does not wait for a detection, so a page's own scripted `click`, `keydown`, `input` or `submit` event can be blocked there. What you see then, and how to let a site's own events through: [docs/enforcement-scope.md](docs/enforcement-scope.md#tabs-with-no-detected-agent).
 
 ## Install
 
@@ -45,15 +32,7 @@ Not every method below has been run against the real framework. Puppeteer and Se
 
 [Install AI Browser Guard](https://chromewebstore.google.com/detail/ojphpdmabflmcjhglfogmkdgchkncikf): one click, automatic updates.
 
-**From source:**
-
-```bash
-git clone https://github.com/opena2a-org/AI-BrowserGuard.git
-cd AI-BrowserGuard
-npm install && npm run build
-```
-
-Then open `chrome://extensions`, enable Developer mode, click Load unpacked, and select `dist/`.
+To build from source and load it unpacked: [docs/install.md](docs/install.md).
 
 ## Delegation Presets
 
@@ -63,41 +42,33 @@ Then open `chrome://extensions`, enable Developer mode, click Load unpacked, and
 | Limited | Interact with specific sites (user-defined allowlist), with sites you explicitly block, time-bounded (15min/1hr/4hr). |
 | Full Access | Every action on every site, for 60 minutes. The grant then expires: granted on an agent's card, the session delegation applies to that agent again; granted as the session delegation, no delegation is left in place. Actions are still logged. No boundary alerts fire while it lasts, because no action is outside it. |
 
-> **These presets are enforced best-effort against in-page / injected automation, except downloads, which Read-Only and Limited can cancel in an agent's tab for every kind of agent.** External CDP frameworks bypass the rest; for those agents a preset is otherwise a recorded intent, not an enforced boundary, and the kill switch (close tab) is the hard stop. Which downloads are cancelled, including ones you start yourself, is described in [Scope of enforcement](#what-it-does).
+> **These presets are enforced best-effort against in-page / injected automation, except downloads, which Read-Only and Limited can cancel in an agent's tab for every kind of agent.** External CDP frameworks bypass the rest; for those agents a preset is otherwise a recorded intent, not an enforced boundary, and the kill switch (close tab) is the hard stop.
 
-Site allowlists and blocklists support glob patterns (e.g., `*.bank.com`).
-
-**Ending a delegation.** **End** next to the session delegation in the popup turns it off without putting another preset in its place, and **Revoke** on an agent's card removes that agent's own grant. A grant on an agent's card takes precedence over the session delegation in that agent's tab, so the delegation panel names the agents that hold one.
-
-**Pausing the guard.** To let an agent work on one site without blocks, open the popup on that site and choose **Pause on this site** for 15 minutes, 60 minutes, or until you resume. **Pause everywhere** covers every site for 15 or 60 minutes. While a pause is on, agent actions there are not blocked; detection, the timeline and the kill switch keep working. The popup shows a countdown and a Resume button for each pause and a history of recent pauses. Blocking returns on its own when a pause ends, and the kill switch ends every pause.
-
-**Browser-layer blocking (opt-in, off by default).** For the sites you explicitly *block*, an optional setting enforces the block below the page at the browser's network layer (`chrome.debugger`/CDP `Fetch`, [ADR-007](docs/adr/007-cdp-layer-enforcement.md)), for tabs under an active delegation. It closes the egress paths to a blocked domain that the page realm cannot: `fetch`/XHR, EventSource, element-`src`, worker and iframe fetches, and navigation. A page that re-patches the in-page wrappers cannot undo it. (`WebSocket` is the one vector it does **not** close: the CDP `Fetch` domain cannot pause ws handshakes, so a WebSocket to a blocked domain still connects. Deterministic ws blocking needs `declarativeNetRequest` and is deferred to [ADR-008](docs/adr/008-enforcement-scope.md) R2.) Under a delegation that does not permit downloads (Read-Only, Limited) the setting attaches a session to the agent's tab even when the delegation blocks no site, to report the downloads started there (see [Scope of enforcement](#what-it-does)); such a session pauses none of the tab's requests. Chrome shows its standard "started debugging this browser" bar while a delegated tab holds a session; the session and the bar are torn down on delegation expiry or revoke, kill switch, tab close, or turning the setting off, and on any attach failure it falls back to the page-realm interceptor rather than ever blocking your own browsing. The agent's card in the popup says when the session is attached to its tab, what it is attached for (the sites the delegation blocks, the downloads it cancels there, or both), and that this is why the bar is showing; it also says when Chrome refused or ended the session, with the reason Chrome gave. It makes no network requests of its own. Validated end-to-end against a real Chrome by `npm run smoke:cdp`.
+Site glob patterns, ending a delegation, pausing the guard on a site, and opt-in browser-layer blocking: [docs/delegation.md](docs/delegation.md).
 
 ## Privacy
 
 By default the extension makes zero network requests. All detection, delegation, and session tracking runs locally in the browser, and there is no analytics or telemetry.
 
+### Network requests and telemetry
+
 Four optional network features are **off by default** and only act after you explicitly enable them:
 
 - **AIM identity lookup** (`aim.opena2a.org`) and **registry trust lookup** (`api.oa2a.org`): when an agent is detected, look up a trust score for that agent type. Only the detected agent type (for example `playwright`) is sent; never your URLs or page content.
-- **Anonymized contribution** (`api.oa2a.org`): share anonymized detection and behavior summaries to improve community threat intelligence. A tip in the popup offers it after 5 detections or 3 days after the first detection, whichever comes first, and stays until you dismiss it or turn contribution on. Sends an anonymous token plus framework name and summary counts. It never sends URLs, page content, keystrokes, or identity.
-- **Site safety declarations** (the site the agent is on): when an agent is detected on a page, read that site's [`/.well-known/ai-safety.txt`](https://datatracker.ietf.org/doc/draft-fane-ai-safety-txt/) and show what the site claims about its own content. This is the only feature that contacts a server we do not operate. It sends no cookies, no page address, and nothing about you; it follows no redirects; it reads declarations only over HTTPS; and it runs only while an agent is detected, never on pages you browse yourself. A declaration is self-asserted, so it is shown for information and never changes what the extension detects or blocks.
+- **Contribution** (`api.oa2a.org`): sends a random token kept on this install, the framework name and summary counts; never URLs, page content or keystrokes. A tip in the popup offers it after 5 detections or 3 days after the first detection.
+- **Site safety declarations** (the site the agent is on): when an agent is detected on a page, read that site's [`/.well-known/ai-safety.txt`](https://datatracker.ietf.org/doc/draft-fane-ai-safety-txt/) and show what the site claims about its own content. This is the only feature that contacts a server we do not operate. It sends no cookies, no page address, and nothing about you.
 
-One-click opt out for each. See [ADR-006](docs/adr/006-opt-in-network-features.md), [ADR-009](docs/adr/009-ai-safety-txt-consumer.md), and the full policy: [opena2a.org/aibrowserguard/privacy](https://opena2a.org/aibrowserguard/privacy).
+Turn contribution off with the switch under Community Trust Data in the popup's Settings, and site safety declarations with Read site safety declarations. The two lookups have no switch in the popup. Each feature in full: [docs/privacy.md](docs/privacy.md); the policy: [opena2a.org/aibrowserguard/privacy](https://opena2a.org/aibrowserguard/privacy).
 
-## Development
+## Documentation
 
-```bash
-npm install          # Install dependencies
-npm run build        # Build to dist/
-npm run dev          # Watch mode
-npm run test         # 1397 tests
-npm run lint         # TypeScript strict checking and the docs prose check
-```
-
-## Contributing
-
-Contributions are welcome. Open an issue to discuss proposed changes before submitting a pull request. All PRs require passing CI and code review.
+- [Scope of enforcement](docs/enforcement-scope.md): what is blocked, what is only detected, which downloads are cancelled, and blocking in tabs with no detected agent
+- [Detected frameworks](docs/detected-frameworks.md): how each framework is detected and what each method was checked against
+- [Delegation](docs/delegation.md): what a preset enforces, ending a delegation, pausing the guard, browser-layer blocking
+- [Privacy](docs/privacy.md): each optional network feature in full
+- [Install from source](docs/install.md)
+- [Architecture](docs/architecture.md) and [design decisions](docs/adr/)
+- [Status](STATUS.md), [CHANGELOG.md](CHANGELOG.md) and [CONTRIBUTING.md](CONTRIBUTING.md) (development commands)
 
 ## License
 
