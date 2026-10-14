@@ -1,22 +1,19 @@
-> **[OpenA2A](https://github.com/opena2a-org/opena2a)**: [CLI](https://github.com/opena2a-org/opena2a) · [HackMyAgent](https://github.com/opena2a-org/hackmyagent) · [Secretless](https://github.com/opena2a-org/secretless-ai) · [AIM](https://github.com/opena2a-org/agent-identity-management) · [Browser Guard](https://github.com/opena2a-org/AI-BrowserGuard) · [DVAA](https://github.com/opena2a-org/damn-vulnerable-ai-agent)
+# AI Browser Guard
 
-[![Status: beta](https://img.shields.io/badge/status-beta-yellow)](./STATUS.md)
+[![Status: beta](https://img.shields.io/badge/status-beta-yellow)](STATUS.md)
+[![Chrome Web Store](https://img.shields.io/chrome-web-store/v/ojphpdmabflmcjhglfogmkdgchkncikf)](https://chromewebstore.google.com/detail/ojphpdmabflmcjhglfogmkdgchkncikf)
 [![Build](https://github.com/opena2a-org/AI-BrowserGuard/actions/workflows/ci.yml/badge.svg)](https://github.com/opena2a-org/AI-BrowserGuard/actions/workflows/ci.yml)
-[![Tests](https://img.shields.io/badge/tests-1397%20passing-brightgreen)](https://github.com/opena2a-org/AI-BrowserGuard)
-[![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
-[![Chrome MV3](https://img.shields.io/badge/Chrome-Manifest%20V3-4285F4)](https://developer.chrome.com/docs/extensions/mv3/)
+[![License: Apache-2.0](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](LICENSE)
+
+> **[OpenA2A](https://github.com/opena2a-org)**: [CLI](https://github.com/opena2a-org/opena2a) · [HackMyAgent](https://github.com/opena2a-org/hackmyagent) · [Secretless](https://github.com/opena2a-org/secretless-ai) · [AIM](https://github.com/opena2a-org/agent-identity-management) · **Browser Guard** · [DVAA](https://github.com/opena2a-org/damn-vulnerable-ai-agent)
+
+[Website](https://opena2a.org/aibrowserguard) · [Privacy policy](https://opena2a.org/aibrowserguard/privacy) · [Discord](https://discord.gg/uRZa3KXgEn)
 
 Chrome extension that detects and monitors AI agents operating in your browser (Playwright, Puppeteer, Selenium, Anthropic Computer Use, and OpenAI Operator) without requiring the agent to identify itself. For in-page and injected automation it can also block scripted navigations, form submissions, and new-tab opens (best-effort, in the page realm). Under a delegation that does not permit downloads, it can cancel a download that Chrome reports starting in an agent's tab, for every kind of agent, including one you start there. Beyond that it **cannot** block external automation frameworks that drive the browser over CDP; against those, AI Browser Guard provides detection, alerting, and a kill switch that closes the tab, not per-action enforcement. See [Scope of enforcement](#what-it-does).
 
-[![Chrome Web Store](https://img.shields.io/badge/Chrome%20Web%20Store-Install-4285F4?logo=googlechrome&logoColor=white)](https://chromewebstore.google.com/detail/ojphpdmabflmcjhglfogmkdgchkncikf)
-
-[Install from Chrome Web Store](https://chromewebstore.google.com/detail/ojphpdmabflmcjhglfogmkdgchkncikf) | [Website](https://opena2a.org/aibrowserguard) | [Privacy Policy](https://opena2a.org/aibrowserguard/privacy)
-
-![An AI agent takes over a banking tab. AI Browser Guard detects it, flags the transfer it tries to submit with an in-page notice, and the kill switch closes the tab.](docs/browserguard-demo.gif)
+[Install from Chrome Web Store](https://chromewebstore.google.com/detail/ojphpdmabflmcjhglfogmkdgchkncikf)
 
 An AI agent takes over a tab. AI Browser Guard detects it without the agent identifying itself, flags the transfer it tries to submit, and the kill switch (Ctrl+Shift+K) closes the tab the agent controls.
-
----
 
 ## What It Does
 
