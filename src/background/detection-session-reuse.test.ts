@@ -223,3 +223,60 @@ describe('a detection starts a new session when the tab has no open stored sessi
     expect(detectionUrls(sessions[0])).toEqual(['https://one.example.com/next']);
   });
 });
+
+describe('a tab\'s session keeps a bounded number of detection entries', () => {
+  it('30 repeated reports from one page leave one detection entry', async () => {
+    const h = await loadWorker();
+
+    // A page reports its agent again every few seconds, each time with a new id.
+    for (let i = 1; i <= 30; i++) {
+      detect(h, 42, `a${i}`, 'cdp-generic', 'https://shop.example.com/cart');
+      await step();
+    }
+
+    const sessions = await storedSessions();
+    expect(sessions).toHaveLength(1);
+    expect(detectionUrls(sessions[0])).toEqual(['https://shop.example.com/cart']);
+    // The session still names the agent of the latest report.
+    expect(sessions[0].agent.id).toBe('a30');
+  });
+
+  it('the same agent on a page it returns to is listed again', async () => {
+    const h = await loadWorker();
+
+    detect(h, 42, 'a1', 'playwright', 'https://shop.example.com/cart');
+    await step();
+    detect(h, 42, 'a2', 'playwright', 'https://shop.example.com/checkout');
+    await step();
+    detect(h, 42, 'a3', 'playwright', 'https://shop.example.com/cart');
+    await step();
+
+    expect(detectionUrls((await storedSessions())[0])).toEqual([
+      'https://shop.example.com/cart',
+      'https://shop.example.com/checkout',
+      'https://shop.example.com/cart',
+    ]);
+  });
+
+  it('reports from 31 pages leave the 20 most recent detection entries and the session\'s other events', async () => {
+    const h = await loadWorker();
+    h({ type: 'DELEGATION_UPDATE', data: createRuleFromPreset('readOnly') }, POPUP, vi.fn());
+    await step();
+
+    detect(h, 42, 'a0', 'playwright', 'https://shop.example.com/page-0');
+    await step();
+    await blockTextInput(h, 42, 'https://shop.example.com/page-0', 'v1');
+    for (let i = 1; i <= 30; i++) {
+      detect(h, 42, `a${i}`, 'playwright', `https://shop.example.com/page-${i}`);
+      await step();
+    }
+
+    const sessions = await storedSessions();
+    expect(sessions).toHaveLength(1);
+    expect(detectionUrls(sessions[0])).toEqual(
+      Array.from({ length: 20 }, (_, i) => `https://shop.example.com/page-${i + 11}`),
+    );
+    expect(sessions[0].events.filter((e) => e.type === 'boundary-violation')).toHaveLength(1);
+    expect(sessions[0].summary.violations).toBe(1);
+  });
+});

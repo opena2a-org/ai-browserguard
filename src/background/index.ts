@@ -1038,13 +1038,45 @@ const AGENT_DISPLAY_NAMES: Record<string, string> = {
 };
 
 /**
+ * The most 'detection' entries one session keeps. A page reports its agent
+ * again every few seconds for as long as its tab is open, and an agent can
+ * move through any number of pages in one tab, so the entries are capped.
+ * Five sessions of 20 hold no more than the 100 entries of the detection log.
+ */
+const MAX_SESSION_DETECTIONS = 20;
+
+/**
+ * Add a detection to a session's timeline, and make its agent the session's.
+ *
+ * A detection that repeats the session's last 'detection' entry, the same
+ * kind of agent on the same page, only updates the agent. Past
+ * MAX_SESSION_DETECTIONS, the oldest 'detection' entries are dropped; the
+ * session's other events are kept.
+ */
+function addDetectionToSession(
+  session: AgentSession,
+  agent: AgentIdentity,
+  detection: AgentEvent,
+): AgentSession {
+  const withAgent = { ...session, agent: { ...agent } };
+  const detections = session.events.filter((e) => e.type === 'detection');
+  const last = detections[detections.length - 1];
+  if (last && last.description === detection.description && last.url === detection.url) {
+    return withAgent;
+  }
+  const dropped = new Set(detections.slice(0, Math.max(0, detections.length + 1 - MAX_SESSION_DETECTIONS)));
+  const events = dropped.size > 0 ? session.events.filter((e) => !dropped.has(e)) : session.events;
+  return appendEventToSession({ ...withAgent, events }, detection);
+}
+
+/**
  * Write a detection to the session of the tab it was made in.
  *
  * One tab can report several detections, and storing each as a session let a
  * single tab fill the session store. A further detection is added to the
- * tab's open session, which takes the agent now registered for the tab.
- * A new session is started only when the tab has none, or the one it had has
- * ended or is no longer among the stored sessions.
+ * tab's open session (addDetectionToSession), which takes the agent now
+ * registered for the tab. A new session is started only when the tab has
+ * none, or the one it had has ended or is no longer among the stored sessions.
  */
 async function recordDetectionInSession(
   tabId: number,
@@ -1057,7 +1089,7 @@ async function recordDetectionInSession(
     await updateSession(openSessionId, (session) => {
       if (session.endedAt) return session;
       continued = true;
-      return appendEventToSession({ ...session, agent: { ...agent } }, detection);
+      return addDetectionToSession(session, agent, detection);
     });
     if (continued) return { sessionId: openSessionId, started: false };
     // Another detection for this tab may have started the replacement while

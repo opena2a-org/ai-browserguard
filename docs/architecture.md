@@ -405,7 +405,9 @@ interface StorageSchema {
 ```
 AgentSession created (handleDetection, for a tab with no open stored session)
   -> a further detection in the tab appended as a 'detection' event; the
-     session takes the agent now registered for the tab
+     session takes the agent now registered for the tab. A detection that
+     repeats the last 'detection' event (same agent type, same URL) is not
+     appended, and only the 20 most recent 'detection' events are kept
   -> events appended (handleAgentAction, handleBoundaryViolation)
   -> session ended with endReason:
      - 'kill-switch' (kill switch activated; stamped BEFORE the tabs close so
