@@ -118,8 +118,10 @@ describe('a further detection in a tab continues that tab\'s session', () => {
       'Agent detected: Playwright',
       'Agent detected: Playwright',
     ]);
-    // The session names the agent now registered for the tab.
-    expect(sessions[0].agent.id).toBe('a3');
+    // The session names the agent now registered for the tab: the Playwright
+    // agent, under the id of its first report there (#126).
+    expect(sessions[0].agent.id).toBe('a2');
+    expect(sessions[0].agent.type).toBe('playwright');
     expect(sessions[0].endedAt).toBeNull();
   });
 
@@ -219,7 +221,9 @@ describe('a detection starts a new session when the tab has no open stored sessi
 
     const sessions = await storedSessions();
     expect(sessions).toHaveLength(5);
-    expect(sessions[0].agent.id).toBe('again');
+    // The new session is for the Selenium agent still registered in tab 1,
+    // which keeps the id of its first report there (#126).
+    expect(sessions[0].agent).toMatchObject({ id: 'first', type: 'selenium' });
     expect(detectionUrls(sessions[0])).toEqual(['https://one.example.com/next']);
   });
 });
@@ -237,8 +241,9 @@ describe('a tab\'s session keeps a bounded number of detection entries', () => {
     const sessions = await storedSessions();
     expect(sessions).toHaveLength(1);
     expect(detectionUrls(sessions[0])).toEqual(['https://shop.example.com/cart']);
-    // The session still names the agent of the latest report.
-    expect(sessions[0].agent.id).toBe('a30');
+    // The same agent type in the tab keeps the id it was first registered
+    // under (#126), so the session names that id.
+    expect(sessions[0].agent.id).toBe('a1');
   });
 
   it('the same agent on a page it returns to is listed again', async () => {
@@ -278,5 +283,116 @@ describe('a tab\'s session keeps a bounded number of detection entries', () => {
     );
     expect(sessions[0].events.filter((e) => e.type === 'boundary-violation')).toHaveLength(1);
     expect(sessions[0].summary.violations).toBe(1);
+  });
+});
+
+/** Report an action the page in `tabId` let through, as the content script does. */
+async function allowClick(h: Listener, tabId: number, url: string, selector: string): Promise<void> {
+  h({ type: 'AGENT_ACTION', data: { id: crypto.randomUUID(), type: 'action-allowed',
+    timestamp: new Date().toISOString(), url, description: 'click allowed', outcome: 'allowed',
+    targetSelector: selector, attemptedAction: 'click' } },
+  tabSender(tabId, 'https://shop.example.com/cart'), vi.fn());
+  await step();
+}
+
+describe('a tab\'s session keeps a bounded number of other events (#126)', () => {
+  it('250 allowed clicks after a blocked input leave the 200 most recent events and count all 251', async () => {
+    const h = await loadWorker();
+    h({ type: 'DELEGATION_UPDATE', data: createRuleFromPreset('readOnly') }, POPUP, vi.fn());
+    await step();
+
+    detect(h, 42, 'a1', 'webdriver-generic', 'https://shop.example.com/cart');
+    await step();
+    await blockTextInput(h, 42, 'https://shop.example.com/cart', 'v1');
+    for (let i = 1; i <= 250; i++) {
+      await allowClick(h, 42, 'https://shop.example.com/cart', `#button-${i}`);
+    }
+
+    const [session] = await storedSessions();
+    expect(session.events.filter((e) => e.type === 'detection')).toHaveLength(1);
+    const others = session.events.filter((e) => e.type !== 'detection');
+    expect(others).toHaveLength(200);
+    expect(others.map((e) => e.targetSelector)).toEqual(
+      Array.from({ length: 200 }, (_, i) => `#button-${i + 51}`),
+    );
+    expect(session.summary).toMatchObject({
+      totalActions: 251,
+      allowedActions: 250,
+      blockedActions: 1,
+      violations: 1,
+    });
+  });
+});
+
+describe('a page sets no stored event\'s size (#126)', () => {
+  it('20 clicks on an element with a 200,000-character id at a 100,000-character address store short events', async () => {
+    const h = await loadWorker();
+    const url = `https://shop.example.com/cart?q=${'y'.repeat(100_000)}`;
+    const selector = `#${'x'.repeat(200_000)}`;
+
+    detect(h, 42, 'a1', 'webdriver-generic', url);
+    await step();
+    for (let i = 0; i < 20; i++) await allowClick(h, 42, url, selector);
+
+    const [session] = await storedSessions();
+    const clicks = session.events.filter((e) => e.type === 'action-allowed');
+    expect(clicks).toHaveLength(20);
+    for (const click of clicks) {
+      expect(click.url).toHaveLength(1024);
+      expect(click.url.startsWith('https://shop.example.com/cart?q=yyy')).toBe(true);
+      expect(click.targetSelector).toHaveLength(256);
+      expect(click.targetSelector!.startsWith('#xxx')).toBe(true);
+    }
+    expect(session.events.find((e) => e.type === 'detection')!.url).toHaveLength(1024);
+    expect(session.agent.originUrl).toHaveLength(1024);
+    expect(JSON.stringify(session).length).toBeLessThan(40_000);
+    const { detectionLog } = (await chromeMock.storage.local.get('detectionLog')) as {
+      detectionLog: Array<{ url: string; agent: { originUrl: string } }>;
+    };
+    expect(detectionLog.map((d) => [d.url.length, d.agent.originUrl.length])).toEqual([[1024, 1024]]);
+  });
+});
+
+describe('a grant on an agent\'s card outlasts the agent\'s next detection report (#126)', () => {
+  async function storedRegistryAgentId(tabId: number): Promise<string | undefined> {
+    const { activeAgentRegistry } = (await chromeMock.storage.local.get('activeAgentRegistry')) as {
+      activeAgentRegistry?: Record<string, { agent: { id: string } }>;
+    };
+    return activeAgentRegistry?.[String(tabId)]?.agent.id;
+  }
+
+  it('a Read-Only grant to the agent still blocks its input after the page reports it again', async () => {
+    const h = await loadWorker();
+
+    detect(h, 42, 'a1', 'webdriver-generic', 'https://shop.example.com/cart');
+    await step();
+    h({ type: 'DELEGATION_UPDATE', data: createRuleFromPreset('readOnly', { agentId: 'a1' }) }, POPUP, vi.fn());
+    await step();
+    // The page reports the same agent again, under a new id.
+    detect(h, 42, 'a2', 'webdriver-generic', 'https://shop.example.com/cart');
+    await step();
+    detect(h, 42, 'a3', 'webdriver-generic', 'https://shop.example.com/search');
+    await step();
+    await blockTextInput(h, 42, 'https://shop.example.com/search', 'v1');
+
+    expect(await storedRegistryAgentId(42)).toBe('a1');
+    const [session] = await storedSessions();
+    expect(session.events.filter((e) => e.type === 'boundary-violation')).toHaveLength(1);
+  });
+
+  it('a different agent type in the tab is a new agent the grant does not cover', async () => {
+    const h = await loadWorker();
+
+    detect(h, 42, 'a1', 'webdriver-generic', 'https://shop.example.com/cart');
+    await step();
+    h({ type: 'DELEGATION_UPDATE', data: createRuleFromPreset('readOnly', { agentId: 'a1' }) }, POPUP, vi.fn());
+    await step();
+    detect(h, 42, 'b1', 'playwright', 'https://shop.example.com/cart');
+    await step();
+    await blockTextInput(h, 42, 'https://shop.example.com/cart', 'v1');
+
+    expect(await storedRegistryAgentId(42)).toBe('b1');
+    const [session] = await storedSessions();
+    expect(session.events.filter((e) => e.type === 'boundary-violation')).toHaveLength(0);
   });
 });

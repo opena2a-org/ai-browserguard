@@ -397,6 +397,7 @@ interface StorageSchema {
 |-----|-------------|-------------------|-------------|
 | `sessions` | 5 (configurable via `settings.maxSessions`) | Oldest sessions dropped when limit exceeded | `saveSession()` in `src/session/storage.ts` |
 | `detectionLog` | 100 (configurable via `settings.maxDetectionLogEntries`) | Oldest entries spliced from front of array | `appendDetectionLog()` in `src/session/storage.ts` |
+| A session's `events` other than `detection` | 200 per session | Oldest dropped; the summary's counts still include them | `appendEventToSession()` in `src/session/timeline.ts` |
 | `delegationRules` | Unbounded | N/A | N/A |
 | `settings` | Single object | Partial merge on update | `updateSettings()` in `src/session/storage.ts` |
 
@@ -405,10 +406,13 @@ interface StorageSchema {
 ```
 AgentSession created (handleDetection, for a tab with no open stored session)
   -> a further detection in the tab appended as a 'detection' event; the
-     session takes the agent now registered for the tab. A detection that
-     repeats the last 'detection' event (same agent type, same URL) is not
-     appended, and only the 20 most recent 'detection' events are kept
-  -> events appended (handleAgentAction, handleBoundaryViolation)
+     session takes the agent now registered for the tab, which keeps the id
+     it was registered under while the agent type stays the same. A
+     detection that repeats the last 'detection' event (same agent type,
+     same URL) is not appended, and only the 20 most recent 'detection'
+     events are kept
+  -> events appended (handleAgentAction, handleBoundaryViolation); only the
+     200 most recent events other than 'detection' events are kept
   -> session ended with endReason:
      - 'kill-switch' (kill switch activated; stamped BEFORE the tabs close so
        the tab-close handler cannot relabel it 'page-unload')
@@ -564,7 +568,7 @@ The detection/enforcement code runs in two realms: the **ISOLATED** content-scri
 - `chrome.storage.local` is scoped to the extension's origin and cannot be read by page scripts or other extensions.
 - Session data, delegation rules, and detection logs never leave the browser.
 - No encryption is applied to stored data (it is protected by Chrome's extension storage isolation).
-- **Data minimization at rest:** the session summary's `topUrls` stores **hostnames only** (`new URL(url).hostname`) rather than full URLs, so path/query material that can carry tokens or usernames is never persisted or surfaced in the JSON export. This mirrors the hostname-only treatment of `networkSummary.uniqueDomains`. Per-event `url` fields in the timeline keep the full URL for the in-extension activity view; they are never transmitted.
+- **Data minimization at rest:** the session summary's `topUrls` stores **hostnames only** (`new URL(url).hostname`) rather than full URLs, so path/query material that can carry tokens or usernames is never persisted or surfaced in the JSON export. This mirrors the hostname-only treatment of `networkSummary.uniqueDomains`. Per-event `url` fields in the timeline keep the URL for the in-extension activity view, cut to 1,024 characters, the last of them an ellipsis, when it is longer; a target selector longer than 256 characters is cut the same way to 256. They are never transmitted.
 - **Retention TTL:** stored reports are pruned on write once older than 30 days (`MAX_REPORT_AGE_MS` in `src/session/report.ts`), in addition to the 20-report cap, so session history does not accumulate at rest indefinitely.
 
 ### Kill Switch Resilience

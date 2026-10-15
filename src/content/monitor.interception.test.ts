@@ -138,8 +138,13 @@ describe('a page\'s own scripted event under Read-Only, with no agent in the tab
 
   it('the README says so where it states the scope of enforcement, and links the page that says it in full', () => {
     const readme = readFileSync(resolve(__dirname, '../..', 'README.md'), 'utf-8');
-    const start = readme.indexOf('> **Scope of enforcement.**');
-    expect(start, 'the README must keep its "Scope of enforcement" note').toBeGreaterThanOrEqual(0);
+    const scope = readme.indexOf('> **Scope of enforcement.**');
+    expect(scope, 'the README must keep its "Scope of enforcement" note').toBeGreaterThanOrEqual(0);
+    const start = readme.indexOf('\n\n', scope) + 2;
+    expect(
+      readme.startsWith('> **Tabs with no detected agent.**', start),
+      'the README must follow its "Scope of enforcement" note with the "Tabs with no detected agent" note',
+    ).toBe(true);
     const note = readme.slice(start, readme.indexOf('\n\n', start));
 
     expect(note).toContain('**Tabs with no detected agent.**');

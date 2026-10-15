@@ -203,7 +203,21 @@ export function startDetectionMonitor(
 ): () => void {
   const cfg = { ...DEFAULT_DETECTOR_CONFIG, ...config };
   const cleanups: Array<() => void> = [];
-  let lastDetectedAgentId: string | null = null;
+
+  // Each sweep names its agent by a new random id, so an agent already
+  // reported is recognised by its type and the page address it was seen on:
+  // the same type of agent on the same page is not reported again. A verdict
+  // with no agent is passed on as before.
+  let reported: { type: AgentType; url: string } | null = null;
+  const report = (verdict: DetectionVerdictResult): void => {
+    if (verdict.agent) {
+      const { type } = verdict.agent;
+      const { url } = verdict.event;
+      if (reported && reported.type === type && reported.url === url) return;
+      reported = { type, url };
+    }
+    onDetection(verdict);
+  };
 
   // Behavioral data collection buffers
   const mouseEvents: Array<{
@@ -229,8 +243,7 @@ export function startDetectionMonitor(
   // Initial sweep
   const initialResult = runDetectionSweep(cfg);
   if (initialResult.agentDetected) {
-    lastDetectedAgentId = initialResult.agent?.id ?? null;
-    onDetection(initialResult);
+    report(initialResult);
   }
 
   // Periodic re-checks
@@ -259,11 +272,7 @@ export function startDetectionMonitor(
     }
 
     if (result.agentDetected) {
-      // Avoid duplicate detections for the same agent
-      if (result.agent?.id !== lastDetectedAgentId || !lastDetectedAgentId) {
-        lastDetectedAgentId = result.agent?.id ?? null;
-        onDetection(result);
-      }
+      report(result);
     }
   }, cfg.recheckIntervalMs);
   cleanups.push(() => clearInterval(intervalId));
@@ -325,7 +334,7 @@ export function startDetectionMonitor(
     if (result.detected) {
       const verdict = runDetectionSweep(cfg);
       if (verdict.agentDetected) {
-        onDetection(verdict);
+        report(verdict);
       }
     }
   });
@@ -335,7 +344,7 @@ export function startDetectionMonitor(
     if (result.detected) {
       const verdict = runDetectionSweep(cfg);
       if (verdict.agentDetected) {
-        onDetection(verdict);
+        report(verdict);
       }
     }
   });
