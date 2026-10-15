@@ -1,6 +1,8 @@
 # Scope of enforcement
 
-AI Browser Guard detects agents driven by Playwright, Puppeteer, Selenium, Anthropic Computer Use and OpenAI Operator; [detected-frameworks.md](detected-frameworks.md) lists how each one is detected. This page states where its blocking stops. The README keeps a short form of it.
+This page states where the blocking of AI Browser Guard stops. The README keeps a short form of it. AI Browser Guard detects agents driven by Playwright, Puppeteer, Selenium, Anthropic Computer Use and OpenAI Operator; [detected-frameworks.md](detected-frameworks.md) lists how each one is detected.
+
+For in-page and injected automation it can also block scripted navigations, form submissions, and new-tab opens (best-effort, in the page realm). Under a delegation that does not permit downloads, it can cancel a download that Chrome reports starting in an agent's tab, for every kind of agent, including one you start there. Beyond that it **cannot** block external automation frameworks that drive the browser over CDP; against those, AI Browser Guard provides detection, alerting, and a kill switch that closes the tab, not per-action enforcement.
 
 Detection and monitoring work against every framework above; per-action blocking does not. External frameworks drive the browser over CDP with native input the page realm cannot intercept, so against them AI Browser Guard detects, alerts, and closes the tab, but cannot enforce per-action policy.
 

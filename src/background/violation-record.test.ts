@@ -149,11 +149,16 @@ describe('where a boundary violation is recorded', () => {
     const { detectionLog } = (await chromeMock.storage.local.get('detectionLog')) as { detectionLog?: Array<{ url: string }> };
     expect((detectionLog ?? []).map((entry) => entry.url)).toEqual([AGENT_URL]);
 
-    // The README's scope note says so in short and links the scope of
-    // enforcement page, which says what you see.
+    // The note that follows the README's scope note says so in short and
+    // links the scope of enforcement page, which says what you see.
     const readme = readFileSync(new URL('../../README.md', import.meta.url), 'utf-8');
-    const start = readme.indexOf('> **Scope of enforcement.**');
-    expect(start, 'the README must keep its "Scope of enforcement" note').toBeGreaterThanOrEqual(0);
+    const scope = readme.indexOf('> **Scope of enforcement.**');
+    expect(scope, 'the README must keep its "Scope of enforcement" note').toBeGreaterThanOrEqual(0);
+    const start = readme.indexOf('\n\n', scope) + 2;
+    expect(
+      readme.startsWith('> **Tabs with no detected agent.**', start),
+      'the README must follow its "Scope of enforcement" note with the "Tabs with no detected agent" note',
+    ).toBe(true);
     const note = readme.slice(start, readme.indexOf('\n\n', start));
     expect(note).toContain('A session delegation is the rule in a tab where no agent was detected too');
     expect(note).toContain('(docs/enforcement-scope.md#tabs-with-no-detected-agent)');
