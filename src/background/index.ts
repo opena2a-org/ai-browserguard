@@ -11,7 +11,7 @@ import type { AgentSession } from '../session/types';
 import { getStorageState, saveSession, updateSession, saveDelegationRules, appendDetectionLog, updateSettings, getSettings, getLifetimeStats, updateLifetimeStats, getKillSwitchState, saveKillSwitchState, getActiveAgentRegistry, updateActiveAgentRegistry, getGuardPauseState, saveGuardPauseState } from '../session/storage';
 import type { LifetimeStats } from '../session/types';
 import { DEFAULT_LIFETIME_STATS } from '../session/types';
-import { createTimelineEvent, appendEventToSession } from '../session/timeline';
+import { createTimelineEvent, appendEventToSession, capStoredUrl } from '../session/timeline';
 import { executeBackgroundKillSwitch, createInitialKillSwitchState } from '../killswitch/index';
 import type { KillSwitchState } from '../killswitch/index';
 import { isTimeBoundExpired, evaluateRule } from '../delegation/rules';
@@ -1051,7 +1051,7 @@ const MAX_SESSION_DETECTIONS = 20;
  * A detection that repeats the session's last 'detection' entry, the same
  * kind of agent on the same page, only updates the agent. Past
  * MAX_SESSION_DETECTIONS, the oldest 'detection' entries are dropped; the
- * session's other events are kept.
+ * session's other events are capped on their own (appendEventToSession).
  */
 function addDetectionToSession(
   session: AgentSession,
@@ -1125,8 +1125,8 @@ async function recordDetectionInSession(
   return { sessionId: session.id, started: true };
 }
 
-async function handleDetection(tabId: number, event: DetectionEvent, fromDebugger = false): Promise<void> {
-  if (!event.agent) return;
+async function handleDetection(tabId: number, reported: DetectionEvent, fromDebugger = false): Promise<void> {
+  if (!reported.agent) return;
 
   // A page's detection is what wakes a stopped worker, so it can arrive before
   // the stored state has loaded. Without the load, the agent restored for this
@@ -1135,6 +1135,21 @@ async function handleDetection(tabId: number, event: DetectionEvent, fromDebugge
   await ensureReady().catch(() => { /* proceed with what is loaded */ });
 
   const replaced = state.activeAgents.get(tabId);
+  // Each report names its agent by a new random id. The same agent type seen
+  // again in its tab is the agent already registered there, so it keeps that
+  // agent's id, and a rule granted to the agent from its card in the popup,
+  // which is bound to the id, goes on applying in the tab. The page address,
+  // which the page sets with no length limit, is stored cut short.
+  const agent: AgentIdentity = {
+    ...reported.agent,
+    ...(replaced && replaced.type === reported.agent.type ? { id: replaced.id } : {}),
+    ...(typeof reported.agent.originUrl === 'string' ? { originUrl: capStoredUrl(reported.agent.originUrl) } : {}),
+  };
+  const event = {
+    ...reported,
+    ...(typeof reported.url === 'string' ? { url: capStoredUrl(reported.url) } : {}),
+    agent,
+  };
   if (replaced) state.debuggerAgentIds.delete(replaced.id);
   state.activeAgents.set(tabId, event.agent);
   if (fromDebugger) state.debuggerAgentIds.add(event.agent.id);

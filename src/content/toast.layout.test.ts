@@ -36,22 +36,40 @@ const px = (value: string): number => {
   return parseFloat(value);
 };
 
-/** The notice's left and right edge in a viewport `viewport` px wide. */
-function noticeEdges(viewport: number): { left: number; right: number } {
+/**
+ * The notice's left and right edge in a viewport `viewport` px wide whose page
+ * shows a classic scrollbar `scrollbar` px wide. `100vw` counts the scrollbar;
+ * the side offsets of the fixed container, and so a percentage of its width,
+ * are measured inside it.
+ */
+function noticeEdges(viewport: number, scrollbar = 0): { left: number; right: number } {
   const toast = declarations('.abg-toast');
   const container = declarations('.abg-toast-inner');
+  const content = viewport - scrollbar;
 
   const calc = toast['max-width'].match(/^calc\(100vw - (\d+)px\)$/);
   const vw = toast['max-width'].match(/^(\d+)vw$/);
-  expect(calc ?? vw, `max-width "${toast['max-width']}" must be Nvw or calc(100vw - Npx)`).not.toBeNull();
-  const cap = calc ? viewport - Number(calc[1]) : (viewport * Number(vw![1])) / 100;
+  const percent = toast['max-width'].match(/^(\d+)%$/);
+  expect(calc ?? vw ?? percent, `max-width "${toast['max-width']}" must be N%, Nvw or calc(100vw - Npx)`).not.toBeNull();
+  let cap: number;
+  if (percent) {
+    // A percentage of the container's width, which is definite only when
+    // both of its side offsets are set.
+    expect(container.left, 'a percentage max-width needs the container\'s left offset').toBeDefined();
+    cap = ((content - px(container.left) - px(container.right)) * Number(percent[1])) / 100;
+  } else {
+    cap = calc ? viewport - Number(calc[1]) : (viewport * Number(vw![1])) / 100;
+  }
 
   const sized = Math.min(px(toast.width), cap);
   const [, sidePadding] = toast.padding.split(/\s+/);
   const extras = 2 * px(sidePadding) + 2 * px(toast.border.split(/\s+/)[0]);
   const outer = toast['box-sizing'] === 'border-box' ? sized : sized + extras;
 
-  const right = viewport - px(container.right);
+  // A container wider than the notice holds it at its right edge only when
+  // its items are aligned to the end.
+  if (container.left !== undefined) expect(container['align-items']).toBe('flex-end');
+  const right = content - px(container.right);
   return { left: right - outer, right };
 }
 
@@ -66,6 +84,17 @@ describe('in-page block notice width', () => {
 
   it('is 366px wide where the viewport has room for it', () => {
     const { left, right } = noticeEdges(1280);
+    expect(right - left).toBe(366);
+  });
+
+  // Regression (#126): capped at calc(100vw - 32px), the notice spanned
+  // x = -1 to 342 at a 375px viewport whose page shows a 17px scrollbar.
+  it.each([320, 375])('fits a %ipx viewport with a 17px scrollbar with 16px to spare on each side', (viewport) => {
+    expect(noticeEdges(viewport, 17)).toEqual({ left: 16, right: viewport - 17 - 16 });
+  });
+
+  it('is 366px wide beside a 17px scrollbar where the viewport has room for it', () => {
+    const { left, right } = noticeEdges(1280, 17);
     expect(right - left).toBe(366);
   });
 });
