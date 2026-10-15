@@ -60,14 +60,68 @@ export function createTimelineEvent(
 }
 
 /**
+ * The most events, other than 'detection' entries, one session keeps. A tab's
+ * session stays open for as long as the tab does, and an agent can act in it
+ * any number of times, so past this the oldest of those events are dropped.
+ * The background worker caps a session's 'detection' entries separately.
+ */
+export const MAX_SESSION_EVENTS = 200;
+
+/** The most characters of an event's URL that a session stores. */
+export const MAX_STORED_URL_LENGTH = 1024;
+
+/** The most characters of an event's target selector that a session stores. */
+export const MAX_STORED_SELECTOR_LENGTH = 256;
+
+/** `text` cut to `max` characters, the last of them an ellipsis, when it is longer. */
+function capLength(text: string, max: number): string {
+  return text.length > max ? `${text.slice(0, max - 1)}…` : text;
+}
+
+/**
+ * A page address as it is stored: cut to MAX_STORED_URL_LENGTH characters, the
+ * last of them an ellipsis, when it is longer. The page sets its own address,
+ * query string included, with no length limit.
+ */
+export function capStoredUrl(url: string): string {
+  return capLength(url, MAX_STORED_URL_LENGTH);
+}
+
+type SummaryCount = 'totalActions' | 'allowedActions' | 'blockedActions' | 'violations';
+
+const SUMMARY_COUNTS: SummaryCount[] = ['totalActions', 'allowedActions', 'blockedActions', 'violations'];
+
+/**
  * Append an event to a session's timeline and recalculate summary.
+ *
+ * The page sets an event's URL and target selector (its address, an element's
+ * id) with no length limit, so they are stored cut to MAX_STORED_URL_LENGTH and
+ * MAX_STORED_SELECTOR_LENGTH characters. Past MAX_SESSION_EVENTS events other
+ * than 'detection' entries, the oldest of those are dropped. The summary's
+ * counts still include the dropped events: what the session's summary counted
+ * beyond its stored events is carried over.
  */
 export function appendEventToSession(
   session: AgentSession,
   event: AgentEvent
 ): AgentSession {
-  const events = [...session.events, event];
-  const summary = computeSessionSummary(events, session.startedAt);
+  const stored: AgentEvent = {
+    ...event,
+    ...(typeof event.url === 'string' ? { url: capStoredUrl(event.url) } : {}),
+    ...(typeof event.targetSelector === 'string'
+      ? { targetSelector: capLength(event.targetSelector, MAX_STORED_SELECTOR_LENGTH) }
+      : {}),
+  };
+  const all = [...session.events, stored];
+  const summary = computeSessionSummary(all, session.startedAt);
+  const listed = computeSessionSummary(session.events, session.startedAt);
+  for (const count of SUMMARY_COUNTS) {
+    summary[count] += Math.max(0, (session.summary?.[count] ?? 0) - listed[count]);
+  }
+
+  const others = all.filter((e) => e.type !== 'detection');
+  const dropped = new Set(others.slice(0, Math.max(0, others.length - MAX_SESSION_EVENTS)));
+  const events = dropped.size > 0 ? all.filter((e) => !dropped.has(e)) : all;
   return { ...session, events, summary };
 }
 

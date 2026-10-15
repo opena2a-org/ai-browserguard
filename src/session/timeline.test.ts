@@ -5,6 +5,9 @@ import {
   computeSessionSummary,
   filterTimelineEvents,
   getRecentEvents,
+  MAX_SESSION_EVENTS,
+  MAX_STORED_URL_LENGTH,
+  MAX_STORED_SELECTOR_LENGTH,
 } from './timeline';
 import type { AgentSession } from './types';
 import type { AgentIdentity } from '../types/agent';
@@ -83,6 +86,53 @@ describe('appendEventToSession', () => {
     });
     appendEventToSession(session, event);
     expect(session.events).toHaveLength(0);
+  });
+
+  // Regression (#126): a tab's session stays open while the tab does, and
+  // every action was appended with no limit.
+  it(`keeps the ${MAX_SESSION_EVENTS} most recent events besides detections, and counts the ones it drops`, () => {
+    let session = appendEventToSession(makeSession(), createTimelineEvent('detection', 'https://example.com', 'Agent detected'));
+    session = appendEventToSession(session, createTimelineEvent('boundary-violation', 'https://example.com', 'Violation', {
+      outcome: 'blocked',
+    }));
+    for (let i = 1; i <= MAX_SESSION_EVENTS + 50; i++) {
+      session = appendEventToSession(session, createTimelineEvent('action-allowed', 'https://example.com', `click ${i}`, {
+        outcome: 'allowed',
+      }));
+    }
+
+    expect(session.events).toHaveLength(MAX_SESSION_EVENTS + 1);
+    expect(session.events[0].type).toBe('detection');
+    expect(session.events[1].description).toBe('click 51');
+    expect(session.events[session.events.length - 1].description).toBe(`click ${MAX_SESSION_EVENTS + 50}`);
+    expect(session.summary).toMatchObject({
+      totalActions: MAX_SESSION_EVENTS + 51,
+      allowedActions: MAX_SESSION_EVENTS + 50,
+      blockedActions: 1,
+      violations: 1,
+    });
+  });
+
+  it('stores a page address and target selector cut to a fixed length', () => {
+    const event = createTimelineEvent('action-allowed', `https://example.com/?q=${'a'.repeat(5000)}`, 'click allowed', {
+      targetSelector: `#${'b'.repeat(5000)}`,
+      outcome: 'allowed',
+    });
+    const [stored] = appendEventToSession(makeSession(), event).events;
+    expect(stored.url).toHaveLength(MAX_STORED_URL_LENGTH);
+    expect(stored.url.endsWith('a…')).toBe(true);
+    expect(stored.targetSelector).toHaveLength(MAX_STORED_SELECTOR_LENGTH);
+    expect(stored.targetSelector!.endsWith('b…')).toBe(true);
+  });
+
+  it('stores an address and selector within the limits as they are', () => {
+    const event = createTimelineEvent('action-allowed', 'https://example.com/cart', 'click allowed', {
+      targetSelector: '#submit-btn',
+      outcome: 'allowed',
+    });
+    const [stored] = appendEventToSession(makeSession(), event).events;
+    expect(stored.url).toBe('https://example.com/cart');
+    expect(stored.targetSelector).toBe('#submit-btn');
   });
 });
 

@@ -318,12 +318,17 @@ export function showBlockedToast(options: ToastOptions): () => void {
 function getToastStyles(): string {
   return `
     .abg-toast-inner {
+      /* With both side offsets set, the container spans the page's content
+         area less 16px on each side. The offsets of a fixed box are measured
+         inside the page's scrollbar; 100vw would count the scrollbar. */
       position: fixed;
       bottom: 16px;
       right: 16px;
+      left: 16px;
       z-index: 2147483647;
       display: flex;
       flex-direction: column;
+      align-items: flex-end;
       gap: 8px;
       pointer-events: none;
       font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
@@ -346,11 +351,11 @@ function getToastStyles(): string {
       opacity: 0;
       transition: transform 0.3s ease, opacity 0.3s ease;
       /* The width counts the padding and border, so the cap below is the
-         whole box: the viewport less the container's 16px offset on the
-         right and the same margin on the left. */
+         whole box: the container's width, which is the content area less
+         16px on each side. */
       box-sizing: border-box;
       width: 366px;
-      max-width: calc(100vw - 32px);
+      max-width: 100%;
     }
 
     .abg-toast-visible {
