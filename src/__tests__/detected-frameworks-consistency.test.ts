@@ -9,6 +9,10 @@
  * src/detection/automation.ts reads environment signals only, with no input
  * from Playwright detection.
  *
+ * The page also said no harness drove Playwright. `npm run smoke:playwright`
+ * now loads the built extension and drives a page with Playwright; the page
+ * names it, and the script is held to the signals the Playwright row lists.
+ *
  * The comments on detectOpenAIOperator() once said the same thing the README
  * did: that Playwright detection was the primary mechanism and the function
  * only added to it. They are held to the page's Operator row here.
@@ -70,6 +74,23 @@ describe('Detected Frameworks page', () => {
     for (const path of paths) {
       expect(existsSync(new URL(`../../${path}`, import.meta.url)), `${path} does not exist`).toBe(true);
     }
+  });
+
+  it('names a harness that drives Playwright with the built extension loaded', () => {
+    const section = detectedFrameworksSection();
+    expect(section).not.toMatch(/no harness[^.]*playwright/i);
+    expect(section).toContain('`npm run smoke:playwright`');
+    expect(section).toContain('`scripts/smoke-playwright.mjs`');
+    const scripts = JSON.parse(read('package.json')).scripts as Record<string, string>;
+    expect(scripts['smoke:playwright']).toBe('node scripts/smoke-playwright.mjs');
+    const harness = read('scripts/smoke-playwright.mjs');
+    // The real framework, the built extension, and the two signals the
+    // Playwright row lists.
+    expect(harness).toContain("from 'playwright'");
+    expect(harness).toContain('--load-extension=${distPath}');
+    expect(harness).toContain('/UtilityScript/');
+    expect(harness).toContain('chrome.debugger.getTargets');
+    expect(harness).toContain("'Agent detected: Playwright'");
   });
 
   it('describes the Operator row as detectOpenAIOperator() does', () => {
