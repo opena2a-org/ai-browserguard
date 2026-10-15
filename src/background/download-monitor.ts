@@ -11,8 +11,9 @@
  *   there), matched to the download item by URL inside
  *   {@link TAB_DOWNLOAD_START_WINDOW_MS}, and only while that URL names one
  *   download: the report carries no download id, so another download of the
- *   same URL that no report accounts for (the user's, in a tab we hold no
- *   session on) leaves both unmatched. Only this level may be cancelled.
+ *   same URL created at most {@link TAB_DOWNLOAD_START_CANDIDATE_MS} before
+ *   the report, that no report accounts for (the user's, in a tab we hold no
+ *   session on), leaves both unmatched. Only this level may be cancelled.
  *   Not for a tab whose agent is an attachment seen while the built-in
  *   DevTools was open (`devToolsOnly`): that is most likely the user
  *   inspecting their own page, so a start there is at most a host match.
@@ -77,11 +78,25 @@ export interface TabDownloadStart {
 }
 
 /**
- * The longest gap, in either order, between a tab's download start and the
- * chrome.downloads item it is matched to. A start not matched within it is
- * discarded, and a download item waits at most this long for its start.
+ * The longest gap, in either order, between observing a tab's download start
+ * and handling the chrome.downloads item it is matched to. A start not matched
+ * within it is discarded, and a download item waits at most this long for its
+ * start. How long before the start the item can have been created is
+ * {@link TAB_DOWNLOAD_START_CANDIDATE_MS}.
  */
 export const TAB_DOWNLOAD_START_WINDOW_MS = 5_000;
+
+/**
+ * The longest a download item can have been created before a start report
+ * was observed and still be the download it reports. Chrome creates the item
+ * before it reports the start: measured on Chrome for Testing 145 and Google
+ * Chrome 155, the report reached an extension worker 0-8 ms after the item's
+ * `startTime` (`node scripts/measure-download-start-gap.mjs`). The rest is a
+ * margin for a busy worker. An item created earlier, such as the user's
+ * download of the same URL started seconds before the agent's, is neither
+ * matched to the report nor counted against it.
+ */
+export const TAB_DOWNLOAD_START_CANDIDATE_MS = 1_000;
 
 /** A download item a start could also belong to, as chrome.downloads lists it. */
 export type RecentDownload = Pick<DownloadInfo, 'id' | 'url' | 'finalUrl' | 'startTime'>;
@@ -98,14 +113,14 @@ function startedAt(d: Pick<DownloadInfo, 'startTime'>): number | null {
 /**
  * Whether the download `d` could be the one `start` reports: same URL, and
  * created no later than the report was observed and at most
- * {@link TAB_DOWNLOAD_START_WINDOW_MS} before it. Chrome creates the item
+ * {@link TAB_DOWNLOAD_START_CANDIDATE_MS} before it. Chrome creates the item
  * before it reports the start, so an item created after the report was
  * observed is not its download. An unknown creation time is not ruled out.
  */
 function couldBeStartOf(d: Pick<DownloadInfo, 'url' | 'finalUrl' | 'startTime'>, start: TabDownloadStart): boolean {
   if (start.url !== d.url && start.url !== d.finalUrl) return false;
   const t = startedAt(d);
-  return t === null || (t <= start.at && start.at - t <= TAB_DOWNLOAD_START_WINDOW_MS);
+  return t === null || (t <= start.at && start.at - t <= TAB_DOWNLOAD_START_CANDIDATE_MS);
 }
 
 export interface DownloadAttribution {
@@ -164,7 +179,8 @@ export function shouldIgnoreDownload(
  * The earliest start in `starts` (the reports no download has taken yet) that
  * belongs to the download `info`: its URL equals the item's URL or final URL,
  * it was observed within {@link TAB_DOWNLOAD_START_WINDOW_MS} of `now`, and the
- * item was not created after it was observed. Null when none does.
+ * item was created no later than it was observed and at most
+ * {@link TAB_DOWNLOAD_START_CANDIDATE_MS} before. Null when none does.
  *
  * A report carries no download id, so its URL is all that ties it to an item.
  * `others` are the other download items that have not taken a report. When

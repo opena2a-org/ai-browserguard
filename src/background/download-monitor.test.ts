@@ -5,6 +5,7 @@ import {
   describeDownload,
   matchTabDownloadStart,
   originOf,
+  TAB_DOWNLOAD_START_CANDIDATE_MS,
   TAB_DOWNLOAD_START_WINDOW_MS,
   type DownloadInfo,
   type ActiveAgentTab,
@@ -202,6 +203,23 @@ describe('matchTabDownloadStart', () => {
     const s = [start({ at: 1_000 })];
     expect(matchTabDownloadStart(s, { url: 'https://files.example.com/a.txt', startTime: new Date(1_001).toISOString() }, 1_001)).toBeNull();
     expect(matchTabDownloadStart(s, { url: 'https://files.example.com/a.txt', startTime: new Date(1_000).toISOString() }, 1_001)?.guid).toBe('g');
+  });
+
+  it('a download created more than the candidate time before the report was observed is not matched to it', () => {
+    const s = [start({ at: 10_000 })];
+    const createdAt = (ms: number) => ({ url: 'https://files.example.com/a.txt', startTime: new Date(ms).toISOString() });
+    expect(matchTabDownloadStart(s, createdAt(10_000 - TAB_DOWNLOAD_START_CANDIDATE_MS), 10_000)?.guid).toBe('g');
+    expect(matchTabDownloadStart(s, createdAt(10_000 - TAB_DOWNLOAD_START_CANDIDATE_MS - 1), 10_000)).toBeNull();
+    expect(matchTabDownloadStart(s, createdAt(8_000), 10_000)).toBeNull();
+  });
+
+  it('a download of the URL created more than the candidate time before the report does not leave it unmatched', () => {
+    const item = { id: 1, url: 'https://files.example.com/a.txt', startTime: new Date(9_995).toISOString() };
+    const s = [start({ at: 10_000 })];
+    const user = (ms: number): RecentDownload => ({ id: 2, url: item.url, startTime: new Date(ms).toISOString() });
+    expect(matchTabDownloadStart(s, item, 10_000, [user(8_000)])?.guid).toBe('g');
+    expect(matchTabDownloadStart(s, item, 10_000, [user(10_000 - TAB_DOWNLOAD_START_CANDIDATE_MS - 1)])?.guid).toBe('g');
+    expect(matchTabDownloadStart(s, item, 10_000, [user(10_000 - TAB_DOWNLOAD_START_CANDIDATE_MS)])).toBeNull();
   });
 });
 

@@ -628,6 +628,24 @@ describe('a download Chrome reports starting in the agent tab is cancelled', () 
       expect(status(w).lifetimeStats.totalActionsBlocked).toBe(0);
     });
 
+    it("the user's download started 2 seconds before the agent's tab reports the same URL is not cancelled, and the agent's is", async () => {
+      const w = await watchedAgentTab(readOnlyWithBlockedSite());
+      listCreatedItems();
+      const user = create(83);
+      w.onCreated(user);
+      await vi.advanceTimersByTimeAsync(2_000);
+      const agentItem = create(84);
+      willBegin(55, 'g-84', FILE);
+      w.onCreated(agentItem);
+      await drain();
+
+      expect(cancelledIds(w)).toEqual([84]);
+      const events = (await downloadEvents()).filter((e) => e.url === FILE);
+      expect(events.map((e) => e.outcome)).toEqual(['informational', 'blocked']);
+      expect(events[1].attribution).toEqual({ level: 'tab', tabId: 55, frameId: 'frame-55' });
+      expect(status(w).lifetimeStats.totalActionsBlocked).toBe(1);
+    });
+
     it("the user's download created after the report is not cancelled, and the agent's is", async () => {
       const w = await watchedAgentTab(readOnlyWithBlockedSite());
       listCreatedItems();
