@@ -21,7 +21,16 @@ npm run smoke:export     # real-extension: popup chrome + export download
 npm run smoke:arming     # real-popup wizard -> Read-Only rule -> block + toast
 npm run smoke:downloads  # real-extension: user downloads beside a CDP agent
 npm run smoke:devtools   # real-extension: user download in a tab with DevTools open
+npm run smoke:playwright # real-extension: Playwright drives a page, detection recorded
 ```
+
+`npm run smoke:playwright` loads the built extension in the Chromium build
+Playwright installs (`npx playwright install chromium`) and drives a local page
+with Playwright. It asserts that the stack seen inside `page.evaluate()`
+carries `UtilityScript` frames, that the extension's session for the page
+records an "Agent detected: Playwright" entry, and that
+`chrome.debugger.getTargets()` lists the page as attached. It prints the agent
+type the session names without asserting it. It must report 0 failed.
 
 `npm run smoke:downloads` loads the built extension with a session delegation
 set to Read-Only, built as the wizard builds it (no site patterns), and one

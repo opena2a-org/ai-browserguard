@@ -19,7 +19,8 @@
     "smoke:cdp": "node scripts/smoke-cdp-enforcement.mjs",
     "smoke:popup-layout": "node scripts/smoke-popup-layout.mjs",
     "smoke:downloads": "node scripts/smoke-downloads.mjs",
-    "smoke:devtools": "node scripts/smoke-devtools-downloads.mjs"
+    "smoke:devtools": "node scripts/smoke-devtools-downloads.mjs",
+    "smoke:playwright": "node scripts/smoke-playwright.mjs"
   },
   "devDependencies": {
     "@types/chrome": "^0.0.268",
