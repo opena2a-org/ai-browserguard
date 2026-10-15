@@ -9,9 +9,11 @@
 
 [Website](https://opena2a.org/aibrowserguard) · [Privacy policy](https://opena2a.org/aibrowserguard/privacy) · [Discord](https://discord.gg/uRZa3KXgEn)
 
-Chrome extension that detects and monitors AI agents operating in your browser (Playwright, Puppeteer, Selenium, Anthropic Computer Use, and OpenAI Operator) without requiring the agent to identify itself. For in-page and injected automation it can also block scripted navigations, form submissions, and new-tab opens (best-effort, in the page realm). Under a delegation that does not permit downloads, it can cancel a download that Chrome reports starting in an agent's tab, for every kind of agent, including one you start there. Beyond that it **cannot** block external automation frameworks that drive the browser over CDP; against those, AI Browser Guard provides detection, alerting, and a kill switch that closes the tab, not per-action enforcement. See [Scope of enforcement](#what-it-does).
+Chrome extension that detects and monitors AI agents operating in your browser (Playwright, Puppeteer, Selenium, Anthropic Computer Use, and OpenAI Operator) without requiring the agent to identify itself. It **cannot** block per-action input from external frameworks that drive the browser over CDP; against those it detects, alerts and closes the tab. See [Scope of enforcement](docs/enforcement-scope.md).
 
 [Install from Chrome Web Store](https://chromewebstore.google.com/detail/ojphpdmabflmcjhglfogmkdgchkncikf)
+
+![An AI agent takes over a banking tab. AI Browser Guard detects it, flags the transfer it tries to submit with an in-page notice, and the kill switch closes the tab.](docs/browserguard-demo.gif)
 
 An AI agent takes over a tab. AI Browser Guard detects it without the agent identifying itself, flags the transfer it tries to submit, and the kill switch (Ctrl+Shift+K) closes the tab the agent controls.
 
@@ -23,7 +25,7 @@ An AI agent takes over a tab. AI Browser Guard detects it without the agent iden
 - **Kill switch**: one-click stop. Revokes delegations, dispatches a page-realm stop to in-page automation, and **closes the tabs an agent controls** (the real interruption of an in-progress action). It does **not** terminate an external CDP session (an extension cannot), and a persistent external driver can reopen a tab. Keyboard shortcut: Ctrl+Shift+K / Cmd+Shift+K.
 
 > **Scope of enforcement.** Detection and monitoring work against every framework above; per-action blocking does not. External frameworks drive the browser over CDP with native input the page realm cannot intercept, so against them AI Browser Guard detects, alerts, and closes the tab, but cannot enforce per-action policy. Downloads, and the Chrome policy that blocks remote debugging: [docs/enforcement-scope.md](docs/enforcement-scope.md).
->
+
 > **Tabs with no detected agent.** A session delegation is the rule in a tab where no agent was detected too, and in-page blocking does not wait for a detection, so a page's own scripted `click`, `keydown`, `input` or `submit` event can be blocked there. What you see then, and how to let a site's own events through: [docs/enforcement-scope.md](docs/enforcement-scope.md#tabs-with-no-detected-agent).
 
 ## Install
