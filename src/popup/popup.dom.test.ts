@@ -722,3 +722,28 @@ describe('popup render: the report the export smoke opens (#134)', () => {
     expect(buttons).toContain('Export JSON');
   });
 });
+
+describe('popup render: the trust badge of an agent with no trust score', () => {
+  // The OpenA2A AIM (Agent Identity Management) identity lookup was removed;
+  // the registry trust lookup is the only source of an agent's trust score. The
+  // badge for an agent with no score must not name a server the extension no
+  // longer asks.
+  function inPageAgentWithoutScore(): PopupStatus {
+    const s = status({ rule: null });
+    const agent = s.detectedAgents[0] as Record<string, unknown>;
+    // An in-page agent of unknown type: not an external driver, so the badge is
+    // the trust badge rather than the "Monitor only" pill, and not one of the
+    // known tools, so the badge falls through to the no-score text.
+    agent.type = 'unknown';
+    agent.detectionMethods = ['synthetic-event'];
+    delete agent.trustScore;
+    return s;
+  }
+
+  it('reads "No trust score" and does not name AIM', async () => {
+    await renderPopup(inPageAgentWithoutScore());
+    const badge = document.querySelector('.detection-card-header span:last-child');
+    expect(badge?.textContent).toBe('No trust score');
+    expect(document.body.textContent).not.toMatch(/\bAIM\b/);
+  });
+});

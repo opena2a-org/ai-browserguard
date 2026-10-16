@@ -694,7 +694,7 @@ function renderDetectionPanel(): void {
     headerRow.appendChild(name);
     headerRow.appendChild(badge);
 
-    // Trust score badge (from AIM/Registry)
+    // Trust score badge (from the Registry lookup, when it is on and answered)
     // If user has an active delegation rule, show "Managed" instead of raw score.
     // Common frameworks (Playwright, Puppeteer, Selenium) get a "Known tool" indicator.
     const KNOWN_TOOLS = new Set(['playwright', 'puppeteer', 'selenium']);
@@ -750,7 +750,7 @@ function renderDetectionPanel(): void {
       trustBadge.title = `${agent.type} is a recognized automation framework`;
     } else {
       trustBadge.style.cssText = 'font-size: 11px; font-weight: 500; color: var(--text-secondary); margin-left: 4px;';
-      trustBadge.textContent = 'AIM: N/A';
+      trustBadge.textContent = 'No trust score';
     }
     headerRow.appendChild(trustBadge);
 
@@ -882,7 +882,7 @@ function renderDetectionPanel(): void {
     }
     // What the SITE says about itself, kept visually separate from the agent
     // trust badge above it. The badge is about the agent and is partly derived
-    // from AIM/registry data; this is an unverified claim by the page's origin
+    // from registry data; this is an unverified claim by the page's origin
     // (ADR-009). Conflating the two would be the overclaim ADR-008 removed.
     const aiSafetyBlock = renderAiSafetyDeclaration(popupState.aiSafetyDeclarations[agent.id]);
     if (aiSafetyBlock) card.appendChild(aiSafetyBlock);

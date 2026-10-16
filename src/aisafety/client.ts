@@ -3,7 +3,7 @@
  * (draft-fane-ai-safety-txt-00). See ADR-009.
  *
  * This is the first network path in the extension that contacts an origin we do
- * not control. AIM and registry lookups target a fixed, HTTPS-validated,
+ * not control. The registry trust lookup targets a fixed, HTTPS-validated,
  * OpenA2A-owned base URL; this one targets a URL derived from wherever an agent
  * happens to be operating. Everything unusual in this file follows from that.
  *
@@ -55,7 +55,8 @@ const DEFAULT_CACHE_TTL_MS = 24 * 60 * 60 * 1000;
 /**
  * Cache TTL for `unreachable`. Short enough to recover when an origin comes
  * back, long enough to stop a broken origin from being re-hit on every
- * detection. Longer than AIM's 30s equivalent because nothing here is urgent.
+ * detection. The same five minutes as the registry client's result cache
+ * (`DEFAULT_CACHE_TTL_MS` in `src/registry/client.ts`).
  */
 export const UNREACHABLE_CACHE_TTL_MS = 5 * 60 * 1000;
 

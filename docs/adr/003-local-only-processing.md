@@ -11,6 +11,10 @@
 > scripts, no analytics SDKs) remain in force. See ADR-006 for the accurate
 > network posture.
 
+> **Note (2026-10-15):** The OpenA2A AIM (Agent Identity Management) lookup named
+> in the note above was removed; see the note at the top of ADR-006 for the
+> optional network features that remain.
+
 ## Context
 
 AI Browser Guard is a security tool that monitors all browser activity to
