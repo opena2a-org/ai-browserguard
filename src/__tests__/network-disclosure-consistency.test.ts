@@ -40,7 +40,6 @@ const LOCAL_ONLY_SETTINGS = new Set([
  * disclosed in the privacy policy by exact setting name.
  */
 const NETWORK_GATES = new Set([
-  'aimLookupEnabled',
   'registryLookupEnabled',
   'aiSafetyTxtEnabled',
 ]);
@@ -90,9 +89,30 @@ describe('network gates are disclosed', () => {
     expect(privacyPolicy).toContain('/.well-known/ai-safety.txt');
   });
 
-  it('the README documents the same four features', () => {
+  it('the README documents the same three features', () => {
     const readme = read('README.md');
     expect(readme).toContain('ai-safety.txt');
     expect(readme).toMatch(/off by default/i);
+  });
+});
+
+describe('a removed network path is not disclosed as one the extension makes', () => {
+  // The AIM identity lookup was removed: detection asks only the Registry about
+  // an agent type. A surface that still lists it tells a reader the extension
+  // can contact a server it no longer contacts, and drops out of step with the
+  // settings this file classifies.
+  const SURFACES = [
+    'docs/privacy-policy.html',
+    'docs/privacy.md',
+    'README.md',
+    'docs/chrome-web-store-description.md',
+    'docs/store-listing.md',
+  ];
+
+  it.each(SURFACES)('%s does not describe the AIM lookup', (path) => {
+    const text = read(path);
+    expect(text).not.toContain('aim.opena2a.org');
+    expect(text).not.toContain('aimLookupEnabled');
+    expect(text).not.toMatch(/AIM identity lookup/i);
   });
 });

@@ -84,8 +84,8 @@ const MAX_BODY_BYTES = 64 * 1024;
  * not fetch at all.
  *
  * Parsed with `new URL()` rather than string matching: `https://evil.com#@x` and
- * `http://localhost@attacker.com` both defeat naive prefix checks (the same
- * reasoning as `aim/client.ts:48`). `.origin` also strips any userinfo.
+ * `http://localhost@attacker.com` both defeat naive prefix checks. `.origin`
+ * also strips any userinfo.
  *
  * Non-HTTPS pages return null and are skipped entirely rather than upgraded to
  * HTTPS. Draft section 5.4: a consumer "MUST NOT treat a declaration retrieved
@@ -182,7 +182,7 @@ function isPlainText(response: Response): boolean {
  * Whether the user has opted into reading declarations.
  *
  * The gate lives INSIDE this function, not only at the call site, which differs
- * from how `aimLookupEnabled` gates `aim/client.ts` (there, `enrichAgentTrust`
+ * from how `registryLookupEnabled` gates `registry/client.ts` (there, `enrichAgentTrust`
  * checks and the client is unaware). The difference is deliberate and worth the
  * small inconsistency: the background service worker is a side-effect module
  * that tests cannot import, so a call-site-only gate can only ever be tested by

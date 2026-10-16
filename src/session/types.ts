@@ -113,12 +113,6 @@ export interface UserSettings {
   /** Whether to automatically block unidentified agents. Default: false. */
   autoBlockUnknownAgents: boolean;
 
-  /** Whether to look up agents in the AIM registry. Default: false. */
-  aimLookupEnabled: boolean;
-
-  /** Base URL for the AIM API. Default: https://aim.opena2a.org */
-  aimBaseUrl: string;
-
   /** Whether to check agents against the OpenA2A registry. Default: false. */
   registryLookupEnabled: boolean;
 
@@ -144,7 +138,7 @@ export interface UserSettings {
    * Unlike every other network setting, this one contacts a site we do not
    * control — the origin the agent is operating on — rather than an OpenA2A
    * server. That is the whole reason it is gated separately instead of riding on
-   * `aimLookupEnabled`. Display-only: a declaration is self-asserted and never
+   * `registryLookupEnabled`. Display-only: a declaration is self-asserted and never
    * changes detection, trust scoring, or enforcement. Default: false.
    */
   aiSafetyTxtEnabled: boolean;
@@ -186,8 +180,6 @@ export const DEFAULT_SETTINGS: UserSettings = {
   maxSessions: 5,
   maxDetectionLogEntries: 100,
   autoBlockUnknownAgents: false,
-  aimLookupEnabled: false,
-  aimBaseUrl: 'https://aim.opena2a.org',
   registryLookupEnabled: false,
   registryBaseUrl: 'https://api.oa2a.org',
   autoBlockUntrustedAgents: false,

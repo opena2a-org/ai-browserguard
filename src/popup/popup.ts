@@ -18,8 +18,6 @@ import { selectEffectiveRule } from '../delegation/effective';
 import { presentAgent } from '../delegation/enforceability';
 import type { BrowserLayerState } from '../delegation/enforceability';
 import { chromeMajorVersion, remoteDebuggingPosture } from '../delegation/posture';
-import type { AIMAuthState } from '../aim/auth';
-import { getAIMAuthState } from '../aim/auth';
 import type { AiSafetyLookupResult } from '../aisafety/types';
 import {
   settingsWriteFailed,
@@ -95,7 +93,6 @@ interface PopupState {
   selectedReport: SessionReport | null;
   selectedSessionForNetwork: AgentSession | null;
   networkFilter: 'all' | 'agent' | 'user';
-  aimAuth: AIMAuthState | null;
   settings: UserSettings;
   settingsPanelOpen: boolean;
   contributeStats: { totalContributed: number; queuedCount: number; lastFlushedAt: string | null; enabled: boolean } | null;
@@ -143,7 +140,6 @@ let popupState: PopupState = {
   selectedReport: null,
   selectedSessionForNetwork: null,
   networkFilter: 'all',
-  aimAuth: null,
   settings: { ...DEFAULT_SETTINGS },
   settingsPanelOpen: false,
   contributeStats: null,
@@ -262,14 +258,6 @@ async function queryBackgroundStatus(): Promise<void> {
     popupState.showContributeTip = shouldShowTip(consent);
   } catch {
     // Ignore
-  }
-
-  // Load AIM auth state directly from storage
-  try {
-    const authState = await getAIMAuthState();
-    popupState.aimAuth = authState;
-  } catch {
-    popupState.aimAuth = null;
   }
 
   // Load user settings from storage

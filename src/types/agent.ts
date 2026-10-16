@@ -90,15 +90,14 @@ export interface AgentIdentity {
   observedCapabilities: AgentCapability[];
 
   /**
-   * Optional trust score from AIM registry lookup.
-   * Reserved for future AIM integration.
+   * Optional trust score from the opt-in registry trust lookup.
    * Range: 0.0 (untrusted) to 1.0 (fully trusted).
    */
   trustScore?: number;
 
   /**
    * Optional human-readable label for the agent.
-   * May be populated from AIM registry in future versions.
+   * Set from the registry trust lookup's display name when the agent has none.
    */
   label?: string;
 

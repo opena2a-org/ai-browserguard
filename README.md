@@ -54,13 +54,13 @@ By default the extension makes zero network requests. All detection, delegation,
 
 ### Network requests and telemetry
 
-Four optional network features are **off by default** and only act after you explicitly enable them:
+Three optional network features are **off by default** and only act after you explicitly enable them:
 
-- **AIM identity lookup** (`aim.opena2a.org`) and **registry trust lookup** (`api.oa2a.org`): when an agent is detected, look up a trust score for that agent type. Only the detected agent type (for example `playwright`) is sent; never your URLs or page content.
+- **Registry trust lookup** (`api.oa2a.org`): when an agent is detected, look up a trust score for that agent type. Only the detected agent type (for example `playwright`) is sent; never your URLs or page content.
 - **Contribution** (`api.oa2a.org`): sends a random token kept on this install, the framework name and summary counts; never URLs, page content or keystrokes. A tip in the popup offers it after 5 detections or 3 days after the first detection.
 - **Site safety declarations** (the site the agent is on): when an agent is detected on a page, read that site's [`/.well-known/ai-safety.txt`](https://datatracker.ietf.org/doc/draft-fane-ai-safety-txt/) and show what the site claims about its own content. This is the only feature that contacts a server we do not operate. It sends no cookies, no page address, and nothing about you.
 
-Turn contribution off with the switch under Community Trust Data in the popup's Settings, and site safety declarations with Read site safety declarations. The two lookups have no switch in the popup. Each feature in full: [docs/privacy.md](docs/privacy.md); the policy: [opena2a.org/aibrowserguard/privacy](https://opena2a.org/aibrowserguard/privacy).
+Turn contribution off with the switch under Community Trust Data in the popup's Settings, and site safety declarations with Read site safety declarations. The registry lookup has no switch in the popup. Each feature in full: [docs/privacy.md](docs/privacy.md); the policy: [opena2a.org/aibrowserguard/privacy](https://opena2a.org/aibrowserguard/privacy).
 
 ## Documentation
 

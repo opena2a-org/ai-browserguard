@@ -444,16 +444,16 @@ describe('storage schema version + corruption recovery', () => {
     expect(after.storageSchemaVersion).toBe(futureVersion);
   });
 
-  it('rejects http:// aimBaseUrl in settings and resets to default', async () => {
+  it('rejects http:// registryBaseUrl in settings and resets to default', async () => {
     await chrome.storage.local.set({
       storageSchemaVersion: CURRENT_STORAGE_SCHEMA_VERSION,
-      settings: { ...DEFAULT_SETTINGS, aimBaseUrl: 'http://attacker.example' },
+      settings: { ...DEFAULT_SETTINGS, registryBaseUrl: 'http://attacker.example' },
     });
     const state = await getStorageState();
-    expect(state.settings.aimBaseUrl).toBe(DEFAULT_SETTINGS.aimBaseUrl);
+    expect(state.settings.registryBaseUrl).toBe(DEFAULT_SETTINGS.registryBaseUrl);
     const corruption = await chrome.storage.local.get('__corrupted_state');
     const log = corruption.__corrupted_state as Array<{ key: string; reason: string }>;
-    expect(log.some((e) => e.reason.includes('aimBaseUrl'))).toBe(true);
+    expect(log.some((e) => e.reason.includes('registryBaseUrl'))).toBe(true);
   });
 
   it('rejects javascript: scheme in registryBaseUrl and resets to default', async () => {
@@ -465,13 +465,24 @@ describe('storage schema version + corruption recovery', () => {
     expect(state.settings.registryBaseUrl).toBe(DEFAULT_SETTINGS.registryBaseUrl);
   });
 
-  it('rejects array-typed aimBaseUrl (not a string) and resets to default', async () => {
+  it('rejects array-typed registryBaseUrl (not a string) and resets to default', async () => {
     await chrome.storage.local.set({
       storageSchemaVersion: CURRENT_STORAGE_SCHEMA_VERSION,
-      settings: { ...DEFAULT_SETTINGS, aimBaseUrl: ['http://attacker'] },
+      settings: { ...DEFAULT_SETTINGS, registryBaseUrl: ['http://attacker'] },
     });
     const state = await getStorageState();
-    expect(state.settings.aimBaseUrl).toBe(DEFAULT_SETTINGS.aimBaseUrl);
+    expect(state.settings.registryBaseUrl).toBe(DEFAULT_SETTINGS.registryBaseUrl);
+  });
+
+  it('drops the removed AIM lookup settings an earlier version stored', async () => {
+    await chrome.storage.local.set({
+      storageSchemaVersion: CURRENT_STORAGE_SCHEMA_VERSION,
+      settings: { ...DEFAULT_SETTINGS, aimLookupEnabled: true, aimBaseUrl: 'https://aim.opena2a.org' },
+    });
+    const state = await getStorageState();
+    expect(state.settings).not.toHaveProperty('aimLookupEnabled');
+    expect(state.settings).not.toHaveProperty('aimBaseUrl');
+    expect(state.settings).toEqual(DEFAULT_SETTINGS);
   });
 
   it('rejects non-boolean detectionEnabled and resets to default', async () => {
@@ -484,7 +495,7 @@ describe('storage schema version + corruption recovery', () => {
   });
 
   it('accepts a fully valid settings object without rewriting', async () => {
-    const sane = { ...DEFAULT_SETTINGS, detectionEnabled: false, aimBaseUrl: 'https://aim.example.com' };
+    const sane = { ...DEFAULT_SETTINGS, detectionEnabled: false, registryBaseUrl: 'https://registry.example.com' };
     await chrome.storage.local.set({
       storageSchemaVersion: CURRENT_STORAGE_SCHEMA_VERSION,
       settings: sane,
@@ -492,7 +503,7 @@ describe('storage schema version + corruption recovery', () => {
     (chrome.storage.local.set as unknown as { mockClear: () => void }).mockClear();
     const state = await getStorageState();
     expect(state.settings.detectionEnabled).toBe(false);
-    expect(state.settings.aimBaseUrl).toBe('https://aim.example.com');
+    expect(state.settings.registryBaseUrl).toBe('https://registry.example.com');
     const allCalls = (chrome.storage.local.set as unknown as { mock: { calls: unknown[][] } }).mock.calls;
     const writes = allCalls.map((c) => c[0] as Record<string, unknown>);
     const recovery = writes.filter((c) => !('__corrupted_state' in c));
