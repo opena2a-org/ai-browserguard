@@ -8,6 +8,14 @@ policy's "the only servers it can contact" claim.
 **Constrained by:** ADR-008 (enforcement scope: display-only), ADR-003 (local-only
 engineering measures, still in force).
 
+> **Note (2026-10-15):** The OpenA2A AIM (Agent Identity Management) identity
+> lookup this ADR refers to was removed; see the note at the top of ADR-006. Where
+> the text below names AIM, `aim.opena2a.org` or `aimLookupEnabled`, the registry
+> trust lookup (`api.oa2a.org`, `registryLookupEnabled`) is the one remaining
+> fixed-origin network path it is compared with. The trust-average code it cites
+> is gone with the lookup: an agent's trust score is the registry's score. The
+> rest of this ADR is unchanged.
+
 ## Context
 
 `draft-fane-ai-safety-txt-00` defines a `/.well-known/ai-safety.txt` declaration:
