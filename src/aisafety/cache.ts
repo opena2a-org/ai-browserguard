@@ -3,7 +3,7 @@
  *
  * Keyed by page origin, backed by `chrome.storage.local`.
  *
- * Why not an in-memory Map, as `aim/client.ts` and `registry/client.ts` use:
+ * Why not an in-memory Map, as `registry/client.ts` uses:
  *
  * 1. **The MV3 service worker unloads after ~30s idle.** A Map would be dropped
  *    on every unload, so a user browsing with an agent would re-fetch the same
@@ -11,9 +11,9 @@
  *    it matters, and each miss is another request to a third-party origin — the
  *    exact disclosure ADR-009 is trying to minimize. Here the cache is a privacy
  *    control, not just a latency optimization.
- * 2. **The key space is attacker-influenced.** The existing Maps are keyed by
- *    agent type (a closed set of ~8 strings) and have no eviction because they
- *    do not need one. This cache is keyed by origin, so its key space is
+ * 2. **The key space is attacker-influenced.** The registry Map is keyed by
+ *    agent type (a closed set of ~8 strings) and has no eviction because it
+ *    does not need one. This cache is keyed by origin, so its key space is
  *    unbounded. It needs an explicit cap and eviction.
  */
 

@@ -697,7 +697,7 @@ The type system includes reserved fields for future product integrations:
 
 | Field | Type | Location | Purpose |
 |-------|------|----------|---------|
-| `AgentIdentity.trustScore` | `number?` | `src/types/agent.ts` | AIM registry trust lookup (0.0--1.0) |
-| `AgentIdentity.label` | `string?` | `src/types/agent.ts` | AIM registry human-readable name |
+| `AgentIdentity.trustScore` | `number?` | `src/types/agent.ts` | Registry trust lookup (0.0--1.0) |
+| `AgentIdentity.label` | `string?` | `src/types/agent.ts` | Registry display name |
 | `DelegationToken.signature` | `string?` | `src/types/delegation.ts` | Cryptographic token signing via AIM |
 | `DelegationToken.issuer` | `string?` | `src/types/delegation.ts` | AIM instance identifier |

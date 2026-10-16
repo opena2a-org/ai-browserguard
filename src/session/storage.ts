@@ -149,8 +149,6 @@ function validateSettingsFields(raw: Partial<UserSettings>): { clean: UserSettin
   takeNumber('maxSessions', raw.maxSessions);
   takeNumber('maxDetectionLogEntries', raw.maxDetectionLogEntries);
   takeBoolean('autoBlockUnknownAgents', raw.autoBlockUnknownAgents);
-  takeBoolean('aimLookupEnabled', raw.aimLookupEnabled);
-  takeHttpsUrl('aimBaseUrl', raw.aimBaseUrl);
   takeBoolean('registryLookupEnabled', raw.registryLookupEnabled);
   takeHttpsUrl('registryBaseUrl', raw.registryBaseUrl);
   takeBoolean('autoBlockUntrustedAgents', raw.autoBlockUntrustedAgents);

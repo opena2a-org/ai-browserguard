@@ -50,7 +50,6 @@ import {
   getTabEnforcementFault,
 } from './cdp-enforcement';
 import type { BrowserLayerState } from '../delegation/enforceability';
-import { lookupAgentIdentity } from '../aim/client';
 import { lookupRegistryTrust } from '../registry/client';
 import { lookupAiSafetyDeclaration, declarationOriginFor } from '../aisafety/client';
 import { clearAiSafetyCache } from '../aisafety/cache';
@@ -1184,7 +1183,7 @@ async function handleDetection(tabId: number, reported: DetectionEvent, fromDebu
     sentAt: new Date().toISOString(),
   }).catch(() => { /* tab may not have a content script yet */ });
 
-  // AIM + Registry trust lookup (non-blocking)
+  // Registry trust lookup (non-blocking, opt-in)
   enrichAgentTrust(tabId, event.agent).catch(() => { /* non-critical */ });
 
   // Read the page origin's ai-safety.txt declaration (non-blocking, opt-in).
@@ -1300,29 +1299,14 @@ async function enrichDomainDeclaration(tabId: number, agent: AgentIdentity): Pro
 }
 
 /**
- * Enrich an agent's identity with AIM and registry trust data.
+ * Enrich an agent's identity with registry trust data.
  * Updates the agent in activeAgents and the stored session.
+ *
+ * The Registry is the only source: the question is about a framework name,
+ * with no organization in it.
  */
 async function enrichAgentTrust(tabId: number, agent: AgentIdentity): Promise<void> {
   const settings = (await getStorageState()).settings;
-  let aimScore: number | null = null;
-  let registryScore: number | null = null;
-
-  // AIM lookup
-  if (settings.aimLookupEnabled) {
-    const aimResult = await lookupAgentIdentity(agent.type, agent.originUrl, {
-      baseUrl: settings.aimBaseUrl,
-    });
-    if (aimResult.status === 'ok') {
-      aimScore = aimResult.trustScore;
-      agent.label = aimResult.label;
-    } else if (aimResult.status === 'unregistered') {
-      // Informational only — surface the label but do not feed an
-      // unregistered=0 score into trust averaging.
-      agent.label = aimResult.label;
-    }
-    // unreachable: no signal, leave aimScore null so it's excluded from averaging.
-  }
 
   // Registry lookup
   if (settings.registryLookupEnabled) {
@@ -1330,17 +1314,11 @@ async function enrichAgentTrust(tabId: number, agent: AgentIdentity): Promise<vo
       baseUrl: settings.registryBaseUrl,
     });
     if (registryResult) {
-      registryScore = registryResult.trustScore;
+      agent.trustScore = registryResult.trustScore;
       if (!agent.label && registryResult.displayName) {
         agent.label = registryResult.displayName;
       }
     }
-  }
-
-  // Combine scores: average of available scores
-  const scores = [aimScore, registryScore].filter((s): s is number => s !== null);
-  if (scores.length > 0) {
-    agent.trustScore = scores.reduce((a, b) => a + b, 0) / scores.length;
   }
 
   // Update the agent in state

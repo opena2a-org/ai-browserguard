@@ -120,7 +120,7 @@ describe('declarationOriginFor', () => {
 
   it('is not fooled by a userinfo-embedded host', () => {
     // A naive startsWith('https://localhost') check would pass this; it resolves
-    // to attacker.com. Same reasoning as aim/client.ts:48.
+    // to attacker.com.
     expect(declarationOriginFor('https://localhost@attacker.com/x')).toBe('https://attacker.com');
   });
 });

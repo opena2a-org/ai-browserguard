@@ -4,6 +4,15 @@
 **Date:** 2026-06-02
 **Supersedes:** ADR-003 (the absolute "zero network requests" stance)
 
+> **Note (2026-10-15):** The OpenA2A AIM (Agent Identity Management) identity
+> lookup, item 1 below, was removed. Its request carried no credential, and a
+> question about an agent type with no organization in it is the Registry's to
+> answer, so detection now asks only the Registry (item 2). The
+> `aimLookupEnabled` and `aimBaseUrl` settings are gone, and a value an earlier
+> version stored for either is ignored. The optional network features are now
+> the registry trust lookup, anonymized contribution and, since ADR-009, site
+> safety declarations. The rest of this ADR is unchanged.
+
 ## Context
 
 ADR-003 (2026-02-27) committed the extension to "zero network requests" and
