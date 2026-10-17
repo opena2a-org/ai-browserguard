@@ -114,11 +114,15 @@ describe('live smokes that reload the extension', () => {
     .map((name) => ({ name, src: readFileSync(new URL(name, scriptsDir), 'utf-8') }))
     .filter(({ src }) => /enableExtensions:\s*\[/.test(src) && src.includes('chrome.runtime.reload()'));
 
-  it('are the download smokes', () => {
-    expect(reloading.map(({ name }) => name).sort()).toEqual(['smoke-devtools-downloads.mjs', 'smoke-downloads.mjs']);
+  it('are the download smokes and the notices smoke', () => {
+    expect(reloading.map(({ name }) => name).sort()).toEqual([
+      'smoke-devtools-downloads.mjs',
+      'smoke-downloads.mjs',
+      'smoke-notices.mjs',
+    ]);
   });
 
-  it.each(['smoke-devtools-downloads.mjs', 'smoke-downloads.mjs'])(
+  it.each(['smoke-devtools-downloads.mjs', 'smoke-downloads.mjs', 'smoke-notices.mjs'])(
     '%s turns Developer mode on in its profile before it starts its browser',
     (name) => {
       // Positions, not the source text, so a failure names the script and not its 300 lines.

@@ -22,6 +22,7 @@ npm run smoke:arming     # real-popup wizard -> Read-Only rule -> block + toast
 npm run smoke:downloads  # real-extension: user downloads beside a CDP agent
 npm run smoke:devtools   # real-extension: user download in a tab with DevTools open
 npm run smoke:playwright # real-extension: Playwright drives a page, detection recorded
+npm run smoke:notices    # real-extension: block notices for a click, typing and a form submission
 ```
 
 `npm run smoke:playwright` loads the built extension in the Chromium build
@@ -35,8 +36,8 @@ type the session names without asserting it. It must report 0 failed.
 `npm run smoke:export` and `npm run smoke:playwright` run in Playwright's
 Chromium, which `npm ci` does not download: install it once with
 `npx playwright install chromium`. `npm run smoke:arming`,
-`npm run smoke:downloads` and `npm run smoke:devtools` use the browser
-Puppeteer installs.
+`npm run smoke:downloads`, `npm run smoke:devtools` and
+`npm run smoke:notices` use the browser Puppeteer installs.
 
 `npm run smoke:downloads` loads the built extension with a session delegation
 set to Read-Only, built as the wizard builds it (no site patterns), and one
@@ -68,6 +69,29 @@ temporary profile (`scripts/smoke-profile.mjs`). Both pass on Chrome for
 Testing 145, the browser Puppeteer installs, and on Google Chrome 154. To run
 them on an installed browser, set `CHROME_PATH` to its binary.
 
+`npm run smoke:notices` loads the built extension with a session delegation
+set to Read-Only as the wizard builds it (no site patterns) and opens
+`scripts/inpage-agent-fixture.html` over http. With the fixture's spray of
+synthetic mouse moves and clicks running, it dispatches the fixture's
+synthetic click, keydown, input and submit events from page script, and reads
+the block notices on the page through the debugging protocol, since page
+script cannot open the closed shadow root that holds them. It asserts that the
+four events are blocked and that the notices then read, oldest first,
+`Blocked click. ×7` (the spray's six clicks and the fixture's click),
+`Blocked text input. ×2` (the keydown and the input),
+`Blocked form submission.`: at most three are shown, the oldest is dropped
+first, and a block identical to the newest notice counts on it. The form
+submission notice offers no Allow once and is still shown after the other two
+are dismissed at 8 seconds. Ten more blocked clicks count on one new notice
+below it, `Blocked click. ×10`. It stops the spray after the submit event, so
+that the spray's next burst does not change the notices it reads. It also
+asserts that the content script threw no exception, and prints the text of
+every notice. It loads the extension over the debugging pipe like the two
+downloads smokes, turns Developer mode on in its temporary profile the same
+way, and runs headless, so it needs no display and no OS focus. It passes on
+Chrome for Testing 145, the browser Puppeteer installs, and on Google Chrome
+155 with `CHROME_PATH` set to its binary. It must report 0 failed.
+
 `npm run smoke:arming` closes manual step 3 below: it opens the REAL toolbar
 popup (`chrome.action.openPopup`), walks the Configure wizard to activate a
 Read-Only rule, asserts the rule persisted, then drives the in-page agent
@@ -97,6 +121,7 @@ focused OS window); the export logic itself is locked in by
 | `npm run smoke:playwright` | Playwright's Chromium (`npx playwright install chromium`) |
 | `npm run smoke:downloads` | Chrome for Testing, or the installed browser that `CHROME_PATH` names |
 | `npm run smoke:devtools` | Chrome for Testing, or the installed browser that `CHROME_PATH` names |
+| `npm run smoke:notices` | Chrome for Testing, or the installed browser that `CHROME_PATH` names |
 | `npm run smoke:popup-layout` | Playwright's headless Chromium (`npx playwright install chromium`); it loads no extension |
 
 The first seven load the extension with `--load-extension` and do not read
