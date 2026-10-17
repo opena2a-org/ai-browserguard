@@ -35,6 +35,9 @@
  *      valid rule -> self-heal re-attach, kill switch -> full teardown and the
  *      user's browsing passes freely.
  *
+ * Loads dist/ in Chrome for Testing (the browser Puppeteer installs) or
+ * another Chromium build that honours --load-extension.
+ *
  * Needs OS focus for the popup (locked console = SKIP-ENV, exit 3, never a
  * false pass). Run: npm run smoke:cdp   (headful; needs a display)
  */
@@ -45,6 +48,7 @@ import { execFile } from 'node:child_process';
 import { tmpdir, platform } from 'node:os';
 import { join, resolve, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { waitForExtensionWorker } from './smoke-launch.mjs';
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const dist = resolve(root, 'dist');
@@ -106,7 +110,8 @@ async function launch() {
       '--no-first-run', '--no-default-browser-check', '--window-size=1200,900',
     ],
   });
-  const swTarget = await browser.waitForTarget(
+  const swTarget = await waitForExtensionWorker(
+    browser,
     (t) => t.type() === 'service_worker' && t.url().startsWith('chrome-extension://'),
     { timeout: 15000 },
   );

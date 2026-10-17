@@ -6,8 +6,9 @@
  *
  * Field-test F-P found the block ENGINE sound but unreachable in practice.
  * This smoke drives the full user path on the built dist/:
- *   1. Load dist/ in a real (headful) Chrome; serve the in-page agent fixture
- *      over localhost.
+ *   1. Load dist/ in a headful Chrome for Testing (the browser Puppeteer
+ *      installs) or another Chromium build that honours --load-extension;
+ *      serve the in-page agent fixture over localhost.
  *   2. Open the real toolbar popup (chrome.action.openPopup) and walk the
  *      Configure wizard: Read-Only preset -> site pattern -> duration ->
  *      Activate Delegation.
@@ -25,6 +26,7 @@ import { readFileSync, mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { waitForExtensionWorker } from './smoke-launch.mjs';
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const dist = resolve(root, 'dist');
@@ -70,7 +72,8 @@ async function clickByText(page, text, scope = 'body') {
 }
 
 try {
-  const swTarget = await browser.waitForTarget(
+  const swTarget = await waitForExtensionWorker(
+    browser,
     (t) => t.type() === 'service_worker' && t.url().startsWith('chrome-extension://'),
     { timeout: 15000 },
   );
