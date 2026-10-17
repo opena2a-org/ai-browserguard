@@ -39,6 +39,7 @@ import {
   capabilityRecoveryFor,
   isCapabilityBlock,
 } from './block-actions';
+import { renderKillSwitchShortcut, SHORTCUTS_PAGE } from './shortcut';
 
 interface PopupState {
   detectedAgents: AgentIdentity[];
@@ -170,8 +171,18 @@ function initialize(): void {
       footerText.textContent = `AI Browser Guard v${manifest.version}`;
     }
     setupEventListeners();
+    renderHeaderShortcut();
     queryBackgroundStatus();
   });
+}
+
+/** Show the key Chrome has bound to the kill switch, or that none is (#133). */
+function renderHeaderShortcut(): void {
+  const el = document.getElementById('kill-switch-shortcut');
+  if (!el) return;
+  renderKillSwitchShortcut(el, chrome.commands, () => {
+    chrome.tabs.create({ url: SHORTCUTS_PAGE }).catch(() => { /* the button's title names the page */ });
+  }).catch(() => { /* the kill switch button is still there */ });
 }
 
 async function queryBackgroundStatus(): Promise<void> {

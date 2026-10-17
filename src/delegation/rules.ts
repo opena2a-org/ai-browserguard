@@ -31,6 +31,16 @@ function generateId(): string {
  */
 export const FULL_ACCESS_MAX_MINUTES = 60;
 
+/**
+ * Preset titles as the delegation wizard shows them. User-facing copy names a
+ * preset by its title, never by its storage identifier (`readOnly`).
+ */
+export const PRESET_TITLES: Record<DelegationPreset, string> = {
+  readOnly: 'Read-Only',
+  limited: 'Limited Access',
+  fullAccess: 'Full Access',
+};
+
 const READ_ONLY_CAPABILITIES: AgentCapability[] = ['navigate', 'read-dom'];
 const LIMITED_CAPABILITIES: AgentCapability[] = ['navigate', 'read-dom', 'click', 'type-text'];
 const ALL_CAPABILITIES: AgentCapability[] = [
@@ -151,7 +161,7 @@ export function evaluateRule(
   if (!actionResult.allowed) {
     return {
       allowed: false,
-      reason: `Action "${action}" is not permitted under ${rule.preset} delegation.`,
+      reason: `Not permitted under the ${PRESET_TITLES[rule.preset] ?? rule.preset} delegation.`,
     };
   }
 

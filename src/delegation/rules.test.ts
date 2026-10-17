@@ -8,6 +8,7 @@ import {
   issueToken,
   revokeToken,
   FULL_ACCESS_MAX_MINUTES,
+  PRESET_TITLES,
 } from './rules';
 
 describe('createRuleFromPreset', () => {
@@ -133,6 +134,29 @@ describe('evaluateRule', () => {
     });
     const result = evaluateRule(rule, 'click', 'https://sub.example.com/page');
     expect(result.allowed).toBe(true);
+  });
+
+  // #133: the block notice showed the storage identifier ("under readOnly
+  // delegation"); it names the preset by the title the wizard shows.
+  it('names the preset by its wizard title in an action block reason', () => {
+    const readOnly = evaluateRule(createRuleFromPreset('readOnly'), 'click', 'https://example.com/');
+    expect(readOnly.allowed).toBe(false);
+    expect(readOnly.reason).toBe('Not permitted under the Read-Only delegation.');
+
+    const limited = evaluateRule(
+      createRuleFromPreset('limited', {
+        sitePatterns: [{ pattern: '*.example.com', action: 'allow' }],
+        durationMinutes: 60,
+      }),
+      'submit-form',
+      'https://sub.example.com/page',
+    );
+    expect(limited.allowed).toBe(false);
+    expect(limited.reason).toBe('Not permitted under the Limited Access delegation.');
+
+    for (const preset of ['readOnly', 'limited', 'fullAccess'] as const) {
+      expect(PRESET_TITLES[preset]).not.toBe(preset);
+    }
   });
 });
 
