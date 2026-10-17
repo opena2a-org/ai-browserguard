@@ -1,7 +1,7 @@
 # Status: beta
 
 **Stage:** beta
-**Maintenance horizon:** actively maintained through 2026-12-31, status reviewed quarterly
+**Maintenance horizon:** actively maintained through 2026-12-31. `npm run bump` updates the version in the stage rationale at each release, and the table below records each stage change.
 **Maintainer wanted:** no
 
 ## Stage rationale

@@ -5,7 +5,7 @@
  */
 
 import type { DelegationPreset, DelegationRule, SitePattern } from '../types/delegation';
-import { createRuleFromPreset, FULL_ACCESS_MAX_MINUTES } from './rules';
+import { createRuleFromPreset, FULL_ACCESS_MAX_MINUTES, PRESET_TITLES } from './rules';
 
 export type WizardStep = 'preset' | 'sites' | 'time' | 'confirm';
 
@@ -264,15 +264,15 @@ export function finalizeWizard(state: WizardState): DelegationRule | null {
 
 const PRESET_DESCRIPTIONS: Record<DelegationPreset, { title: string; description: string }> = {
   readOnly: {
-    title: 'Read-Only',
+    title: PRESET_TITLES.readOnly,
     description: 'Blocks clicking, typing, and form submission for in-page automation (best-effort). Cancels downloads started in an agent\'s tab, yours included, when Browser-layer blocking is on. External CDP agents (Playwright, Computer Use, etc.) bypass the rest; use the kill switch to close the tab.',
   },
   limited: {
-    title: 'Limited Access',
+    title: PRESET_TITLES.limited,
     description: 'Agent can interact with specific sites you choose, with a time limit. Downloads started in an agent\'s tab are cancelled, yours included, when Browser-layer blocking is on.',
   },
   fullAccess: {
-    title: 'Full Access',
+    title: PRESET_TITLES.fullAccess,
     description: `Agent can perform any action on any site for ${FULL_ACCESS_MAX_MINUTES} minutes, then the grant expires. All activity is logged.`,
   },
 };

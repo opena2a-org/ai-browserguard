@@ -33,6 +33,20 @@ const CAPABILITY_LABELS: Record<string, string> = {
   'network-request': 'network request',
 };
 
+/** A rendered notice and the count of identical blocks it stands for. */
+interface ToastGroup {
+  /** Capability, URL and reason of the block, the identity of the notice. */
+  key: string;
+  count: number;
+  /** The "Blocked <label>." line without a count. */
+  label: string;
+  what: HTMLElement;
+  rearm: () => void;
+  remove: () => void;
+}
+
+const toastGroups = new WeakMap<Element, ToastGroup>();
+
 /** Severity for determining toast persistence. */
 const CRITICAL_CAPABILITIES = new Set(['submit-form', 'execute-script']);
 
@@ -176,6 +190,18 @@ export function showBlockedToast(options: ToastOptions): () => void {
   const container = ensureContainer();
   const inner = getInner(container);
 
+  // A notice identical to the newest one counts on it instead of stacking, so
+  // a burst from one agent cannot push out a notice that differs (#133).
+  const key = JSON.stringify([capability, url, reason]);
+  const newest = inner.lastElementChild;
+  const group = newest ? toastGroups.get(newest) : undefined;
+  if (group && group.key === key && !newest!.classList.contains('abg-toast-exit')) {
+    group.count += 1;
+    group.what.textContent = `${group.label} ×${group.count}`;
+    group.rearm();
+    return group.remove;
+  }
+
   // Limit visible toasts
   while (inner.children.length >= MAX_VISIBLE_TOASTS) {
     inner.removeChild(inner.firstChild!);
@@ -223,7 +249,8 @@ export function showBlockedToast(options: ToastOptions): () => void {
 
   const what = document.createElement('div');
   what.className = 'abg-toast-what';
-  what.textContent = `Blocked ${label}.`;
+  const whatText = `Blocked ${label}.`;
+  what.textContent = whatText;
   body.appendChild(what);
 
   if (reason) {
@@ -305,11 +332,16 @@ export function showBlockedToast(options: ToastOptions): () => void {
     }, 300); // match CSS transition
   };
 
-  // Auto-dismiss for non-critical
+  // Auto-dismiss for non-critical; a repeat restarts the timer.
   const dismissMs = isCritical ? CRITICAL_AUTO_DISMISS_MS : AUTO_DISMISS_MS;
-  if (dismissMs > 0) {
+  const rearm = () => {
+    if (dismissMs <= 0 || dismissed) return;
+    if (timeoutId) clearTimeout(timeoutId);
     timeoutId = setTimeout(removeToast, dismissMs);
-  }
+  };
+  rearm();
+
+  toastGroups.set(toast, { key, count: 1, label: whatText, what, rearm, remove: removeToast });
 
   return removeToast;
 }

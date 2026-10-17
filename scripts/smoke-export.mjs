@@ -11,11 +11,14 @@
  *      sender validation when the popup HTML is opened as an ordinary tab.
  *
  * Usage: node scripts/smoke-export.mjs   (run `npm run build` first)
+ * Runs in Playwright's Chromium: install it once with
+ * `npx playwright install chromium`.
  * Exit code is non-zero if any assertion fails.
  */
 import pw from '../node_modules/playwright/index.js';
 import { fileURLToPath } from 'url';
 import { dirname, join } from 'path';
+import { missingChromiumMessage } from './playwright-browser.mjs';
 
 const { chromium } = pw;
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -31,6 +34,12 @@ function check(name, cond, detail = '') {
 function skip(name, reason) {
   console.log(`  SKIP  ${name} -- ${reason}`);
   skips.push(name);
+}
+
+const missing = missingChromiumMessage(chromium.executablePath());
+if (missing) {
+  console.error(missing);
+  process.exit(1);
 }
 
 const ctx = await chromium.launchPersistentContext(PROFILE, {

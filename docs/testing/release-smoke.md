@@ -32,6 +32,10 @@ records an "Agent detected: Playwright" entry, and that
 `chrome.debugger.getTargets()` lists the page as attached. It prints the agent
 type the session names without asserting it. It must report 0 failed.
 
+`npm run smoke:export` runs in Playwright's Chromium, which `npm ci` does not
+download: install it once with `npx playwright install chromium`. The other
+smokes listed above use the browser Puppeteer installs.
+
 `npm run smoke:downloads` loads the built extension with a session delegation
 set to Read-Only, built as the wizard builds it (no site patterns), and one
 external CDP client attached to one tab, the setup in #69. With Browser-layer blocking off and then on, it asserts that the user's
