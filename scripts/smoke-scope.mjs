@@ -1,9 +1,11 @@
 /**
  * Enforcement-scope smoke test (ADR-008).
  *
- * Loads the built dist/ as an unpacked extension, drives a real form with an
- * external CDP framework (Puppeteer == the same class as Playwright/Cowork)
- * using NATIVE input, and asserts the report states its observation scope:
+ * Loads the built dist/ as an unpacked extension in Chrome for Testing (the
+ * browser Puppeteer installs) or another Chromium build that honours
+ * --load-extension, drives a real form with an external CDP framework
+ * (Puppeteer == the same class as Playwright/Cowork) using NATIVE input, and
+ * asserts the report states its observation scope:
  *
  *   1. The agent is detected (external CDP driver).
  *   2. The native-input form submission actually landed (the agent acted).
@@ -22,6 +24,7 @@ import puppeteer from 'puppeteer';
 import http from 'node:http';
 import { fileURLToPath } from 'node:url';
 import { dirname, resolve } from 'node:path';
+import { waitForExtensionWorker } from './smoke-launch.mjs';
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const distPath = resolve(root, 'dist');
@@ -72,11 +75,11 @@ async function main() {
   });
 
   try {
-    const swTarget = await browser.waitForTarget(
+    const swTarget = await waitForExtensionWorker(
+      browser,
       (t) => t.type() === 'service_worker' && t.url().includes('background/index.js'),
       { timeout: 10000 },
-    ).catch(() => null);
-    if (!swTarget) { fail('service worker registers'); return finish(browser, server); }
+    );
     const extId = new URL(swTarget.url()).host;
 
     const page = await browser.newPage();

@@ -1,8 +1,10 @@
 /**
  * Real-browser load smoke test.
  *
- * Loads the built dist/ as an unpacked extension in a real Chrome, then asserts
- * what a user (and the chrome://extensions Errors panel) would see:
+ * Loads the built dist/ as an unpacked extension in Chrome for Testing (the
+ * browser Puppeteer installs) or another Chromium build that honours
+ * --load-extension, then asserts what a user (and the chrome://extensions
+ * Errors panel) would see:
  *   1. The service worker registers (background actually boots).
  *   2. chrome.runtime.getManifest() has NO externally_connectable field
  *      (present-but-empty is the only form Chrome warns about).
@@ -10,12 +12,13 @@
  *   4. The content script injects into an ordinary page without throwing.
  *   5. No load warnings/errors are reported for the extension.
  *
- * Manifest-level warnings never surface in vitest -- only a real Chrome load
+ * Manifest-level warnings never surface in vitest -- only a real browser load
  * catches them. Run after `npm run build`.
  */
 import puppeteer from 'puppeteer';
 import { fileURLToPath } from 'node:url';
 import { dirname, resolve } from 'node:path';
+import { waitForExtensionWorker } from './smoke-launch.mjs';
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const distPath = resolve(root, 'dist');
@@ -36,50 +39,48 @@ async function main() {
   });
 
   try {
-    // 1. Service worker registers -> extension id
-    const swTarget = await browser.waitForTarget(
+    // 1. Service worker registers -> extension id. When none appears, the
+    // helper says why and what to run instead, and ends the run with exit 1.
+    const swTarget = await waitForExtensionWorker(
+      browser,
       (t) => t.type() === 'service_worker' && t.url().includes('background/index.js'),
       { timeout: 10000 },
-    ).catch(() => null);
+    );
+    ok('service worker registers');
 
-    if (!swTarget) { fail('service worker registers', 'no background service_worker target appeared'); }
-    else { ok('service worker registers'); }
-
-    const extId = swTarget ? new URL(swTarget.url()).host : null;
+    const extId = new URL(swTarget.url()).host;
 
     // 2. + 3. Manifest + popup UI, both read from a stable extension-page
     // context (the popup page). We deliberately avoid evaluating in the MV3
     // service-worker handle: it can be terminated mid-run, leaving a dead
     // context where `chrome` is undefined (flaky). An extension page is stable.
-    if (extId) {
-      const popup = await browser.newPage();
-      const popupErrors = [];
-      popup.on('pageerror', (e) => popupErrors.push(e.message));
-      await popup.goto(`chrome-extension://${extId}/popup/index.html`, { waitUntil: 'domcontentloaded' });
-      await new Promise((r) => setTimeout(r, 400)); // let popup.js paint
+    const popup = await browser.newPage();
+    const popupErrors = [];
+    popup.on('pageerror', (e) => popupErrors.push(e.message));
+    await popup.goto(`chrome-extension://${extId}/popup/index.html`, { waitUntil: 'domcontentloaded' });
+    await new Promise((r) => setTimeout(r, 400)); // let popup.js paint
 
-      // Manifest has no externally_connectable (fetched from the extension origin).
-      const manifest = await popup.evaluate(async () => {
-        const res = await fetch(chrome.runtime.getURL('manifest.json'));
-        return res.json();
-      });
-      if ('externally_connectable' in manifest) {
-        fail('manifest omits externally_connectable', `field present: ${JSON.stringify(manifest.externally_connectable)}`);
-      } else {
-        ok('manifest omits externally_connectable', `v${manifest.version}, default-closed`);
-      }
-
-      const ui = await popup.evaluate(() => ({
-        title: document.querySelector('h1.header-title')?.textContent?.trim() ?? null,
-        status: document.querySelector('#status-text')?.textContent?.trim() ?? null,
-        killBtn: !!document.querySelector('#kill-switch-btn'),
-      }));
-      if (ui.title === 'AI Browser Guard' && ui.killBtn) ok('popup renders core UI', `title="${ui.title}", status="${ui.status}"`);
-      else fail('popup renders core UI', JSON.stringify(ui));
-      if (popupErrors.length) fail('popup throws no page errors', popupErrors.join(' | '));
-      else ok('popup throws no page errors');
-      await popup.close();
+    // Manifest has no externally_connectable (fetched from the extension origin).
+    const manifest = await popup.evaluate(async () => {
+      const res = await fetch(chrome.runtime.getURL('manifest.json'));
+      return res.json();
+    });
+    if ('externally_connectable' in manifest) {
+      fail('manifest omits externally_connectable', `field present: ${JSON.stringify(manifest.externally_connectable)}`);
+    } else {
+      ok('manifest omits externally_connectable', `v${manifest.version}, default-closed`);
     }
+
+    const ui = await popup.evaluate(() => ({
+      title: document.querySelector('h1.header-title')?.textContent?.trim() ?? null,
+      status: document.querySelector('#status-text')?.textContent?.trim() ?? null,
+      killBtn: !!document.querySelector('#kill-switch-btn'),
+    }));
+    if (ui.title === 'AI Browser Guard' && ui.killBtn) ok('popup renders core UI', `title="${ui.title}", status="${ui.status}"`);
+    else fail('popup renders core UI', JSON.stringify(ui));
+    if (popupErrors.length) fail('popup throws no page errors', popupErrors.join(' | '));
+    else ok('popup throws no page errors');
+    await popup.close();
 
     // 4. Content script injects into an ordinary page without throwing
     const page = await browser.newPage();

@@ -1,11 +1,13 @@
 /**
  * Behavioral scenario smoke test.
  *
- * Loads the built dist/ in a real Chrome, then drives real navigations and
- * real user/agent actions across several sites and asserts how the extension
- * RESPONDS -- not just that it loaded. This is the release gate that unit tests
- * cannot stand in for, because the extension's whole job (detect / monitor /
- * control agent activity) only exists at runtime in a real browser.
+ * Loads the built dist/ in Chrome for Testing (the browser Puppeteer installs)
+ * or another Chromium build that honours --load-extension, then drives real
+ * navigations and real user/agent actions across several sites and asserts how
+ * the extension RESPONDS -- not just that it loaded. This is the release gate
+ * that unit tests cannot stand in for, because the extension's whole job
+ * (detect / monitor / control agent activity) only exists at runtime in a real
+ * browser.
  *
  * Run headless for CI:        npm run smoke:scenarios
  * Run visible (watch it):     ABG_HEADFUL=1 npm run smoke:scenarios
@@ -24,6 +26,7 @@ import puppeteer from 'puppeteer';
 import { resolve } from 'node:path';
 import { mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
+import { waitForExtensionWorker } from './smoke-launch.mjs';
 
 const dist = resolve(process.cwd(), 'dist');
 const HEADFUL = process.env.ABG_HEADFUL === '1';
@@ -70,7 +73,8 @@ async function main() {
   });
 
   try {
-    const swTarget = await browser.waitForTarget(
+    const swTarget = await waitForExtensionWorker(
+      browser,
       (t) => t.type() === 'service_worker' && t.url().includes('background/index.js'),
       { timeout: 10000 },
     );

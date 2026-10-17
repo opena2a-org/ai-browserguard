@@ -82,6 +82,25 @@ will SKIP that one check when run head-less (chrome.action.openPopup needs a
 focused OS window); the export logic itself is locked in by
 `src/popup/download.test.ts` and `src/background/report-download.test.ts`.
 
+### Browser each smoke needs
+
+| Script | Browser it needs |
+|---|---|
+| `npm run smoke:load` | Chrome for Testing, the browser Puppeteer installs (`npx puppeteer browsers install chrome`) |
+| `npm run smoke:scenarios` | Chrome for Testing |
+| `npm run smoke:scope` | Chrome for Testing |
+| `npm run smoke:arming` | Chrome for Testing, in a window with OS focus |
+| `npm run smoke:cdp` | Chrome for Testing, in a window with OS focus |
+| `npm run smoke:export` | Playwright's Chromium (`npx playwright install chromium`) |
+| `npm run smoke:downloads` | Chrome for Testing, or the installed browser that `CHROME_PATH` names |
+| `npm run smoke:devtools` | Chrome for Testing, or the installed browser that `CHROME_PATH` names |
+| `npm run smoke:popup-layout` | Playwright's headless Chromium (`npx playwright install chromium`); it loads no extension |
+
+The first six load the extension with `--load-extension` and do not read
+`CHROME_PATH`; Google Chrome 155 ignores that flag, and on it the five that use
+Puppeteer stop once no service worker of the extension appears and print what
+to run instead.
+
 ## Manual portion (do this part by hand at least once per release)
 
 1. Load `dist/` unpacked. Open the popup from the toolbar.

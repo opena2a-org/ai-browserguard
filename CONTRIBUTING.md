@@ -14,6 +14,8 @@ npm run lint         # TypeScript strict checking and the docs prose check
 
 The release smokes are listed in `docs/testing/release-smoke.md`. `npm run smoke:export` runs in Playwright's Chromium: install it once with `npx playwright install chromium`.
 
+The `npm run smoke:*` scripts check the built `dist/` in a browser; [docs/testing/release-smoke.md](docs/testing/release-smoke.md) lists the browser each one needs.
+
 ## Releasing
 
 1. In `CHANGELOG.md`, rename the `## [Unreleased]` heading to the new version and the date, for example `## 0.8.0 - 2026-10-18`.
