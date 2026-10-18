@@ -344,6 +344,20 @@ describe('storage schema version + corruption recovery', () => {
     expect(log.some((e) => e.key === 'storageSchemaVersion' && e.reason.includes('migration scaffold'))).toBe(true);
   });
 
+  it('seeds the version on a first install without logging corruption (#134)', async () => {
+    // A fresh profile: the worker reads the empty store when it starts, then
+    // the first detection writes a session and a detection-log entry, and the
+    // next read checks the version.
+    await getStorageState();
+    await saveSession(makeSession('first'));
+    await appendDetectionLog(makeDetectionEvent('first'));
+    await getStorageState();
+
+    const stored = await chrome.storage.local.get(['storageSchemaVersion', '__corrupted_state']);
+    expect(stored.storageSchemaVersion).toBe(CURRENT_STORAGE_SCHEMA_VERSION);
+    expect(stored.__corrupted_state).toBeUndefined();
+  });
+
   it('records a downgrade marker when stored version is newer than runtime', async () => {
     await chrome.storage.local.set({
       storageSchemaVersion: CURRENT_STORAGE_SCHEMA_VERSION + 5,

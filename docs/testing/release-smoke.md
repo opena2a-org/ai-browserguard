@@ -3,7 +3,7 @@
 This is the new-user walkthrough that unit tests do not cover. Run it against
 the freshly built `dist/` (run `npm run build` first), loaded as an unpacked
 extension in Chrome (`chrome://extensions` -> Developer mode -> Load unpacked ->
-select the repo root).
+select `dist/`).
 
 It exists because v0.4.0 shipped two regressions that every unit test passed
 over: a shield emoji in the block toast and a gear emoji on the settings button

@@ -185,6 +185,8 @@ function migrateStorageShape(
  * reset to defaults and the corruption is logged under `__corrupted_state` so
  * users (and future debug tools) can see what was discarded. An unrecognized
  * `storageSchemaVersion` triggers the migration scaffold before validation.
+ * When none of these keys is stored yet (a first run), it writes the current
+ * `storageSchemaVersion` and logs nothing.
  */
 export async function getStorageState(): Promise<StorageSchema> {
   try {
@@ -207,7 +209,13 @@ export async function getStorageState(): Promise<StorageSchema> {
     const storedVersion = typeof workingData.storageSchemaVersion === 'number'
       ? workingData.storageSchemaVersion
       : null;
-    if (storedVersion === null && Object.keys(result).some((k) => result[k] !== undefined)) {
+    const hasStoredData = Object.keys(result).some((k) => result[k] !== undefined);
+    if (storedVersion === null && !hasStoredData) {
+      // First run: nothing is stored yet. Seed the version so the first
+      // session or setting written next to it is not later read as
+      // pre-versioning data and logged as corruption (#134).
+      keysToPersist.storageSchemaVersion = CURRENT_STORAGE_SCHEMA_VERSION;
+    } else if (storedVersion === null) {
       // Existing data missing version — run migration scaffold from v0.
       corruption.push({ timestamp: now, key: 'storageSchemaVersion', reason: 'missing — ran migration scaffold from v0' });
       const { data } = migrateStorageShape(workingData, 0);
@@ -283,12 +291,13 @@ export async function getStorageState(): Promise<StorageSchema> {
 
     if (corruption.length > 0) {
       void logCorruption(corruption);
-      // Write back ONLY the keys we cleaned. Re-persisting non-corrupt keys
-      // here would race with concurrent writes from other extension contexts
-      // (popup + service worker + content script all share storage).
-      if (Object.keys(keysToPersist).length > 0) {
-        await chrome.storage.local.set(keysToPersist);
-      }
+    }
+    // Write back ONLY the keys we cleaned, or the version seeded on a first
+    // run. Re-persisting non-corrupt keys here would race with concurrent
+    // writes from other extension contexts (popup + service worker + content
+    // script all share storage).
+    if (Object.keys(keysToPersist).length > 0) {
+      await chrome.storage.local.set(keysToPersist);
     }
 
     return {

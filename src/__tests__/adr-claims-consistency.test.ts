@@ -67,6 +67,24 @@ describe('ADR-002: popup bundle size', () => {
     expect(read('vite.config.ts')).toMatch(/sourcemap:\s*'inline'/);
     expect(note()).toContain("sourcemap: 'inline'");
   });
+
+  it('states the stylesheet size, rounded to the kilobyte, of the file the build copies in (#134)', () => {
+    // The build writes src/popup/styles.css to dist/popup/styles.css unchanged.
+    const cssBytes = statSync(new URL('../../src/popup/styles.css', import.meta.url)).size;
+    expect(note()).toContain(`\`dist/popup/styles.css\` about ${Math.round(cssBytes / 1000)} KB`);
+  });
+});
+
+describe('The release gate: the directory loaded as the extension', () => {
+  it('is dist/, as the build output and docs/install.md say (#134)', () => {
+    expect(read('scripts/build.js')).toContain('Load dist/ in chrome://extensions');
+    expect(read('docs/install.md')).toContain('click Load unpacked, and select `dist/`');
+
+    const gate = read('docs/testing/release-smoke.md');
+    const intro = gate.slice(0, gate.indexOf('\n## ')).replace(/\s+/g, ' ');
+    expect(intro).toContain('Load unpacked -> select `dist/`');
+    expect(intro).not.toContain('repo root');
+  });
 });
 
 describe('ADR-003: popup Content Security Policy', () => {
