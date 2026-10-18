@@ -13,12 +13,20 @@
  *   - STATUS.md (current version in the stage rationale)
  *   - popup HTML __VERSION__ placeholder is handled at build time by build.js
  *   - popup.ts reads chrome.runtime.getManifest().version at runtime as safety net
+ *
+ * It does not edit CHANGELOG.md. Rename its `## [Unreleased]` heading to the
+ * new version first (for example `## 0.8.0 - 2026-10-18`): the release
+ * metadata test requires the first version heading there to match
+ * manifest.json, so a bump run before the rename fails that test and is
+ * reverted. When the tests fail, the script prints the failed test names
+ * vitest reports.
  */
 
 import { execSync } from 'child_process';
 import { readFileSync, writeFileSync } from 'fs';
 import { resolve, dirname } from 'path';
 import { fileURLToPath } from 'url';
+import { failedTestNames } from './vitest-failures.mjs';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -91,12 +99,20 @@ try {
   }
   if (!testCount) {
     console.error('Tests failed. Fix tests before bumping.');
+    const failed = failedTestNames(output);
+    if (failed.length > 0) {
+      console.error(`Failed tests (${failed.length}):`);
+      for (const name of failed) console.error(`  ${name}`);
+    } else {
+      console.error('The test output names no failed test; run `npx vitest run` to see the failure.');
+    }
     // Revert version changes
     manifest.version = current;
     pkg.version = current;
     writeFileSync(manifestPath, JSON.stringify(manifest, null, 2) + '\n');
     writeFileSync(packagePath, JSON.stringify(pkg, null, 2) + '\n');
     writeFileSync(statusPath, status);
+    console.error(`Reverted manifest.json, package.json and STATUS.md to ${current}.`);
     process.exit(1);
   }
 }

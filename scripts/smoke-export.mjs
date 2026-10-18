@@ -103,9 +103,10 @@ try {
     skip('action popup export+download', 'chrome.action.openPopup needs a focused OS window unavailable in automation; this path is covered by unit tests src/popup/download.test.ts + src/background/report-download.test.ts');
   } else {
     await popup.waitForTimeout(400);
-    // Open Reports detail then Export JSON
-    const row = await popup.$('#reports-list .event-item');
-    if (row) await row.click().catch(() => {});
+    // Open the report's detail view, then Export JSON. The row itself has no
+    // click handler; its View Report button opens the detail view.
+    const viewReport = await popup.$('#reports-list button');
+    if (viewReport) await viewReport.click().catch(() => {});
     await popup.waitForTimeout(200);
     const exportBtn = await popup.$('text=Export JSON');
     check('Export JSON button reachable in action popup', !!exportBtn);

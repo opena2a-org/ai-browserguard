@@ -24,6 +24,15 @@ describe('release metadata is consistent', () => {
     expect(changelogVer).toBe(manifest.version);
   });
 
+  it('CONTRIBUTING.md has the changelog heading renamed before `npm run bump` (#134)', () => {
+    // npm run bump does not edit CHANGELOG.md, so a bump run before the rename
+    // fails the test above and is reverted.
+    const contributing = read('CONTRIBUTING.md');
+    const rename = contributing.indexOf('rename the `## [Unreleased]` heading to the new version');
+    expect(rename).toBeGreaterThan(-1);
+    expect(contributing.indexOf('Run `npm run bump', rename)).toBeGreaterThan(rename);
+  });
+
   it('STATUS.md states the current version', () => {
     const statusVer = read('STATUS.md').match(/currently at v(\d+\.\d+\.\d+)/)?.[1];
     expect(statusVer).toBe(manifest.version);

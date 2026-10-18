@@ -13,3 +13,10 @@ npm run lint         # TypeScript strict checking and the docs prose check
 ```
 
 The release smokes are listed in `docs/testing/release-smoke.md`. `npm run smoke:export` runs in Playwright's Chromium: install it once with `npx playwright install chromium`.
+
+## Releasing
+
+1. In `CHANGELOG.md`, rename the `## [Unreleased]` heading to the new version and the date, for example `## 0.8.0 - 2026-10-18`.
+2. Run `npm run bump -- <patch|minor|major|x.y.z>`. It sets the version in `manifest.json`, `package.json` and `STATUS.md`, runs the test suite, then builds.
+
+The order matters. `npm run bump` does not edit `CHANGELOG.md`, and the release metadata test (`src/__tests__/release-metadata.test.ts`) requires the first version heading there to match `manifest.json`. If you run the bump first, it fails that test, names it, and puts `manifest.json`, `package.json` and `STATUS.md` back to the previous version.

@@ -681,3 +681,44 @@ describe('popup render: the download-block hint follows the rule that blocks dow
     expect(otherControls()?.querySelector('p')?.textContent).toBe(CAPABILITY_BLOCK_DETAIL_BODY);
   });
 });
+
+describe('popup render: the report the export smoke opens (#134)', () => {
+  // scripts/smoke-export.mjs opens the real action popup, clicks in the
+  // reports list, then looks for Export JSON. What it clicks has to open the
+  // report's detail view, or the smoke fails whenever it gets a window to open
+  // the popup in.
+  const smoke = readFileSync(resolve(__dirname, '../../scripts/smoke-export.mjs'), 'utf8');
+
+  /** The selectors the smoke clicks in the popup before it looks for Export JSON. */
+  function clickedBeforeExport(): string[] {
+    const exportAt = smoke.indexOf("'text=Export JSON'");
+    expect(exportAt, 'the smoke must look for Export JSON').toBeGreaterThan(0);
+    return Array.from(smoke.slice(0, exportAt).matchAll(/popup\.\$\('([^']+)'\)/g), (m) => m[1]);
+  }
+
+  it('shows Export JSON after the smoke clicks a listed report', async () => {
+    const report = {
+      id: 'rep-smoke-1', sessionId: 'smoke1234abcd5678', agentType: 'openai-operator',
+      durationSeconds: 42, endReason: 'tab-closed',
+      actionSummary: { total: 5, allowed: 3, blocked: 2 }, totalEvents: 9,
+      violationsByCapability: { 'download-file': 2 },
+      createdAt: new Date(0).toISOString(), startedAt: new Date(0).toISOString(),
+      endedAt: new Date(1000).toISOString(),
+    };
+    await renderPopup(status({}), { REPORTS_QUERY: { reports: [report] } });
+    await vi.waitFor(() => {
+      if (!document.querySelector('#reports-list .event-item')) throw new Error('report not listed');
+    });
+
+    const selectors = clickedBeforeExport();
+    expect(selectors.length).toBeGreaterThan(0);
+    for (const selector of selectors) {
+      const target = document.querySelector<HTMLElement>(selector);
+      expect(target, selector).not.toBeNull();
+      target!.click();
+    }
+
+    const buttons = Array.from(document.querySelectorAll('#reports-list button'), (b) => b.textContent);
+    expect(buttons).toContain('Export JSON');
+  });
+});
