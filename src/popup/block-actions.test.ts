@@ -82,6 +82,11 @@ describe('content toast', () => {
     expect(src).not.toMatch(/onWhitelist\s*:/);
     expect(src).not.toMatch(/'DOMAIN_WHITELIST'/);
   });
+
+  it('the changelog records that the Whitelist action left the notice', () => {
+    const changelog = readFileSync(resolve(__dirname, '..', '..', 'CHANGELOG.md'), 'utf-8');
+    expect(changelog).toMatch(/block notice no longer has a Whitelist button/);
+  });
 });
 
 describe('capabilityRecoveryFor: the hint names the control for the rule that blocks the download', () => {
