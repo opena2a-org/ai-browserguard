@@ -29,7 +29,7 @@
 </head>
 <body>
   <h1>AI Browser Guard - Privacy Policy</h1>
-  <p class="last-updated">Last updated: October 15, 2026</p>
+  <p class="last-updated">Last updated: October 20, 2026</p>
 
   <div class="highlight">
     <p><strong>Summary:</strong> By default, AI Browser Guard processes all data locally on your device and makes zero network requests. There is no analytics, telemetry, or tracking. The extension also offers optional network features (trust lookups, anonymized contribution, and site safety declarations) that are turned <strong>off by default</strong> and act only after you explicitly opt in. When enabled, they transmit only a detected agent type and anonymized detection summaries -- never your URLs, page content, keystrokes, or identity. One of them, site safety declarations, requests a public file from the website your agent is on; it sends no cookies and nothing about you, but that website can see the request was made. See section 2a.</p>
@@ -57,7 +57,7 @@
   </ul>
 
   <h2>2a. Optional Network Features (Off by Default)</h2>
-  <p>The extension includes three optional features that make network requests. <strong>All three are disabled by default.</strong> A fresh install makes zero network requests. Each feature only acts after you explicitly enable it, and you can turn it off again at any time with one click.</p>
+  <p>The extension includes three optional features that make network requests. <strong>All three are disabled by default.</strong> A fresh install makes zero network requests. Each feature only acts after you explicitly enable it. Anonymized contribution and site safety declarations each have a switch in the popup's Settings panel that turns them off again with one click. The registry trust lookup has no switch in the popup: it stays off unless the <code>registryLookupEnabled</code> value in the extension's stored settings (<code>chrome.storage.local</code>) is set to <code>true</code>, which can be done from the extension's service worker console in Chrome's developer tools, and setting it back to <code>false</code> turns it off.</p>
   <p>Two of them talk to OpenA2A's own server. The third, site safety declarations, is different: it requests a file from the website your agent is on. It is described in full below, and it is the only feature that contacts a server we do not operate.</p>
   <ul>
     <li><strong>Registry trust lookup</strong> (setting <code>registryLookupEnabled</code>, default off): when an agent is detected, the extension can query <code>api.oa2a.org</code> for a registry trust score for the detected <em>agent type</em>. The request contains only the detected agent type string (for example <code>playwright</code>).</li>
@@ -72,7 +72,7 @@
       </ul>
     </li>
   </ul>
-  <p>These features never transmit your URLs, page content, form data, keystrokes, cookies, authentication tokens, personal identity, or browsing history. To enable or disable them, use the extension settings. Disabling a feature stops all outbound requests for it immediately; disabling contribution also clears any queued events, and disabling site safety declarations clears every declaration stored on your device.</p>
+  <p>These features never transmit your URLs, page content, form data, keystrokes, cookies, authentication tokens, personal identity, or browsing history. To enable or disable contribution or site safety declarations, use that feature's switch in the popup's Settings panel; the registry trust lookup is changed through its stored setting, as described above. Disabling a feature stops all outbound requests for it immediately; disabling contribution also clears any queued events, and disabling site safety declarations clears every declaration stored on your device.</p>
 
   <h2>3. How Data Is Stored</h2>
   <p>All data is stored in <code>chrome.storage.local</code>, which is a browser-provided storage mechanism that keeps data on your device only. Data is not synced across devices.</p>
