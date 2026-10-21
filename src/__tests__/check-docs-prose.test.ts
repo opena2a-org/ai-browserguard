@@ -126,10 +126,23 @@ describe('isCheckedPath', () => {
     }
   });
 
-  it('excludes history, licenses, dependencies, build output, .github and test data', () => {
+  it('checks the changelog, released entries included', () => {
+    expect(isCheckedPath('CHANGELOG.md')).toBe(true);
+    expect(isCheckedPath('changelog.d/0001-fix.md')).toBe(true);
+    const changelog = [
+      '# Changelog',
+      '',
+      '## [Unreleased]',
+      '- Detects agents -- and logs them.',
+      '',
+      '## 0.7.0 - 2026-08-03',
+      '- Blocks a scripted form submission — best-effort.',
+    ].join('\n');
+    expect(lines(changelog)).toEqual([4, 7]);
+  });
+
+  it('excludes licenses, dependencies, build output, .github and test data', () => {
     for (const path of [
-      'CHANGELOG.md',
-      'changelog.d/0001-fix.md',
       'LICENSE.md',
       'node_modules/pkg/README.md',
       'vendor/lib/README.md',
@@ -148,11 +161,11 @@ describe('isCheckedPath', () => {
 });
 
 describe('listCheckedFiles', () => {
-  it('lists the tracked docs and leaves out the changelog', () => {
+  it('lists the tracked docs and the changelog', () => {
     const root = fileURLToPath(new URL('../../', import.meta.url));
     const files = listCheckedFiles(root);
     expect(files).toContain('README.md');
     expect(files).toContain('docs/architecture.md');
-    expect(files).not.toContain('CHANGELOG.md');
+    expect(files).toContain('CHANGELOG.md');
   });
 });

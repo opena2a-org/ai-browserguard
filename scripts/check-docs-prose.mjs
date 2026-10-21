@@ -10,9 +10,10 @@
  *   - a heading or bold section label named "Why this exists" or
  *     "Why this matters"
  *
- * Checked files: `git ls-files '*.md' '*.mdx'`, minus release history
- * (CHANGELOG.md, changelog.d/), license text, dependency and build output,
- * `.github/`, and test data directories, whose text is compared against.
+ * Checked files: `git ls-files '*.md' '*.mdx'`, minus license text,
+ * dependency and build output, `.github/`, and test data directories, whose
+ * text is compared against. CHANGELOG.md is checked in full: a released entry
+ * is not exempt, so a dash put back into one fails lint.
  *
  * Usage: node scripts/check-docs-prose.mjs
  * Exits 1 and prints file:line for each finding; exits 0 when there are none.
@@ -28,7 +29,6 @@ const EXCLUDED_DIRS = new Set([
   'vendor',
   'dist',
   'build',
-  'changelog.d',
   'test',
   'tests',
   '__tests__',
@@ -73,7 +73,7 @@ export function isCheckedPath(path) {
   const parts = path.split('/');
   const base = parts[parts.length - 1];
   if (!/\.mdx?$/i.test(base)) return false;
-  if (base === 'CHANGELOG.md' || /^LICENSE/i.test(base)) return false;
+  if (/^LICENSE/i.test(base)) return false;
   return !parts.slice(0, -1).some((dir) => EXCLUDED_DIRS.has(dir));
 }
 
