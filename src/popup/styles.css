@@ -753,14 +753,26 @@ kbd {
   margin-bottom: var(--spacing-xs);
 }
 
+/* The label of a row that starts a pause is never cut short (#166): when it
+   and the controls do not fit on one line, the controls move to the next line
+   and the label takes the row's width; a hostname wider than the row wraps. */
+.pause-start-row {
+  flex-wrap: wrap;
+}
+
 .pause-label {
-  flex: 1;
+  flex: 1 1 auto;
   min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  overflow-wrap: anywhere;
   font-size: var(--font-size-sm);
   color: var(--text-secondary);
+}
+
+.pause-controls {
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-xs);
+  margin-left: auto;
 }
 
 .pause-row .pause-duration {

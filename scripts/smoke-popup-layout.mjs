@@ -34,6 +34,13 @@
  *     is also probed in each of those panels, so a class the scenario does not
  *     render is measured too
  *
+ * Then, with a website in the active tab, for each host in PAUSE_HOSTS:
+ *   - the Pause the guard panel offers the row for the site
+ *   - each label of a row that starts a pause shows its whole text (#166):
+ *     no part is cut off, and the label, the select and the button sit
+ *     inside the popup width
+ *   - no horizontal overflow
+ *
  * Usage: npm run build && npm run smoke:popup-layout
  * Exit code is non-zero if any assertion fails.
  */
@@ -79,6 +86,12 @@ function fragments(text, size = 24) {
   return out;
 }
 const RECOVERY_FRAGMENTS = [...fragments(HINT), ...fragments(DETAIL_BODY)];
+/** Hosts in the active tab for the Pause the guard checks (#166). */
+const PAUSE_HOSTS = [
+  'app.example.com',
+  'customer-dashboard.internal.example-company.com',
+  'abcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyz.example.com',
+];
 const TAILORED_REVOKE_AND_END =
   'Revoke on its card frees them only together with End on the session delegation (Read-Only), which blocks them too.';
 
@@ -408,6 +421,73 @@ try {
       check(`${label}: no page errors`, pageErrors.length === 0, pageErrors.join(' | '));
       await ctx.close();
     }
+  }
+
+  // Pause the guard (#166): the site row's label shows the whole hostname of
+  // the active tab, for a short host, a long host and a long host with no
+  // hyphen to break at.
+  for (const host of PAUSE_HOSTS) {
+    const label = `pause/${host}`;
+    console.log(`\n${label}`);
+    const ctx = await browser.newContext({ viewport: { width: POPUP_WIDTH, height: 600 } });
+    await ctx.addInitScript((h) => {
+      const responses = {
+        STATUS_QUERY: { detectedAgents: [], delegationRules: [], killSwitchActive: false, recentViolations: [] },
+        SESSION_QUERY: { sessions: [] },
+        REPORTS_QUERY: { reports: [] },
+        CONTRIBUTE_STATS: {},
+      };
+      window.chrome = {
+        runtime: {
+          id: 'smoke-extension',
+          lastError: undefined,
+          getManifest: () => ({ version: '0.0.0-smoke' }),
+          onMessage: { addListener() {}, removeListener() {} },
+          sendMessage(msg, cb) { setTimeout(() => cb && cb(responses[msg.type] ?? {}), 0); },
+        },
+        tabs: { query: async () => [{ url: `https://${h}/account` }] },
+        storage: {
+          local: { get: async () => ({}), set: async () => {}, remove: async () => {} },
+          onChanged: { addListener() {}, removeListener() {} },
+        },
+      };
+    }, host);
+    const page = await ctx.newPage();
+    const pageErrors = [];
+    page.on('pageerror', (e) => pageErrors.push(String(e)));
+    await page.goto(`http://127.0.0.1:${port}/popup/index.html`);
+    await page.waitForSelector('#pause-content .pause-label', { timeout: 10_000 });
+    await page.evaluate(() => document.fonts.ready);
+    await page.waitForTimeout(200);
+
+    const rows = await page.evaluate(() =>
+      [...document.querySelectorAll('#pause-content .pause-label')].map((text) => {
+        const row = text.closest('.pause-row');
+        const box = (el) => {
+          const r = el.getBoundingClientRect();
+          return { left: r.left, right: r.right };
+        };
+        return {
+          text: text.textContent,
+          fits: text.scrollWidth <= text.clientWidth && text.scrollHeight <= text.clientHeight,
+          size: `${text.scrollWidth}x${text.scrollHeight} in ${text.clientWidth}x${text.clientHeight}`,
+          parts: [text, row.querySelector('select'), row.querySelector('button')].map(box),
+        };
+      }));
+    const scrollWidth = await page.evaluate(() => document.documentElement.scrollWidth);
+    const site = rows.find((r) => r.text === `On ${host}`);
+    check(`${label}: the site row is offered`, !!site, JSON.stringify(rows.map((r) => r.text)));
+    for (const row of rows) {
+      check(`${label}: "${row.text}" is shown whole (${row.size})`, row.fits);
+      check(
+        `${label}: the "${row.text}" row sits inside the popup width`,
+        row.parts.every((p) => p.left >= 0 && p.right <= POPUP_WIDTH),
+        JSON.stringify(row.parts),
+      );
+    }
+    check(`${label}: no horizontal overflow (scrollWidth ${scrollWidth})`, scrollWidth === POPUP_WIDTH);
+    check(`${label}: no page errors`, pageErrors.length === 0, pageErrors.join(' | '));
+    await ctx.close();
   }
 } finally {
   await browser.close();

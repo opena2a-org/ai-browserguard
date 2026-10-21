@@ -133,7 +133,7 @@ function startRow(
   onClick: (button: HTMLButtonElement) => void,
 ): HTMLElement {
   const row = document.createElement('div');
-  row.className = 'pause-row';
+  row.className = 'pause-row pause-start-row';
   const label = document.createElement('span');
   label.className = 'pause-label';
   label.textContent = text;
@@ -141,9 +141,14 @@ function startRow(
   button.className = 'btn btn-secondary btn-sm';
   button.textContent = buttonText;
   button.addEventListener('click', () => onClick(button));
+  // The select and the button move to the next line together when the label
+  // needs the row's width, so the label shows the whole hostname (#166).
+  const controls = document.createElement('div');
+  controls.className = 'pause-controls';
+  controls.appendChild(select);
+  controls.appendChild(button);
   row.appendChild(label);
-  row.appendChild(select);
-  row.appendChild(button);
+  row.appendChild(controls);
   return row;
 }
 
