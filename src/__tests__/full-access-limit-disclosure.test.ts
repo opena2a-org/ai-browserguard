@@ -5,7 +5,9 @@
  * each place that describes the preset to a user must state that limit. The
  * README and store copy once called it "Unrestricted" / "Everything allowed"
  * with "boundary alerts", though nothing is outside the grant for an alert to
- * fire on, and only the agent-card button named the limit.
+ * fire on, and only the agent-card button named the limit. The store
+ * screenshot generator's wizard mock kept the "Unrestricted" card text after
+ * that copy was corrected, so its card is held to the wizard's own text.
  */
 import { describe, it, expect } from 'vitest';
 import { readFileSync } from 'fs';
@@ -36,12 +38,23 @@ function wizardFullAccessDescription(): string {
   return card!.querySelector('p')?.textContent ?? '';
 }
 
+const SCREENSHOT_FULL_ACCESS_CARD_RE =
+  /<div class="preset-name">Full Access<\/div>\s*<div class="preset-description">([^<]*)<\/div>/g;
+
+/** The description on the Full Access card of the screenshot generator's wizard mock. */
+function screenshotFullAccessDescription(): string {
+  const cards = [...read('scripts/generate-screenshots.mjs').matchAll(SCREENSHOT_FULL_ACCESS_CARD_RE)];
+  expect(cards, 'scripts/generate-screenshots.mjs must mock exactly one Full Access preset card').toHaveLength(1);
+  return cards[0][1];
+}
+
 const SURFACES: Array<[string, () => string]> = [
   ['README.md delegation presets table', () => fullAccessLine('README.md', '| Full Access |')],
   ['docs/chrome-web-store-description.md', () => fullAccessLine('docs/chrome-web-store-description.md', 'Full Access (')],
   ['docs/store-listing.md', () => fullAccessLine('docs/store-listing.md', '- Full Access:')],
   ['docs/store-description-v0.5.0.txt', () => fullAccessLine('docs/store-description-v0.5.0.txt', 'Full Access (')],
   ['wizard preset description', wizardFullAccessDescription],
+  ['store screenshot generator wizard mock', screenshotFullAccessDescription],
 ];
 
 describe('Full Access descriptions state its time limit', () => {
@@ -55,5 +68,9 @@ describe('Full Access descriptions state its time limit', () => {
     expect(t).not.toMatch(/everything allowed/i);
     expect(t).not.toMatch(/boundary alerts remain active/i);
     expect(t).not.toMatch(/with boundary alerts|logging and alerts/i);
+  });
+
+  it('the store screenshot generator shows the wizard\'s Full Access description', () => {
+    expect(screenshotFullAccessDescription()).toBe(wizardFullAccessDescription());
   });
 });
