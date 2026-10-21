@@ -6,7 +6,7 @@ For in-page and injected automation it can also block scripted navigations, form
 
 Detection and monitoring work against every framework above; per-action blocking does not. External frameworks drive the browser over CDP with native input the page realm cannot intercept, so against them AI Browser Guard detects, alerts, and closes the tab, but cannot enforce per-action policy.
 
-Downloads are the exception, for every kind of agent: under Read-Only or Limited, a download that Chrome reports starting in an agent's tab is cancelled through Chrome's downloads API, which does not depend on intercepting the agent's input. The report comes from the debugger session Browser-layer blocking (Settings) attaches to that tab, so downloads are cancelled only while that setting is on; a download you start in the agent's tab is cancelled too.
+Downloads are the exception, for every kind of agent: under Read-Only or Limited Access, a download that Chrome reports starting in an agent's tab is cancelled through Chrome's downloads API, which does not depend on intercepting the agent's input. The report comes from the debugger session Browser-layer blocking (Settings) attaches to that tab, so downloads are cancelled only while that setting is on; a download you start in the agent's tab is cancelled too.
 
 An open DevTools window makes the page it inspects look attached to a debugger, so an agent first seen through an attachment while DevTools is open in any tab is treated as most likely you inspecting a page: a download in its tab is recorded, not cancelled.
 

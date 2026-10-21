@@ -15,7 +15,7 @@
  */
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { chromeMock } from '../__tests__/setup';
-import { createRuleFromPreset } from '../delegation/rules';
+import { createRuleFromPreset, PRESET_TITLES } from '../delegation/rules';
 import { TAB_DOWNLOAD_START_WINDOW_MS } from './download-monitor';
 import { TAB_DOWNLOAD_START_GRACE_MS } from './cdp-enforcement';
 import { withBlockedSite } from '../__tests__/download-tab-watch';
@@ -247,6 +247,16 @@ describe('a host match under a delegation that blocks downloads is left to finis
     expect((await downloadEvents()).map((e) => e.outcome)).toEqual(['informational']);
   });
 
+  it('names a Limited delegation by the title the wizard shows (#154)', async () => {
+    const w = await inPageAgentUnder(createRuleFromPreset('limited', { agentId: 'a-inpage' }));
+    w.onCreated({ id: 701, ...item }); await settle();
+
+    expect(w.cancel).not.toHaveBeenCalled();
+    expect(notices().map((n) => n.message)).toEqual([
+      `Did not stop a download: invoice.pdf. It is from mail.example.com, where an agent was detected, but it was not seen starting in the agent's tab, so it may be yours. Your delegation (${PRESET_TITLES.limited}) stops only downloads seen starting in that tab. It is listed on the Timeline in the popup.`,
+    ]);
+  });
+
   it('a burst of same-site downloads gives one notice and records each download', async () => {
     const w = await inPageAgentUnder(createRuleFromPreset('readOnly'));
     w.onCreated({ id: 201, ...item }); await settle();
@@ -423,6 +433,22 @@ describe('a download Chrome reports starting in the agent tab is cancelled', () 
       expect.objectContaining({
         title: expect.stringContaining('Download blocked'),
         message: "Cancelled a download: export.zip. It started in a tab where an agent was detected, and your delegation (Read-Only) blocks downloads in that tab, yours included. To get it, close that agent's tab, then retry.",
+      }),
+    );
+  });
+
+  it('names a Limited delegation in the notice by the title the wizard shows (#154)', async () => {
+    const w = await watchedAgentTab(createRuleFromPreset('limited'));
+    willBegin(55, 'g-91', 'https://b.example.com/export.zip');
+    w.onCreated({ id: 91, url: 'https://b.example.com/export.zip', referrer: 'https://b.example.com/app', filename: '/d/export.zip' });
+    await drain();
+
+    expect(cancelledIds(w)).toEqual([91]);
+    expect(chromeMock.notifications.create).toHaveBeenCalledWith(
+      expect.any(String),
+      expect.objectContaining({
+        title: expect.stringContaining('Download blocked'),
+        message: `Cancelled a download: export.zip. It started in a tab where an agent was detected, and your delegation (${PRESET_TITLES.limited}) blocks downloads in that tab, yours included. To get it, close that agent's tab, then retry.`,
       }),
     );
   });

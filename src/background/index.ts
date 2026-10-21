@@ -6,7 +6,7 @@
 
 import type { MessagePayload, DetectionEvent, KillSwitchEvent, AgentEvent, BoundaryViolation } from '../types/events';
 import type { AgentIdentity } from '../types/agent';
-import type { DelegationRule, DelegationPreset } from '../types/delegation';
+import type { DelegationRule } from '../types/delegation';
 import type { AgentSession } from '../session/types';
 import { getStorageState, saveSession, updateSession, saveDelegationRules, appendDetectionLog, updateSettings, getSettings, getLifetimeStats, updateLifetimeStats, getKillSwitchState, saveKillSwitchState, getActiveAgentRegistry, updateActiveAgentRegistry, getGuardPauseState, saveGuardPauseState } from '../session/storage';
 import type { LifetimeStats } from '../session/types';
@@ -14,7 +14,7 @@ import { DEFAULT_LIFETIME_STATS } from '../session/types';
 import { createTimelineEvent, appendEventToSession, capStoredUrl } from '../session/timeline';
 import { executeBackgroundKillSwitch, createInitialKillSwitchState } from '../killswitch/index';
 import type { KillSwitchState } from '../killswitch/index';
-import { isTimeBoundExpired, evaluateRule } from '../delegation/rules';
+import { isTimeBoundExpired, evaluateRule, PRESET_TITLES } from '../delegation/rules';
 import { selectEffectiveRule, applyDelegationUpdate } from '../delegation/effective';
 import type { GuardPause, PauseLogEntry, PauseEndReason } from '../delegation/pause';
 import {
@@ -1990,7 +1990,7 @@ async function handleDownloadCreated(item: chrome.downloads.DownloadItem): Promi
     // (about:blank, file://); the message then names the tab without one.
     const agentHost = boundForNotification(hostOf(state.activeAgents.get(tabId)?.originUrl) ?? '');
     const where = agentHost ? `the tab where an agent was detected on ${agentHost}` : 'a tab where an agent was detected';
-    const ruleName = rule ? (rule.label || PRESET_DISPLAY_NAMES[rule.preset]) : '';
+    const ruleName = rule ? (rule.label || PRESET_TITLES[rule.preset]) : '';
     const alert: BoundaryAlert = {
       violation,
       severity: 'high',
@@ -2034,20 +2034,13 @@ function notifyHostDownloadNotStopped(label: string, matchedHost: string, rule: 
   const now = Date.now();
   if (now - lastHostDownloadNoticeAt < DOWNLOAD_NOTIFICATION_COALESCE_MS) return;
   lastHostDownloadNoticeAt = now;
-  const ruleName = rule.label || PRESET_DISPLAY_NAMES[rule.preset];
+  const ruleName = rule.label || PRESET_TITLES[rule.preset];
   showNoticeNotification(
     'Download not stopped',
     `Did not stop a download: ${boundForNotification(label)}. It is from ${boundForNotification(matchedHost)}, where an agent was detected, but it was not seen starting in the agent's tab, so it may be yours. Your delegation (${ruleName}) stops only downloads seen starting in that tab. It is listed on the Timeline in the popup.`,
     { enabled: state.notificationsEnabled },
   );
 }
-
-/** The preset names the popup shows, used when a rule carries no label. */
-const PRESET_DISPLAY_NAMES: Record<DelegationPreset, string> = {
-  readOnly: 'Read-Only',
-  limited: 'Limited',
-  fullAccess: 'Full Access',
-};
 
 /** Bound a page-controlled string to 80 characters for an OS notification. */
 function boundForNotification(text: string): string {

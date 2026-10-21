@@ -8,6 +8,7 @@
 import type { BoundaryViolation } from '../types/events';
 import type { AgentCapability } from '../types/agent';
 import type { DelegationRule } from '../types/delegation';
+import { PRESET_TITLES } from '../delegation/rules';
 
 export type AlertSeverity = 'critical' | 'high' | 'medium' | 'low';
 
@@ -45,7 +46,7 @@ export function createBoundaryAlert(
 ): BoundaryAlert {
   const severity = classifyViolationSeverity(violation.attemptedAction, violation.url);
   const title = generateAlertTitle(violation.attemptedAction);
-  const message = generateAlertMessage(violation, rule.label ?? rule.preset);
+  const message = generateAlertMessage(violation, rule.label ?? PRESET_TITLES[rule.preset] ?? rule.preset);
 
   return {
     violation,

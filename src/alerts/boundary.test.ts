@@ -9,7 +9,7 @@ import {
   handleOneTimeOverride,
 } from './boundary';
 import type { BoundaryViolation } from '../types/events';
-import { createRuleFromPreset } from '../delegation/rules';
+import { createRuleFromPreset, PRESET_TITLES } from '../delegation/rules';
 
 function makeViolation(capability: import('../types/agent').AgentCapability, url: string): BoundaryViolation {
   return {
@@ -154,6 +154,20 @@ describe('createBoundaryAlert', () => {
     const criticalViolation = makeViolation('submit-form', 'https://example.com');
     const alert = createBoundaryAlert(criticalViolation, rule);
     expect(alert.allowOneTimeOverride).toBe(false);
+  });
+
+  it('names a rule without a label by the title the wizard shows, not its storage identifier (#154)', () => {
+    for (const preset of ['readOnly', 'limited', 'fullAccess'] as const) {
+      const alert = createBoundaryAlert(makeViolation('click', 'https://example.com'), createRuleFromPreset(preset));
+      expect(alert.message).toContain(`\nBlocked by rule: ${PRESET_TITLES[preset]}\n`);
+      expect(alert.message).not.toContain(`Blocked by rule: ${preset}\n`);
+    }
+  });
+
+  it('names a rule by its label when it has one', () => {
+    const rule = createRuleFromPreset('limited', { label: 'Checkout run' });
+    const alert = createBoundaryAlert(makeViolation('click', 'https://example.com'), rule);
+    expect(alert.message).toContain('\nBlocked by rule: Checkout run\n');
   });
 });
 
