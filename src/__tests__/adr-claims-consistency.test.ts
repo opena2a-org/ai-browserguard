@@ -11,7 +11,9 @@
  * named a Content Security Policy the popup HTML does not have; ADR-004
  * described Computer Use and Operator detection as action-sequence analysis
  * when it reads only the environment; ADR-009 and the release gate described
- * the store copy as pinned to v0.5.0 after 0.6.0 had rewritten it.
+ * the store copy as pinned to v0.5.0 after 0.6.0 had rewritten it, and the
+ * ADR-009 note that corrected this then gave the version in the store copy's
+ * heading, which changes at each release.
  */
 import { describe, it, expect } from 'vitest';
 import { readFileSync, statSync } from 'fs';
@@ -134,5 +136,18 @@ describe('ADR-009 and the release gate: store copy', () => {
     const gate = read('docs/testing/release-smoke.md');
     expect(line(gate, '| Store listing |')).not.toMatch(/pinned to v0\.5\.0/);
     expect(noteAbout(gate, '`docs/store-listing.md`')).toContain('0.6.0');
+  });
+
+  it('say the store text is for the version in manifest.json, without writing that version (#115)', () => {
+    // The version changes at each bump, so one written here goes stale: the
+    // note gave the store text as headed v0.7.0 while the introduction under
+    // that heading named the v0.6.0 submission.
+    const current = (JSON.parse(read('manifest.json')) as { version: string }).version;
+    const note = noteAbout(read('docs/adr/009-ai-safety-txt-consumer.md'), '`docs/store-listing.md`');
+    const row = line(read('docs/testing/release-smoke.md'), '| Store listing |');
+    for (const text of [note, row]) {
+      expect(text).toContain('`manifest.json`');
+      expect(text).not.toContain(current);
+    }
   });
 });

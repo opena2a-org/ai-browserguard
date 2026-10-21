@@ -6,6 +6,12 @@
  * that is not a CI gate. This test makes the version match (and the homepage
  * URL domain) a unit-test gate so a forgotten bump or a phishing-domain
  * homepage is caught in CI, not at the Web Store.
+ *
+ * The heading of docs/chrome-web-store-description.md names the release its
+ * text is for. It once named v0.7.0 while the introduction under it said the
+ * text was for the v0.6.0 submission, so the last block holds the heading to
+ * manifest.json and keeps the file from naming another release as the
+ * submission its text is for.
  */
 import { describe, it, expect } from 'vitest';
 import { readFileSync } from 'fs';
@@ -40,5 +46,29 @@ describe('release metadata is consistent', () => {
 
   it('homepage_url points to the official opena2a.org domain over https', () => {
     expect(manifest.homepage_url).toMatch(/^https:\/\/(www\.)?opena2a\.org\//);
+  });
+});
+
+describe('the store submission text names the release in manifest.json (#115)', () => {
+  const manifest = JSON.parse(read('manifest.json')) as { version: string };
+  const storeText = read('docs/chrome-web-store-description.md');
+
+  it('in its heading', () => {
+    expect(storeText.match(/^# .*\(v(\d+\.\d+\.\d+)\)$/m)?.[1]).toBe(manifest.version);
+  });
+
+  it('and names no other release as the submission its text is for', () => {
+    // Prose wraps, so a phrase can span a line break.
+    const named = [...storeText.replace(/\s+/g, ' ').matchAll(/\bv?(\d+\.\d+\.\d+) (?:re)?submission\b/g)];
+    expect(named.map((match) => match[1]).filter((version) => version !== manifest.version)).toEqual([]);
+  });
+
+  it('CONTRIBUTING.md has that heading changed before `npm run bump`', () => {
+    // npm run bump does not edit the store text, so a bump run before the
+    // change fails the first test in this block and is reverted.
+    const contributing = read('CONTRIBUTING.md');
+    const change = contributing.indexOf('In `docs/chrome-web-store-description.md`, change the version in the heading');
+    expect(change).toBeGreaterThan(-1);
+    expect(contributing.indexOf('Run `npm run bump', change)).toBeGreaterThan(change);
   });
 });

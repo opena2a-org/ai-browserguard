@@ -233,11 +233,12 @@ bug, so:
   > when the feature was built. Site safety declarations first shipped in 0.6.0,
   > and that release rewrote `docs/chrome-web-store-description.md` and
   > `docs/store-listing.md` to disclose them (see the 0.6.0 entry in
-  > `CHANGELOG.md`). Neither file is pinned to the v0.5.0 submission now: the
-  > first is headed v0.7.0, the second carries no version, and both describe
-  > site safety declarations. The opena2a-website pages are in another
-  > repository and are not checked here; `docs/testing/release-smoke.md` still
-  > lists them.
+  > `CHANGELOG.md`). Neither file is pinned to the v0.5.0 submission now. The
+  > heading of the first names the release its text is for, and
+  > `src/__tests__/release-metadata.test.ts` requires that to be the version in
+  > `manifest.json`; the second carries no version; both describe site safety
+  > declarations. The opena2a-website pages are in another repository and are
+  > not checked here; `docs/testing/release-smoke.md` still lists them.
 - **ADR-006's "four surfaces" is an undercount, and that matters.** It lists
   policy, README, listing, and settings UI. But the policy a user actually reads
   is served from **a different repo**
