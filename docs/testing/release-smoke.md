@@ -204,7 +204,7 @@ in the build, whatever its default.
 
 | Surface | Where | Status |
 |---|---|---|
-| Store listing | `docs/chrome-web-store-description.md`, `docs/store-listing.md` | rewritten in 0.6.0; confirm it matches the build at each submission |
+| Store listing | `docs/chrome-web-store-description.md`, `docs/store-listing.md` | rewritten in 0.6.0; the heading of `docs/chrome-web-store-description.md` names the release the text is for, which `release-metadata.test.ts` requires to be the version in `manifest.json`; confirm the text matches that build at each submission |
 | **Live privacy policy** | `opena2a-website/app/aibrowserguard/privacy/page.tsx` (**different repo**) | still says "only servers it can contact" |
 | Product page | `opena2a-website/app/aibrowserguard/page.tsx` | check its network claims |
 | Store-launch blog post | `opena2a-website/app/blogs/ai-browser-guard-chrome-web-store/page.tsx` | check its network claims |

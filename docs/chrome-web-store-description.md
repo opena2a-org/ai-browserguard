@@ -1,13 +1,21 @@
 # Chrome Web Store submission: copy/paste fields (v0.7.0)
 
 This file is the exact text to paste into the Chrome Web Store Developer
-Dashboard for the v0.6.0 submission. v0.6.0 ships site safety declarations
-(ADR-009): an off-by-default setting that, when an AI agent is detected on a
-page, reads that website's `/.well-known/ai-safety.txt`. That feature can
-contact a server OpenA2A does not operate, so this text supersedes the v0.5.0
-listing's claim that OpenA2A's own servers are the only ones the extension can
-contact. Everything below tells the same "off by default, optional opt-in"
-story as the privacy policy, README, and ADR-006/ADR-009.
+Dashboard when a release is submitted. The heading names that release, the
+version in `manifest.json`, and is the one place this file names it: change it
+to the new version before `npm run bump` (see the release steps in
+`CONTRIBUTING.md`); `src/__tests__/release-metadata.test.ts` checks that the
+two match. The text is edited together with the code, so between releases it
+can describe behaviour that `CHANGELOG.md` lists under Unreleased and the
+release in the heading does not have.
+
+Site safety declarations (ADR-009) have shipped since v0.6.0: an off-by-default
+setting that, when an AI agent is detected on a page, reads that website's
+`/.well-known/ai-safety.txt`. That feature can contact a server OpenA2A does
+not operate, so this text supersedes the v0.5.0 listing's claim that OpenA2A's
+own servers are the only ones the extension can contact. Everything below tells
+the same "off by default, optional opt-in" story as the privacy policy, README,
+and ADR-006/ADR-009.
 
 ---
 
