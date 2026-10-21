@@ -6,7 +6,7 @@
  *
  * The privacy policy, the store copy and the privacy page said every optional
  * network feature could be turned off with one click, and the popup has no
- * switch for the registry trust lookup (#148). Which features have a switch is
+ * switch for the registry trust lookup (#148, #151). Which features have a switch is
  * read from the rendered popup, not written into this file: with every feature
  * on, each switch in the Settings panel is clicked once, and the message it
  * sends shows which feature it turns off. The copy is checked against those
@@ -29,6 +29,7 @@ const SURFACES = [
   'README.md',
   'docs/chrome-web-store-description.md',
   'docs/store-listing.md',
+  'docs/store-description-v0.5.0.txt',
 ];
 
 interface SentMessage {
