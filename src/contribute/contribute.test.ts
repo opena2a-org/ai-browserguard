@@ -476,3 +476,82 @@ describe('getContributeStats', () => {
     expect(stats.totalContributed).toBe(0); // Not flushed yet
   });
 });
+
+// -- Flush: count only the events the registry stored (#130) --
+
+describe('flushQueue counts only the events the registry accepted (#130)', () => {
+  const event: ContributeEvent = {
+    type: 'detection_summary',
+    timestamp: '2026-03-20T10:00:00.000Z',
+    data: { framework: 'playwright', detectionMethods: ['cdp-connection'], confidence: 'high', hadDelegation: false },
+  };
+
+  /** Opt in and queue two detection_summary events. */
+  async function queueTwo(): Promise<void> {
+    await enableContributions();
+    await queueEvent(event);
+    await queueEvent({ ...event });
+  }
+
+  /** The registry answers the next flush with 201 and this JSON body. */
+  function replyWith(body: unknown): void {
+    mockFetch.mockResolvedValueOnce({ ok: true, status: 201, json: async () => body });
+  }
+
+  it('counts nothing when the registry replies accepted 0, skipped 2', async () => {
+    await queueTwo();
+    replyWith({ accepted: 0, skipped: 2, total: 2 });
+
+    const result = await flushQueue();
+    const { totalContributed, queuedCount } = await getContributeStats();
+
+    expect(mockFetch).toHaveBeenCalledTimes(1);
+    // The registry answered for the whole batch, so it is not queued to be posted again.
+    expect({ result, totalContributed, queuedCount }).toEqual({
+      result: { sent: 0, success: true },
+      totalContributed: 0,
+      queuedCount: 0,
+    });
+  });
+
+  it('counts the accepted part of a partly skipped batch on top of earlier flushes', async () => {
+    await queueTwo();
+    replyWith({ accepted: 2, skipped: 0, total: 2 });
+    expect(await flushQueue()).toEqual({ sent: 2, success: true });
+
+    await queueTwo();
+    replyWith({ accepted: 1, skipped: 1, total: 2 });
+    expect(await flushQueue()).toEqual({ sent: 1, success: true });
+
+    expect((await getContributeStats()).totalContributed).toBe(3);
+  });
+
+  it('counts no more events than the batch held', async () => {
+    await queueTwo();
+    replyWith({ accepted: 5, skipped: 0, total: 5 });
+
+    expect(await flushQueue()).toEqual({ sent: 2, success: true });
+    expect((await getContributeStats()).totalContributed).toBe(2);
+  });
+
+  it('counts nothing when the reply has no whole, non-negative accepted count', async () => {
+    for (const body of [{}, { skipped: 2, total: 2 }, { accepted: '2' }, { accepted: -1 }, { accepted: 1.5 }, null]) {
+      await queueTwo();
+      replyWith(body);
+      expect(await flushQueue(), `reply ${JSON.stringify(body)}`).toEqual({ sent: 0, success: true });
+    }
+    expect((await getContributeStats()).totalContributed).toBe(0);
+  });
+
+  it('counts nothing when the reply body is not JSON', async () => {
+    await queueTwo();
+    mockFetch.mockResolvedValueOnce({
+      ok: true,
+      status: 201,
+      json: async () => { throw new SyntaxError('Unexpected end of JSON input'); },
+    });
+
+    expect(await flushQueue()).toEqual({ sent: 0, success: true });
+    expect((await getContributeStats()).totalContributed).toBe(0);
+  });
+});
