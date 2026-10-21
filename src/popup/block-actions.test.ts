@@ -87,6 +87,20 @@ describe('content toast', () => {
     const changelog = readFileSync(resolve(__dirname, '..', '..', 'CHANGELOG.md'), 'utf-8');
     expect(changelog).toMatch(/block notice no longer has a Whitelist button/);
   });
+
+  it('the changelog records the removal in one entry, with the popup routes that replace it (#139)', () => {
+    const changelog = readFileSync(resolve(__dirname, '..', '..', 'CHANGELOG.md'), 'utf-8');
+    const entries = changelog.split('\n').filter((line) => /^- \*\*[^*]*block notice[^*]*Whitelist button/.test(line));
+    expect(entries).toHaveLength(1);
+    for (const detail of [
+      'for a medium or low severity block (#109)',
+      'Settings, which opens the popup',
+      'Allow beside the site under Recently Blocked Domains',
+      '`Whitelist <site>` on the block under Recently blocked',
+    ]) {
+      expect(entries[0]).toContain(detail);
+    }
+  });
 });
 
 describe('capabilityRecoveryFor: the hint names the control for the rule that blocks the download', () => {
