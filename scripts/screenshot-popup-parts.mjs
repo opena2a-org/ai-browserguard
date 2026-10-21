@@ -52,7 +52,7 @@ export function drawPopupRuntimeParts(state) {
 
   const startRow = (text, options, selected, selectLabel, buttonText) => {
     const row = document.createElement('div');
-    row.className = 'pause-row';
+    row.className = 'pause-row pause-start-row';
     const label = document.createElement('span');
     label.className = 'pause-label';
     label.textContent = text;
@@ -69,9 +69,12 @@ export function drawPopupRuntimeParts(state) {
     const button = document.createElement('button');
     button.className = 'btn btn-secondary btn-sm';
     button.textContent = buttonText;
+    const controls = document.createElement('div');
+    controls.className = 'pause-controls';
+    controls.appendChild(select);
+    controls.appendChild(button);
     row.appendChild(label);
-    row.appendChild(select);
-    row.appendChild(button);
+    row.appendChild(controls);
     return row;
   };
 
