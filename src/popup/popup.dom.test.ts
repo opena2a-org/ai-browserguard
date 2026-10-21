@@ -41,7 +41,7 @@ import {
   CAPABILITY_BLOCK_DETAIL_LABEL,
 } from './block-actions';
 import { EXTERNAL_DRIVER_DOWNLOADS_ENFORCED_LABEL } from '../delegation/enforceability';
-import { createRuleFromPreset } from '../delegation/rules';
+import { createRuleFromPreset, PRESET_TITLES } from '../delegation/rules';
 import type { DelegationPreset, DelegationRule } from '../types/delegation';
 
 const BANNED_SINK_PATTERN = /\b(innerHTML|outerHTML|insertAdjacentHTML|setHTMLUnsafe)\b|\bdocument\.write\b/;
@@ -751,6 +751,35 @@ describe('popup render: the report the export smoke opens (#134)', () => {
     const buttons = Array.from(document.querySelectorAll('#reports-list button'), (b) => b.textContent);
     expect(buttons).toContain('Export JSON');
   });
+});
+
+describe('popup render: the delegation line of a session report (#133)', () => {
+  // The report stores the preset by its storage identifier (`readOnly`); the
+  // detail view names it by the title the wizard shows.
+  it.each(Object.entries(PRESET_TITLES) as Array<[DelegationPreset, string]>)(
+    'a report recorded under %s reads "Delegation: %s"',
+    async (preset, title) => {
+      const report = {
+        id: `rep-${preset}`, sessionId: `sess-${preset}`, agentType: 'openai-operator',
+        durationSeconds: 10, endReason: 'tab-closed',
+        actionSummary: { total: 1, allowed: 1, blocked: 0 }, totalEvents: 1,
+        violationsByCapability: {},
+        delegationRuleSummary: { preset, wasActive: true },
+        createdAt: new Date(0).toISOString(), startedAt: new Date(0).toISOString(),
+        endedAt: new Date(1000).toISOString(),
+      };
+      await renderPopup(status({}), { REPORTS_QUERY: { reports: [report] } });
+      await vi.waitFor(() => {
+        if (!document.querySelector('#reports-list .event-item')) throw new Error('report not listed');
+      });
+      Array.from(document.querySelectorAll<HTMLButtonElement>('#reports-list button'))
+        .find((b) => b.textContent === 'View Report')!.click();
+
+      const lines = Array.from(document.querySelectorAll('#reports-list div'), (d) => d.textContent ?? '');
+      expect(lines).toContain(`Delegation: ${title}`);
+      expect(lines).not.toContain(`Delegation: ${preset}`);
+    },
+  );
 });
 
 describe('popup render: the trust badge of an agent with no trust score', () => {

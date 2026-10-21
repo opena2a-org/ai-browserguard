@@ -6,14 +6,14 @@
 
 import type { MessagePayload, MessageType, KillSwitchEvent } from '../types/events';
 import type { AgentIdentity, DetectionConfidence } from '../types/agent';
-import type { DelegationRule } from '../types/delegation';
+import type { DelegationPreset, DelegationRule } from '../types/delegation';
 import type { AgentSession, LifetimeStats, UserSettings } from '../session/types';
 import { DEFAULT_SETTINGS } from '../session/types';
 import type { BoundaryAlert } from '../alerts/boundary';
 import type { SessionReport } from '../session/report';
 import { createInitialWizardState, renderWizard } from '../delegation/wizard';
 import type { WizardState } from '../delegation/wizard';
-import { createRuleFromPreset, FULL_ACCESS_MAX_MINUTES } from '../delegation/rules';
+import { createRuleFromPreset, FULL_ACCESS_MAX_MINUTES, PRESET_TITLES } from '../delegation/rules';
 import { selectEffectiveRule } from '../delegation/effective';
 import { presentAgent } from '../delegation/enforceability';
 import type { BrowserLayerState } from '../delegation/enforceability';
@@ -1573,7 +1573,8 @@ function renderReportsPanel(): void {
     ];
 
     if (report.delegationRuleSummary) {
-      lines.push(`Delegation: ${report.delegationRuleSummary.preset}`);
+      const preset = report.delegationRuleSummary.preset;
+      lines.push(`Delegation: ${PRESET_TITLES[preset as DelegationPreset] ?? preset}`);
     }
 
     if (Object.keys(report.violationsByCapability).length > 0) {
