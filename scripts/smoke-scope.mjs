@@ -71,7 +71,9 @@ async function main() {
   const browser = await puppeteer.launch({
     headless: 'new',
     protocolTimeout: 60000,
-    args: [`--disable-extensions-except=${distPath}`, `--load-extension=${distPath}`, '--no-sandbox', '--disable-setuid-sandbox'],
+    // --enable-logging: the browser's log, which waitForExtensionWorker reads to
+    // say why the extension did not load.
+    args: [`--disable-extensions-except=${distPath}`, `--load-extension=${distPath}`, '--enable-logging', '--no-sandbox', '--disable-setuid-sandbox'],
   });
 
   try {

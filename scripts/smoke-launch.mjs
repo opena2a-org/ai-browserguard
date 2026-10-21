@@ -10,14 +10,24 @@
  * what to run instead, closes the browser and ends the process with exit code
  * 1, before the smoke's later checks.
  *
- * It says the browser ignored the flag only when chrome://extensions lists no
- * extension from the directory and the directory holds a manifest.json: a
- * directory without one (dist/ not built) leaves the list empty too.
+ * A directory without a manifest.json (dist/ not built) is the cause it names
+ * first. Otherwise, when chrome://extensions lists no extension from the
+ * directory, the browser either ignored the flag or refused the extension,
+ * and it names one of the two only when the browser's own log records it.
+ * Started with --enable-logging, Chrome for Testing 145 and Google Chrome 155
+ * write that log to chrome_debug.log in their profile. Chrome for Testing
+ * logs "Failed to load extension from: <directory>. <error>" for an extension
+ * it refused, and Google Chrome logs "--disable-extensions-except is not
+ * allowed in Google Chrome, ignoring." (or the same for --load-extension).
+ * With neither line in the log, it names both causes.
  */
-import { existsSync, realpathSync } from 'node:fs';
+import { existsSync, readFileSync, realpathSync } from 'node:fs';
 import { join, relative, resolve } from 'node:path';
 
 const FLAG = '--load-extension=';
+const PROFILE_FLAG = '--user-data-dir=';
+/** What Google Chrome logs for an extension switch it ignores. */
+const NOT_ALLOWED = /(--(?:load-extension|disable-extensions-except) is not allowed in .+, ignoring\.)\s*$/;
 
 /**
  * Wait for the extension's service worker in a browser launched with
@@ -128,15 +138,54 @@ export async function explainMissingWorker(browser, { timeout }) {
     ].join('\n');
   }
 
+  const log = browserLog(browser);
+  const refused = dirs
+    .map((dir) => ({ dir, errors: loadErrors(log, dir) }))
+    .find(({ errors }) => errors.length > 0);
+  if (refused) {
+    return [
+      'The extension did not load, so this smoke stops here.',
+      ...ran,
+      `  This browser refused the extension in ${refused.dir}. It logged:`,
+      ...refused.errors.map((error) => `    ${error}`),
+      '',
+      'Build the extension and run the smoke again:',
+      '  npm run build',
+      `  ${rerun}`,
+      'If it stops here again, load the directory above with Load unpacked on',
+      'chrome://extensions to check its manifest.',
+    ].join('\n');
+  }
+
+  const ignored = [...new Set(log.map((line) => NOT_ALLOWED.exec(line)?.[1]).filter(Boolean))];
+  if (ignored.length > 0) {
+    return [
+      'The extension did not load, so this smoke stops here.',
+      ...ran,
+      '  This browser ignored --load-extension: no service worker of the extension appeared',
+      `  within ${seconds} s, chrome://extensions lists no extension loaded from`,
+      `  ${dirs.join(', ')}, and the browser logged:`,
+      ...ignored.map((line) => `    ${line}`),
+      '',
+      'Run the smoke on a browser that loads --load-extension, or check this browser with',
+      'the smokes that load the extension another way:',
+      ...remedies,
+    ].join('\n');
+  }
+
   return [
     'The extension did not load, so this smoke stops here.',
     ...ran,
-    '  This browser ignored --load-extension: no service worker of the extension appeared',
-    `  within ${seconds} s, and chrome://extensions lists no extension loaded from`,
-    `  ${dirs.join(', ')}.`,
+    `  No service worker of the extension appeared within ${seconds} s, and chrome://extensions`,
+    `  lists no extension loaded from ${dirs.join(', ')}.`,
+    '  Either this browser ignored --load-extension, or it refused the extension, for',
+    '  example because a file its manifest.json names is missing.',
     '',
-    'Run the smoke on a browser that loads --load-extension, or check this browser with',
-    'the smokes that load the extension another way:',
+    `To check the manifest, load ${dirs.join(', ')} with Load unpacked on chrome://extensions.`,
+    'If the browser refuses it there, fix what it reports, then build and run the smoke again:',
+    '  npm run build',
+    `  ${rerun}`,
+    'If it loads there, this browser ignored --load-extension. Use either:',
     ...remedies,
   ].join('\n');
 }
@@ -146,6 +195,36 @@ function extensionDirs(browser) {
   const arg = browser.process()?.spawnargs.find((a) => a.startsWith(FLAG));
   if (!arg) throw new Error('waitForExtensionWorker needs a browser started with --load-extension');
   return arg.slice(FLAG.length).split(',');
+}
+
+/**
+ * The lines of chrome_debug.log in the browser's profile, which the browser
+ * writes when started with --enable-logging. None when it was started without
+ * that flag, whose profile may hold the log of an earlier launch.
+ */
+function browserLog(browser) {
+  const args = browser.process()?.spawnargs ?? [];
+  const profile = args.find((a) => a.startsWith(PROFILE_FLAG))?.slice(PROFILE_FLAG.length);
+  if (!profile || !args.includes('--enable-logging')) return [];
+  try {
+    return readFileSync(join(profile, 'chrome_debug.log'), 'utf8').split('\n');
+  } catch {
+    return [];
+  }
+}
+
+/**
+ * The errors the browser logged for the extension in `dir`. Chrome for Testing
+ * logs the directory with symbolic links resolved (/private/tmp for /tmp on
+ * macOS), so both forms are matched.
+ */
+function loadErrors(log, dir) {
+  const prefixes = [...new Set([dir, realPath(dir)])].map((path) => `Failed to load extension from: ${path}. `);
+  const errors = log.flatMap((line) => {
+    const prefix = prefixes.find((p) => line.includes(p));
+    return prefix ? [line.slice(line.indexOf(prefix) + prefix.length).trim()] : [];
+  });
+  return [...new Set(errors)];
 }
 
 /** Every extension chrome://extensions lists, with its path, state and errors. */

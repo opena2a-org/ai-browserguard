@@ -53,6 +53,9 @@ const browser = await puppeteer.launch({
   args: [
     `--disable-extensions-except=${dist}`,
     `--load-extension=${dist}`,
+    // The browser's log, which waitForExtensionWorker reads to say why the
+    // extension did not load.
+    '--enable-logging',
     '--no-first-run', '--no-default-browser-check', '--window-size=1200,900',
   ],
 });

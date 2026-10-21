@@ -33,6 +33,9 @@ async function main() {
     args: [
       `--disable-extensions-except=${distPath}`,
       `--load-extension=${distPath}`,
+      // The browser's log, which waitForExtensionWorker reads to say why the
+      // extension did not load.
+      '--enable-logging',
       '--no-sandbox',
       '--disable-setuid-sandbox',
     ],
