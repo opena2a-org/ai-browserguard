@@ -32,9 +32,11 @@ records an "Agent detected: Playwright" entry, and that
 `chrome.debugger.getTargets()` lists the page as attached. It prints the agent
 type the session names without asserting it. It must report 0 failed.
 
-`npm run smoke:export` runs in Playwright's Chromium, which `npm ci` does not
-download: install it once with `npx playwright install chromium`. The other
-smokes listed above use the browser Puppeteer installs.
+`npm run smoke:export` and `npm run smoke:playwright` run in Playwright's
+Chromium, which `npm ci` does not download: install it once with
+`npx playwright install chromium`. `npm run smoke:arming`,
+`npm run smoke:downloads` and `npm run smoke:devtools` use the browser
+Puppeteer installs.
 
 `npm run smoke:downloads` loads the built extension with a session delegation
 set to Read-Only, built as the wizard builds it (no site patterns), and one
@@ -92,11 +94,12 @@ focused OS window); the export logic itself is locked in by
 | `npm run smoke:arming` | Chrome for Testing, in a window with OS focus |
 | `npm run smoke:cdp` | Chrome for Testing, in a window with OS focus |
 | `npm run smoke:export` | Playwright's Chromium (`npx playwright install chromium`) |
+| `npm run smoke:playwright` | Playwright's Chromium (`npx playwright install chromium`) |
 | `npm run smoke:downloads` | Chrome for Testing, or the installed browser that `CHROME_PATH` names |
 | `npm run smoke:devtools` | Chrome for Testing, or the installed browser that `CHROME_PATH` names |
 | `npm run smoke:popup-layout` | Playwright's headless Chromium (`npx playwright install chromium`); it loads no extension |
 
-The first six load the extension with `--load-extension` and do not read
+The first seven load the extension with `--load-extension` and do not read
 `CHROME_PATH`; Google Chrome 155 ignores that flag, and on it the five that use
 Puppeteer stop once no service worker of the extension appears and print what
 to run instead.

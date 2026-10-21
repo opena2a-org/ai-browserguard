@@ -1,10 +1,10 @@
 /**
- * Pre-flight for the smoke that runs in Playwright's Chromium.
+ * Pre-flight for the export smoke, which runs in Playwright's Chromium.
  *
  * `npm run smoke:export` launches Playwright's Chromium, which `npm ci` does
- * not download; every other smoke uses the browser Puppeteer installs. Without
- * it the launch stopped with Playwright's generic install banner. The smoke
- * checks the executable first and names the one command that installs it.
+ * not download. Without it the launch stopped with Playwright's generic
+ * install banner. The smoke checks the executable first and names the one
+ * command that installs it.
  */
 import { existsSync } from 'fs';
 
