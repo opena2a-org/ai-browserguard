@@ -230,6 +230,8 @@ function status(opts: {
   confidence?: unknown;
   /** What Browser-layer blocking reports for the agent's tab (default: nothing). */
   browserLayer?: unknown;
+  /** Fields that replace the default agent's, an external driver seen on a CDP connection. */
+  agent?: Record<string, unknown>;
 }): PopupStatus {
   const rule = opts.rule === undefined ? agentRule('readOnly', 'a1') : opts.rule;
   return {
@@ -244,6 +246,7 @@ function status(opts: {
         detectedAt: new Date().toISOString(),
         originUrl: opts.origin ?? AGENT_ORIGIN,
         observedCapabilities: [],
+        ...opts.agent,
       },
     ],
     activeDelegation: rule,
@@ -378,6 +381,33 @@ describe('popup render: external-driver pill and caveat (#69)', () => {
     const r = pillAndCaveat();
     expect(r.pill).toBe('Monitor only');
     expect(r.caveat).toBeNull();
+  });
+});
+
+describe('popup render: the trust badge of an in-page agent of unrecognised type (#147)', () => {
+  const IN_PAGE_UNKNOWN = { type: 'unknown', detectionMethods: ['synthetic-event'] };
+
+  function trustBadge(): Element {
+    // The card header holds the agent's name, the DETECTED badge and, last, the trust badge.
+    return document.querySelector('.detection-card .detection-card-header')!.lastElementChild!;
+  }
+
+  it('says there is no trust score, and names no AIM lookup, when the agent has none', async () => {
+    await renderPopup(status({ rule: null, agent: IN_PAGE_UNKNOWN }));
+    expect(trustBadge().textContent).toBe('No trust score');
+    expect(trustBadge().getAttribute('title')).toBe(
+      'The registry trust lookup is off, or it has not returned a score for this agent type.',
+    );
+    const card = document.querySelector('.detection-card')!;
+    expect(card.textContent).not.toMatch(/\bAIM\b/);
+    for (const el of Array.from(card.querySelectorAll('[title]'))) {
+      expect(el.getAttribute('title')).not.toMatch(/\bAIM\b/);
+    }
+  });
+
+  it('shows the registry score when the agent has one', async () => {
+    await renderPopup(status({ rule: null, agent: { ...IN_PAGE_UNKNOWN, trustScore: 0.8 } }));
+    expect(trustBadge().textContent).toBe('Trusted (0.8)');
   });
 });
 

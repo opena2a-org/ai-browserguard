@@ -749,8 +749,10 @@ function renderDetectionPanel(): void {
       trustBadge.textContent = 'Known Tool';
       trustBadge.title = `${agent.type} is a recognized automation framework`;
     } else {
+      // Only the registry trust lookup sets an agent's trust score, and it is off by default.
       trustBadge.style.cssText = 'font-size: 11px; font-weight: 500; color: var(--text-secondary); margin-left: 4px;';
       trustBadge.textContent = 'No trust score';
+      trustBadge.title = 'The registry trust lookup is off, or it has not returned a score for this agent type.';
     }
     headerRow.appendChild(trustBadge);
 
