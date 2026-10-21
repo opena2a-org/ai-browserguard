@@ -31,7 +31,7 @@ By default, AI Browser Guard makes zero network requests. All detection, delegat
 The extension also offers three optional community-intelligence features that are OFF BY DEFAULT. They only send data after you explicitly enable them, and each can be turned off again with one click:
 
 - AIM identity lookup and registry trust lookup - when an agent is detected, look up a trust score for that agent type. Only the detected agent type (for example "playwright") is sent. Your URLs and page content are never sent.
-- Anonymized contribution - share anonymized detection and behavior summaries (an anonymous token, the detected framework name, and summary counts) to improve community threat intelligence. Prompted once after 5 detections; dismissible.
+- Anonymized contribution - share anonymized detection and behavior summaries (an anonymous token, the detected framework name, and summary counts) to improve community threat intelligence. A tip in the popup offers it after 5 detections or 3 days after the first detection, whichever comes first; dismissible.
 
 None of these features transmit your URLs, page content, form data, keystrokes, cookies, authentication tokens, or identity.
 
