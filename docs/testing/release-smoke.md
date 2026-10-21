@@ -46,7 +46,10 @@ own downloads in other tabs complete (one from another site, one from the
 agent's site), are recorded as uncertain and as a host match, and are not
 counted as blocked actions. It also asserts that a download the client starts
 in its own tab completes with Browser-layer blocking off, and with it on is
-cancelled, recorded as started in the agent's tab and counted once. It opens a
+cancelled, recorded as started in the agent's tab and counted once. With
+Browser-layer blocking on, it also asserts that the event for the user's
+download from the agent's site is stored within 1 s of
+`chrome.downloads.onCreated`, as timed in the extension's worker. It opens a
 browser window and needs no OS focus. It must report 0 failed.
 
 `npm run smoke:devtools` loads the built extension with a session delegation

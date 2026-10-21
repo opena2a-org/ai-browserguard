@@ -32,7 +32,10 @@
  * download completes too (attribution host), nothing is counted as blocked.
  * Phase B, Browser-layer blocking on: the agent-tab download is cancelled
  * (USER_CANCELED, no file, attribution tab, blocked counter +1); the two user
- * downloads still complete and are not counted.
+ * downloads still complete and are not counted, and the same-host download's
+ * event is stored within 1 s of chrome.downloads.onCreated, as timed in the
+ * extension's worker (it waits for the extension's session to answer, not for
+ * the 5 s matching window, #91).
  *
  * Settings and the delegation are written to chrome.storage and the extension
  * is reloaded so the background loads them, which needs no popup and no OS
@@ -300,6 +303,37 @@ async function attributionOf(end) {
   return null;
 }
 
+/**
+ * Time, in the extension's worker, when chrome.downloads.onCreated reports
+ * each download item and when a download event for its URL is first stored.
+ * Listeners added here last as long as this worker runs.
+ */
+const timeStoredDownloads = () => worker.evaluate(() => {
+  self.smokeDownloadTimes = {};
+  const times = (url) => (self.smokeDownloadTimes[url] ??= {});
+  chrome.downloads.onCreated.addListener((item) => {
+    const t = Date.now();
+    for (const url of new Set([item.url, item.finalUrl])) if (url) times(url).created ??= t;
+  });
+  chrome.storage.onChanged.addListener((changes, area) => {
+    if (area !== 'local' || !changes.sessions) return;
+    const t = Date.now();
+    for (const s of changes.sessions.newValue ?? []) {
+      for (const e of s.events ?? []) if (e.type === 'download' && e.url) times(e.url).stored ??= t;
+    }
+  });
+});
+
+/** Milliseconds from chrome.downloads.onCreated to the stored event for `fileUrl`, or null. */
+async function storedAfterCreated(fileUrl) {
+  for (let i = 0; i < 20; i++) {
+    const t = await worker.evaluate((u) => self.smokeDownloadTimes?.[u] ?? null, fileUrl);
+    if (t?.created !== undefined && t?.stored !== undefined) return t.stored - t.created;
+    await wait(250);
+  }
+  return null;
+}
+
 const savedFile = (name) => readdirSync(saved).includes(name);
 
 async function userDownload(label, origin, name) {
@@ -355,7 +389,18 @@ try {
     // The user's download from the agent's site in a tab with no agent.
     before = await blockedTotal();
     name = `${p}-same-host.csv`;
+    if (blocking) await timeStoredDownloads();
     await expectCompleted(`${phase} same host`, await userDownload(`${phase} same host`, SITE, name), name, 'host', before);
+    if (blocking) {
+      // No session reports this download, so it waits for the sessions to
+      // answer, not for the 5 s matching window (#91).
+      const waited = await storedAfterCreated(`${SITE}/files/${name}`);
+      check(
+        `${phase} same host: event stored within 1 s of chrome.downloads.onCreated`,
+        waited !== null && waited <= 1000,
+        waited === null ? 'no time recorded' : `${waited} ms`,
+      );
+    }
 
     // The agent's own download, started in its tab by the driver.
     before = await blockedTotal();
