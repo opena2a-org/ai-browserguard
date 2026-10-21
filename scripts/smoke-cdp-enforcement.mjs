@@ -106,6 +106,9 @@ async function launch() {
     args: [
       `--disable-extensions-except=${dist}`,
       `--load-extension=${dist}`,
+      // The browser's log, which waitForExtensionWorker reads to say why the
+      // extension did not load.
+      '--enable-logging',
       `--host-resolver-rules=MAP allowed.test 127.0.0.1, MAP blocked.test 127.0.0.1`,
       '--no-first-run', '--no-default-browser-check', '--window-size=1200,900',
     ],
