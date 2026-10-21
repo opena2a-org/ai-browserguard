@@ -20,7 +20,7 @@ import {
   awaitTabDownloadStart,
   isTabDownloadWatched,
 } from './cdp-enforcement';
-import { TAB_DOWNLOAD_START_WINDOW_MS } from './download-monitor';
+import { TAB_DOWNLOAD_START_CANDIDATE_MS, TAB_DOWNLOAD_START_WINDOW_MS } from './download-monitor';
 
 function makeRule(overrides?: Partial<DelegationRule>): DelegationRule {
   return {
@@ -541,6 +541,8 @@ describe('a fallback from the CDP layer is recorded for the tab (#110)', () => {
 describe('download starts reported on our sessions (Page.downloadWillBegin)', () => {
   let sendCommand: ReturnType<typeof vi.fn>;
   let onEvent: ReturnType<typeof createEventMock>;
+  /** The command each watched session is sent to learn it has no start left to report. */
+  const BARRIER = 'Inspector.disable';
   const item = { url: 'https://files.example.com/report.pdf' };
   const willBegin = (tabId: number, guid: string, url = item.url) =>
     onEvent._fire({ tabId }, 'Page.downloadWillBegin', { frameId: `F-${tabId}`, guid, url, suggestedFilename: 'report.pdf' });
@@ -633,8 +635,23 @@ describe('download starts reported on our sessions (Page.downloadWillBegin)', ()
     void awaitTabDownloadStart(item).then((s) => { result = s; });
     await vi.advanceTimersByTimeAsync(TAB_DOWNLOAD_START_GRACE_MS);
     expect(result).toBeNull();
-    expect(sendCommand).toHaveBeenCalledWith({ tabId: 42 }, 'Page.getNavigationHistory', {});
-    expect(sendCommand).toHaveBeenCalledWith({ tabId: 43 }, 'Page.getNavigationHistory', {});
+    expect(sendCommand).toHaveBeenCalledWith({ tabId: 42 }, BARRIER, {});
+    expect(sendCommand).toHaveBeenCalledWith({ tabId: 43 }, BARRIER, {});
+  });
+
+  it('a session that answers does not end the wait while another watched session has not answered', async () => {
+    vi.useFakeTimers();
+    await attachTab(42);
+    await attachTab(43);
+    sendCommand.mockImplementation((target: { tabId: number }, method: string) =>
+      method === BARRIER && target.tabId === 43 ? new Promise(() => {}) : Promise.resolve({}));
+    let result: unknown = 'pending';
+    void awaitTabDownloadStart(item).then((s) => { result = s; });
+    await vi.advanceTimersByTimeAsync(TAB_DOWNLOAD_START_WINDOW_MS - 1);
+    expect(sendCommand).toHaveBeenCalledWith({ tabId: 42 }, BARRIER, {});
+    expect(result).toBe('pending');
+    await vi.advanceTimersByTimeAsync(1);
+    expect(result).toBeNull();
   });
 
   it('a start a watched session reports before it answers is matched', async () => {
@@ -642,7 +659,7 @@ describe('download starts reported on our sessions (Page.downloadWillBegin)', ()
     await attachTab(42);
     let answer = () => {};
     sendCommand.mockImplementation((_t: unknown, method: string) =>
-      method === 'Page.getNavigationHistory' ? new Promise((r) => { answer = () => r({}); }) : Promise.resolve({}));
+      method === BARRIER ? new Promise((r) => { answer = () => r({}); }) : Promise.resolve({}));
     let result: unknown = 'pending';
     void awaitTabDownloadStart(item).then((s) => { result = s; });
     await vi.advanceTimersByTimeAsync(TAB_DOWNLOAD_START_GRACE_MS * 4);
@@ -666,18 +683,30 @@ describe('download starts reported on our sessions (Page.downloadWillBegin)', ()
     vi.useFakeTimers();
     await attachTab(42);
     sendCommand.mockImplementation((_t: unknown, method: string) =>
-      method === 'Page.getNavigationHistory' ? Promise.reject(new Error('Detached while handling command.')) : Promise.resolve({}));
+      method === BARRIER ? Promise.reject(new Error('Detached while handling command.')) : Promise.resolve({}));
     let result: unknown = 'pending';
     void awaitTabDownloadStart(item).then((s) => { result = s; });
     await vi.advanceTimersByTimeAsync(TAB_DOWNLOAD_START_GRACE_MS);
     expect(result).toBeNull();
   });
 
+  it('any error from the command ends the wait on that session, also one from a session that stays attached', async () => {
+    vi.useFakeTimers();
+    await attachTab(42);
+    sendCommand.mockImplementation((_t: unknown, method: string) =>
+      method === BARRIER ? Promise.reject(new Error('Not allowed')) : Promise.resolve({}));
+    let result: unknown = 'pending';
+    void awaitTabDownloadStart(item).then((s) => { result = s; });
+    await vi.advanceTimersByTimeAsync(TAB_DOWNLOAD_START_GRACE_MS);
+    expect(result).toBeNull();
+    expect(isTabDownloadWatched(42)).toBe(true);
+  });
+
   it('a session that never answers holds the item until the end of the window, no longer', async () => {
     vi.useFakeTimers();
     await attachTab(42);
     sendCommand.mockImplementation((_t: unknown, method: string) =>
-      method === 'Page.getNavigationHistory' ? new Promise(() => {}) : Promise.resolve({}));
+      method === BARRIER ? new Promise(() => {}) : Promise.resolve({}));
     let result: unknown = 'pending';
     void awaitTabDownloadStart(item).then((s) => { result = s; });
     await vi.advanceTimersByTimeAsync(TAB_DOWNLOAD_START_WINDOW_MS - 1);
@@ -688,6 +717,83 @@ describe('download starts reported on our sessions (Page.downloadWillBegin)', ()
 
   it('with no watched tab, a download item resolves null at once', async () => {
     await expect(awaitTabDownloadStart(item)).resolves.toBeNull();
+  });
+
+  // #94: an item stopped waiting at the end of the grace, and a start for its
+  // URL reported later stayed for the next download of that URL.
+  it('a start reported after an item stopped waiting at the end of the grace is not handed to the next item of its URL', async () => {
+    vi.useFakeTimers();
+    await attachTab(42);
+    let first: unknown = 'pending';
+    void awaitTabDownloadStart(item).then((s) => { first = s; });
+    await vi.advanceTimersByTimeAsync(400);
+    expect(first).toBeNull();
+    willBegin(42, 'g-late');
+    let second: unknown = 'pending';
+    void awaitTabDownloadStart(item).then((s) => { second = s; });
+    await vi.advanceTimersByTimeAsync(TAB_DOWNLOAD_START_GRACE_MS);
+    expect(second).toBeNull();
+  });
+
+  it('with creation times, a start reported after the grace and at most 1 s after the item was created is dropped', async () => {
+    vi.useFakeTimers();
+    await attachTab(42);
+    const first = awaitTabDownloadStart({ id: 1, ...item, startTime: new Date().toISOString() });
+    await vi.advanceTimersByTimeAsync(TAB_DOWNLOAD_START_GRACE_MS);
+    await expect(first).resolves.toBeNull();
+    // Another download of the URL, created before the report, that it could also be.
+    const second = { id: 2, ...item, startTime: new Date().toISOString() };
+    await vi.advanceTimersByTimeAsync(150);
+    willBegin(42, 'g-late');
+    let result: unknown = 'pending';
+    void awaitTabDownloadStart(second).then((s) => { result = s; });
+    await vi.advanceTimersByTimeAsync(TAB_DOWNLOAD_START_GRACE_MS);
+    expect(result).toBeNull();
+  });
+
+  it('an item that stopped waiting takes one late start of its URL, and the next start goes to the next item', async () => {
+    vi.useFakeTimers();
+    await attachTab(42);
+    const first = awaitTabDownloadStart(item);
+    await vi.advanceTimersByTimeAsync(TAB_DOWNLOAD_START_GRACE_MS);
+    await expect(first).resolves.toBeNull();
+    willBegin(42, 'g-late');
+    willBegin(42, 'g-next');
+    await expect(awaitTabDownloadStart(item)).resolves.toEqual(expect.objectContaining({ guid: 'g-next' }));
+  });
+
+  it('a start reported after the matching window of the item that stopped waiting is kept for the next item', async () => {
+    vi.useFakeTimers();
+    await attachTab(42);
+    const first = awaitTabDownloadStart(item);
+    await vi.advanceTimersByTimeAsync(TAB_DOWNLOAD_START_GRACE_MS);
+    await expect(first).resolves.toBeNull();
+    await vi.advanceTimersByTimeAsync(TAB_DOWNLOAD_START_WINDOW_MS - TAB_DOWNLOAD_START_GRACE_MS + 1);
+    willBegin(42, 'g-after-window');
+    await expect(awaitTabDownloadStart(item)).resolves.toEqual(expect.objectContaining({ guid: 'g-after-window' }));
+  });
+
+  it('a start reported more than 1 s after the item that stopped waiting was created is not its start, and is kept', async () => {
+    vi.useFakeTimers();
+    await attachTab(42);
+    const first = awaitTabDownloadStart({ id: 1, ...item, startTime: new Date().toISOString() });
+    await vi.advanceTimersByTimeAsync(TAB_DOWNLOAD_START_GRACE_MS);
+    await expect(first).resolves.toBeNull();
+    await vi.advanceTimersByTimeAsync(TAB_DOWNLOAD_START_CANDIDATE_MS);
+    const next = { id: 2, ...item, startTime: new Date().toISOString() };
+    willBegin(42, 'g-next');
+    await expect(awaitTabDownloadStart(next)).resolves.toEqual(expect.objectContaining({ guid: 'g-next' }));
+  });
+
+  it('a start on a session the item that stopped waiting did not wait on is kept for the next item', async () => {
+    vi.useFakeTimers();
+    await attachTab(42);
+    const first = awaitTabDownloadStart(item);
+    await vi.advanceTimersByTimeAsync(TAB_DOWNLOAD_START_GRACE_MS);
+    await expect(first).resolves.toBeNull();
+    await attachTab(43);
+    willBegin(43, 'g-43');
+    await expect(awaitTabDownloadStart(item)).resolves.toEqual(expect.objectContaining({ tabId: 43, guid: 'g-43' }));
   });
 
   describe('with another download of the same URL', () => {
@@ -755,6 +861,21 @@ describe('download starts reported on our sessions (Page.downloadWillBegin)', ()
       willBegin(42, 'g3');
       expect(takeTabDownloadStart({ id: 3, ...item }, Date.now(), [first, { id: 2, ...item }, { id: 3, ...item }]))
         .toBeNull();
+    });
+
+    it('a download whose late start was dropped no longer counts against the next start of its URL', async () => {
+      vi.useFakeTimers();
+      await attachTab(42);
+      const first = { id: 1, ...item, startTime: new Date().toISOString() };
+      setSearch(vi.fn(() => Promise.resolve([first])));
+      const lapsed = awaitTabDownloadStart(first);
+      await vi.advanceTimersByTimeAsync(TAB_DOWNLOAD_START_GRACE_MS);
+      await expect(lapsed).resolves.toBeNull();
+      willBegin(42, 'g-late');
+      const second = { id: 2, ...item, startTime: new Date().toISOString() };
+      setSearch(vi.fn(() => Promise.resolve([first, second])));
+      willBegin(42, 'g2');
+      await expect(awaitTabDownloadStart(second)).resolves.toEqual(expect.objectContaining({ guid: 'g2' }));
     });
 
     it('a failed search matches nothing', async () => {

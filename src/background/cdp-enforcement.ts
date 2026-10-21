@@ -52,10 +52,13 @@ export const TAB_DOWNLOAD_START_GRACE_MS = 250;
 
 /**
  * The command that asks a download-watched session whether it has a start
- * left to report. The browser answers it without involving the page, so a busy
- * page does not hold the answer back, and it changes nothing.
+ * left to report. The browser answers it with an empty reply without waiting
+ * for the page: on Chrome for Testing 145 it was answered within 2 ms while
+ * the page ran a script for 1 s, which held Runtime.evaluate for about 900 ms
+ * (`node scripts/measure-download-start-gap.mjs`). Our sessions never enable
+ * the Inspector domain, so turning it off changes nothing.
  */
-const DOWNLOAD_START_BARRIER_METHOD = 'Page.getNavigationHistory';
+const DOWNLOAD_START_BARRIER_METHOD = 'Inspector.disable';
 
 /** Decision for a single intercepted request. */
 export interface FetchDecision {
@@ -202,6 +205,23 @@ const downloadStartWaiters = new Set<() => void>();
 /** Download items that took a start, by download id, with when they took it. */
 const matchedDownloads = new Map<number, number>();
 
+/** A download item that stopped waiting for its start at the end of the grace. */
+interface LapsedDownload {
+  info: DownloadToMatch;
+  /** The sessions it waited on: a start for it can only come on one of them. */
+  tabs: number[];
+  /** When its matching window ends (ms since epoch). */
+  until: number;
+}
+
+/**
+ * Download items that stopped waiting at the end of the grace with no start,
+ * until their matching window ends. A start that could be theirs and arrives
+ * in that time is spent on one of them, not left for the next download of the
+ * URL (see {@link recordDownloadStart}).
+ */
+const lapsedDownloads = new Set<LapsedDownload>();
+
 /** Longest text kept from a Chrome error, so a fault stays one short line. */
 const FAULT_DETAIL_MAX_LENGTH = 160;
 
@@ -319,9 +339,9 @@ function handleDebuggerDetach(source: chrome.debugger.Debuggee, reason?: string)
 }
 
 /**
- * Drop download starts older than the matching window, and forget items that
+ * Drop download starts older than the matching window, forget items that
  * took a start once they are too old to compete for one (created more than
- * two windows ago).
+ * two windows ago), and lapsed items whose window has ended.
  */
 function pruneDownloadStarts(now: number): void {
   for (const [guid, start] of downloadStarts) {
@@ -330,12 +350,21 @@ function pruneDownloadStarts(now: number): void {
   for (const [id, at] of matchedDownloads) {
     if (now - at > 2 * TAB_DOWNLOAD_START_WINDOW_MS) matchedDownloads.delete(id);
   }
+  for (const lapsed of lapsedDownloads) {
+    if (now > lapsed.until) lapsedDownloads.delete(lapsed);
+  }
 }
 
 /**
  * Keep a `Page.downloadWillBegin` reported on a session we hold, for the
  * download item it belongs to. A report for a tab we are not attached to is
  * dropped: only our own session on that tab says the download started there.
+ *
+ * A report that could be the start of an item that has stopped waiting for
+ * it (see {@link awaitTabDownloadStart}), on a session that item waited on,
+ * is dropped too, and counts as that item's: kept, it could be matched to the
+ * next download of its URL, which may be the user's. Each lapsed item takes
+ * at most one report.
  */
 function recordDownloadStart(tabId: number | undefined, params?: object): void {
   if (tabId === undefined || !attachedTabs.has(tabId)) return;
@@ -343,13 +372,21 @@ function recordDownloadStart(tabId: number | undefined, params?: object): void {
   if (typeof p?.guid !== 'string' || typeof p.url !== 'string' || !p.url) return;
   const now = Date.now();
   pruneDownloadStarts(now);
-  downloadStarts.set(p.guid, {
+  const start: TabDownloadStart = {
     tabId,
     frameId: typeof p.frameId === 'string' ? p.frameId : '',
     guid: p.guid,
     url: p.url,
     at: now,
-  });
+  };
+  for (const lapsed of lapsedDownloads) {
+    if (lapsed.tabs.includes(tabId) && matchTabDownloadStart([start], lapsed.info, now)) {
+      lapsedDownloads.delete(lapsed);
+      if (lapsed.info.id !== undefined) matchedDownloads.set(lapsed.info.id, now);
+      return;
+    }
+  }
+  downloadStarts.set(p.guid, start);
   for (const wake of Array.from(downloadStartWaiters)) wake();
 }
 
@@ -401,19 +438,24 @@ async function otherRecentDownloads(now: number): Promise<RecentDownload[] | nul
  *
  * A download started in a tab without our session is never reported, so the
  * wait does not run out the matching window: each watched session is sent a
- * command. Chrome sends a session's events and replies in order, and reports a
- * download start on the session before the item (0-6 ms before
- * chrome.downloads.onCreated, measured on Chrome 145), so once every session
- * has answered or failed to, a start one of them reported for this item, or
- * for another download of its URL created before it, has normally been
- * recorded. The item then waits {@link TAB_DOWNLOAD_START_GRACE_MS} more, a
- * margin for an event that reaches this worker after the reply that followed
- * it, and never longer than {@link TAB_DOWNLOAD_START_WINDOW_MS} in all. A
- * report still ambiguous then stays unmatched.
+ * command. Chrome sends a session's events and replies in order. In 510
+ * downloads on Chrome for Testing 145, each report reached the extension
+ * before chrome.downloads.onCreated for its item, and before the reply to that
+ * command sent on onCreated (`node scripts/measure-download-start-gap.mjs`).
+ * So once every session has answered or failed to, a start one of them
+ * reported for this item, or for another download of its URL created before
+ * it, has normally been recorded. The item then waits
+ * {@link TAB_DOWNLOAD_START_GRACE_MS} more, a margin for an event that reaches
+ * this worker after the reply that followed it, and never longer than
+ * {@link TAB_DOWNLOAD_START_WINDOW_MS} in all. A report still ambiguous then
+ * stays unmatched. An item that stops waiting at the end of the grace with no
+ * start lapses until its window ends, and a start that could be its own and
+ * comes in that time is dropped (see recordDownloadStart).
  */
 export function awaitTabDownloadStart(info: DownloadToMatch): Promise<TabDownloadStart | null> {
   const watched = Array.from(downloadWatchedTabs);
   const wait = watched.length > 0;
+  const arrived = Date.now();
   return new Promise((resolve) => {
     let settled = false;
     let windowTimer: ReturnType<typeof setTimeout> | undefined;
@@ -435,8 +477,16 @@ export function awaitTabDownloadStart(info: DownloadToMatch): Promise<TabDownloa
     };
     const wake = () => { void check(); };
     // A last check at the end of the grace, so a start reported while an
-    // earlier check was still listing downloads is not lost.
-    const endOfGrace = () => { void check().then((found) => { if (!found) finish(null); }); };
+    // earlier check was still listing downloads is not lost. With none, the
+    // item lapses until its window ends: a start for it reported after this
+    // is dropped (see recordDownloadStart).
+    const endOfGrace = () => {
+      void check().then((found) => {
+        if (found || settled) return;
+        lapsedDownloads.add({ info, tabs: watched, until: arrived + TAB_DOWNLOAD_START_WINDOW_MS });
+        finish(null);
+      });
+    };
     if (wait) {
       windowTimer = setTimeout(() => finish(null), TAB_DOWNLOAD_START_WINDOW_MS);
       downloadStartWaiters.add(wake);
@@ -456,15 +506,22 @@ export function awaitTabDownloadStart(info: DownloadToMatch): Promise<TabDownloa
 
 /**
  * Resolves once the session on `tabId` has answered a command sent now, or
- * failed to (a session that has gone reports nothing more). Never rejects.
+ * failed to. Never rejects.
+ *
+ * Any error ends the wait on that session, whatever its cause; the error is
+ * not inspected. An error reply comes back in order like any other, and a
+ * session that has gone reports nothing more. An error for another reason on
+ * a session that stays attached counts the same, so the item can stop waiting
+ * before that session would have reported its start, with only the grace as a
+ * margin: a start reported after the grace is not matched to the item, and
+ * its download is recorded, not cancelled.
  */
 async function sessionAnswered(tabId: number): Promise<void> {
   if (!debuggerAvailable()) return;
   try {
     await chrome.debugger.sendCommand({ tabId }, DOWNLOAD_START_BARRIER_METHOD, {});
   } catch {
-    // An error reply comes back in order like any other, and a session that
-    // has gone reports nothing more.
+    // Counted as an answer (see above).
   }
 }
 
@@ -659,6 +716,7 @@ export function _resetForTest(): void {
   downloadStarts.clear();
   downloadStartWaiters.clear();
   matchedDownloads.clear();
+  lapsedDownloads.clear();
   reconcileChain = Promise.resolve();
   getRuleForTab = null;
   onBlock = null;
