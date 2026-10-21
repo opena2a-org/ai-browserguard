@@ -12,7 +12,9 @@
  * script renders nothing in it and each capture stages its state in the static
  * HTML. The kill switch key in the header and the Pause the guard panel, which
  * the popup fills at run time, are drawn for each capture by
- * scripts/screenshot-popup-parts.mjs.
+ * scripts/screenshot-popup-parts.mjs. The timeline of the kill switch capture
+ * is drawn by scripts/screenshot-timeline.mjs, as the popup draws the sessions
+ * the kill switch leaves.
  */
 
 import { createServer } from 'http';
@@ -22,6 +24,7 @@ import { fileURLToPath } from 'url';
 import { dirname } from 'path';
 import { checksumsOf, recordChecksums } from './screenshot-checksums.mjs';
 import { drawPopupRuntimeParts } from './screenshot-popup-parts.mjs';
+import { drawTimeline, KILL_SWITCH_SESSIONS } from './screenshot-timeline.mjs';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -31,6 +34,9 @@ const SCREENSHOTS_DIR = join(__dirname, '..', 'docs', 'screenshots');
 // manifest suggests for the kill switch command on Windows and Linux.
 const KILL_SWITCH_KEY = JSON.parse(readFileSync(join(__dirname, '..', 'manifest.json'), 'utf-8'))
   .commands['kill-switch'].suggested_key.default;
+// The stored sessions the timeline of a capture shows, drawn as the popup
+// draws them.
+const TIMELINE_SESSIONS = { '4-killswitch': KILL_SWITCH_SESSIONS };
 
 // Without a build the server answers 404 for the popup page, and the first
 // capture's setup function fails on that page with a TypeError.
@@ -89,6 +95,12 @@ async function main() {
   async function screenshot(name, setupFn, popupState) {
     const page = await browser.newPage();
     await page.setViewport({ width: POPUP_WIDTH, height: POPUP_HEIGHT, deviceScaleFactor: 2 });
+    // The timeline shows its times in the page's locale and time zone, as the
+    // popup does. Set both, so that a capture does not depend on the settings
+    // of the machine it is taken on.
+    await page.emulateTimezone('UTC');
+    const cdp = await page.createCDPSession();
+    await cdp.send('Emulation.setLocaleOverride', { locale: 'en-US' });
     await page.goto(baseUrl, { waitUntil: 'networkidle0' });
 
     // Wait for font to load
@@ -102,6 +114,11 @@ async function main() {
     // Remove the JS-driven popup behavior (it tries to call chrome.* APIs)
     // and set up the desired state
     await page.evaluate(setupFn);
+
+    // The popup fills the timeline at run time from the stored sessions.
+    // Draw it as the popup does for the sessions the capture stages.
+    const sessions = TIMELINE_SESSIONS[name];
+    if (sessions) await page.evaluate(drawTimeline, sessions);
 
     // The popup fills the kill switch key in the header and the Pause the
     // guard panel at run time from chrome.* APIs, which this page does not
@@ -289,39 +306,8 @@ async function main() {
       <p class="placeholder-text-inline">No agents detected</p>
     `;
 
-    // Show timeline with kill events
-    const timeline = document.getElementById('timeline-panel');
-    timeline.classList.remove('hidden');
-    document.getElementById('timeline-list').innerHTML = `
-      <div class="event-item">
-        <div style="width:8px;height:8px;border-radius:50%;margin-top:4px;flex-shrink:0;background-color:var(--color-danger);"></div>
-        <div style="flex:1;min-width:0;">
-          <div style="font-size:13px;font-weight:600;color:var(--color-danger);">Kill switch activated</div>
-          <div style="font-size:11px;color:var(--text-secondary);font-weight:500;">14:40:01 | All connections terminated</div>
-        </div>
-      </div>
-      <div class="event-item">
-        <div style="width:8px;height:8px;border-radius:50%;margin-top:4px;flex-shrink:0;background-color:var(--color-danger);"></div>
-        <div style="flex:1;min-width:0;">
-          <div style="font-size:13px;font-weight:500;">CDP sessions closed (2)</div>
-          <div style="font-size:11px;color:var(--text-secondary);font-weight:500;">14:40:01</div>
-        </div>
-      </div>
-      <div class="event-item">
-        <div style="width:8px;height:8px;border-radius:50%;margin-top:4px;flex-shrink:0;background-color:var(--color-danger);"></div>
-        <div style="flex:1;min-width:0;">
-          <div style="font-size:13px;font-weight:500;">WebDriver flags cleared</div>
-          <div style="font-size:11px;color:var(--text-secondary);font-weight:500;">14:40:01</div>
-        </div>
-      </div>
-      <div class="event-item">
-        <div style="width:8px;height:8px;border-radius:50%;margin-top:4px;flex-shrink:0;background-color:var(--color-danger);"></div>
-        <div style="flex:1;min-width:0;">
-          <div style="font-size:13px;font-weight:500;">Delegation rules revoked</div>
-          <div style="font-size:11px;color:var(--text-secondary);font-weight:500;">14:40:01</div>
-        </div>
-      </div>
-    `;
+    // The timeline is drawn from TIMELINE_SESSIONS, the sessions the kill
+    // switch ended.
 
     // Delegation cleared
     document.getElementById('delegation-content').innerHTML = `

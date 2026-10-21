@@ -8,14 +8,15 @@
  * against that page: the script stopped with "TypeError: Cannot set
  * properties of null (setting 'className')" and a stack trace.
  *
- * Each case runs a copy of the script, of the two scripts it imports and of
+ * Each case runs a copy of the script, of the three scripts it imports and of
  * manifest.json, which it reads, in a temporary directory laid out like the
  * repository whose node_modules/puppeteer is a stand-in. The stand-in browser
  * prints a line when it is launched and keeps the process running until it is
  * closed. Its page requests its address from the script's server and prints
  * the status of the answer. When the status is 200, getElementById finds an
  * element for each id; on the 404 page it finds nothing, as it does in
- * Chrome. Each screenshot writes a file.
+ * Chrome. The time zone and locale the script sets for the page are accepted
+ * and not applied. Each screenshot writes a file.
  */
 import { describe, it, expect, afterEach } from 'vitest';
 import { spawnSync } from 'child_process';
@@ -31,6 +32,7 @@ const COPIED = [
   'scripts/generate-screenshots.mjs',
   'scripts/screenshot-checksums.mjs',
   'scripts/screenshot-popup-parts.mjs',
+  'scripts/screenshot-timeline.mjs',
   'manifest.json',
 ];
 const LAUNCHED = 'stand-in browser launched';
@@ -59,6 +61,10 @@ export async function launch() {
       let status = 0;
       return {
         async setViewport() {},
+        async emulateTimezone() {},
+        async createCDPSession() {
+          return { async send() {} };
+        },
         async goto(url) {
           const response = await fetch(url);
           await response.arrayBuffer();
