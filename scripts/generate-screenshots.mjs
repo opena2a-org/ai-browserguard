@@ -1,6 +1,6 @@
 /**
  * Generate popup screenshots for Chrome Web Store listing.
- * Usage: npx puppeteer browsers install chrome && node scripts/generate-screenshots.mjs
+ * Usage: npm run build && npx puppeteer browsers install chrome && node scripts/generate-screenshots.mjs
  *
  * The captures are taken from the built popup in dist/, so run `npm run build`
  * first. Then run `node docs/screenshots/capture.mjs`, which captures the store
@@ -31,6 +31,13 @@ const SCREENSHOTS_DIR = join(__dirname, '..', 'docs', 'screenshots');
 // manifest suggests for the kill switch command on Windows and Linux.
 const KILL_SWITCH_KEY = JSON.parse(readFileSync(join(__dirname, '..', 'manifest.json'), 'utf-8'))
   .commands['kill-switch'].suggested_key.default;
+
+// Without a build the server answers 404 for the popup page, and the first
+// capture's setup function fails on that page with a TypeError.
+if (!existsSync(join(DIST_DIR, 'popup', 'index.html'))) {
+  console.error('dist/popup/index.html not found. Run `npm run build` first.');
+  process.exit(1);
+}
 
 const MIME_TYPES = {
   '.html': 'text/html',
