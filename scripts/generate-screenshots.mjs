@@ -163,7 +163,7 @@ async function main() {
         </div>
         <div class="preset-card">
           <div class="preset-name">Full Access</div>
-          <div class="preset-description">Unrestricted access with full logging. All actions permitted and recorded.</div>
+          <div class="preset-description">Agent can perform any action on any site for 60 minutes, then the grant expires. All activity is logged.</div>
         </div>
         <div class="wizard-nav">
           <button class="btn btn-secondary btn-sm" disabled>Back</button>
