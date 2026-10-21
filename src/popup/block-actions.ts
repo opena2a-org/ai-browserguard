@@ -10,9 +10,9 @@
  * as `blockingRuleId`.
  */
 import type { BoundaryAlert } from '../alerts/boundary';
-import { evaluateRule, FULL_ACCESS_MAX_MINUTES } from '../delegation/rules';
+import { evaluateRule, FULL_ACCESS_MAX_MINUTES, PRESET_TITLES } from '../delegation/rules';
 import { selectEffectiveRule } from '../delegation/effective';
-import type { DelegationPreset, DelegationRule } from '../types/delegation';
+import type { DelegationRule } from '../types/delegation';
 
 export const CAPABILITY_BLOCK_HINT =
   "Cancelled: the delegation blocks downloads started in the agent's tab, yours included, and a site Allow cannot change that. To get the file, close that agent's tab, then retry.";
@@ -38,13 +38,6 @@ export interface CapabilityRecovery {
   /** Whether the "Other controls" disclosure is shown under it. */
   showOtherControls: boolean;
 }
-
-/** Preset names as the agent card and the delegation panel show them. */
-const PRESET_NAMES: Record<DelegationPreset, string> = {
-  readOnly: 'Read-Only',
-  limited: 'Limited',
-  fullAccess: 'Full Access',
-};
 
 const GENERAL_RECOVERY: CapabilityRecovery = { hint: CAPABILITY_BLOCK_HINT, showOtherControls: true };
 
@@ -112,7 +105,7 @@ export function capabilityRecoveryFor(
   const retry = "To get the file, close that agent's tab, then retry.";
   if (inForce.agentId === null) {
     return {
-      hint: `Cancelled: the session delegation (${PRESET_NAMES[inForce.preset]}) blocks downloads started in ${agent}'s tab, yours included, and a site Allow cannot change that. ${retry} End on the session delegation also frees them, and leaves every agent without a grant of its own with no delegation.`,
+      hint: `Cancelled: the session delegation (${PRESET_TITLES[inForce.preset]}) blocks downloads started in ${agent}'s tab, yours included, and a site Allow cannot change that. ${retry} End on the session delegation also frees them, and leaves every agent without a grant of its own with no delegation.`,
       showOtherControls: true,
     };
   }
@@ -122,10 +115,10 @@ export function capabilityRecoveryFor(
   const revoke = session === null
     ? 'Revoke on its card also frees them, and leaves that agent with no delegation.'
     : blocksDownloads(session)
-      ? `Revoke on its card frees them only together with End on the session delegation (${PRESET_NAMES[session.preset]}), which blocks them too.`
-      : `Revoke on its card also frees them, and the session delegation (${PRESET_NAMES[session.preset]}) then applies to that agent.`;
+      ? `Revoke on its card frees them only together with End on the session delegation (${PRESET_TITLES[session.preset]}), which blocks them too.`
+      : `Revoke on its card also frees them, and the session delegation (${PRESET_TITLES[session.preset]}) then applies to that agent.`;
   return {
-    hint: `Cancelled: the grant on ${agent}'s card (${PRESET_NAMES[inForce.preset]}) blocks downloads started in its tab, yours included, and a site Allow cannot change that. ${retry} ${revoke}`,
+    hint: `Cancelled: the grant on ${agent}'s card (${PRESET_TITLES[inForce.preset]}) blocks downloads started in its tab, yours included, and a site Allow cannot change that. ${retry} ${revoke}`,
     showOtherControls: true,
   };
 }

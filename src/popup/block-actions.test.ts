@@ -14,7 +14,7 @@ import {
   CAPABILITY_BLOCK_DETAIL_BODY,
   CAPABILITY_BLOCK_DETAIL_LABEL,
 } from './block-actions';
-import { createRuleFromPreset, FULL_ACCESS_MAX_MINUTES } from '../delegation/rules';
+import { createRuleFromPreset, FULL_ACCESS_MAX_MINUTES, PRESET_TITLES } from '../delegation/rules';
 import type { BoundaryAlert } from '../alerts/boundary';
 import type { DelegationRule } from '../types/delegation';
 
@@ -137,8 +137,22 @@ describe('capabilityRecoveryFor: the hint names the control for the rule that bl
     const r = capabilityRecoveryFor([download('a1')], [session, card], nameOf);
     expect(r.hint).toMatch(/^Cancelled: the grant on Puppeteer's card \(Read-Only\) blocks downloads/);
     expect(r.hint).toMatch(
-      /Revoke on its card frees them only together with End on the session delegation \(Limited\), which blocks them too\.$/,
+      /Revoke on its card frees them only together with End on the session delegation \(Limited Access\), which blocks them too\.$/,
     );
+  });
+
+  it('names the rule in force by the title the wizard shows (#154)', () => {
+    for (const preset of ['readOnly', 'limited'] as const) {
+      const title = PRESET_TITLES[preset];
+      const session = createRuleFromPreset(preset, { agentId: null });
+      const card = createRuleFromPreset(preset, { agentId: 'a1' });
+      expect(capabilityRecoveryFor([download('a1')], [session], nameOf).hint)
+        .toContain(`Cancelled: the session delegation (${title}) blocks downloads`);
+      expect(capabilityRecoveryFor([download('a1')], [card], nameOf).hint)
+        .toContain(`Cancelled: the grant on Puppeteer's card (${title}) blocks downloads`);
+      expect(capabilityRecoveryFor([download('a1')], [session, card], nameOf).hint)
+        .toContain(`together with End on the session delegation (${title}), which blocks them too.`);
+    }
   });
 
   it('a card grant over a session delegation that permits downloads: Revoke, and the session rule then applies', () => {

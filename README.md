@@ -41,10 +41,10 @@ To build from source and load it unpacked: [docs/install.md](docs/install.md).
 | Preset | What the Agent Can Do |
 |--------|----------------------|
 | Read-Only | Navigate and read pages. No clicking, typing, or form submission. |
-| Limited | Interact with specific sites (user-defined allowlist), with sites you explicitly block, time-bounded (15min/1hr/4hr). |
+| Limited Access | Interact with specific sites (user-defined allowlist), with sites you explicitly block, time-bounded (15min/1hr/4hr). |
 | Full Access | Every action on every site, for 60 minutes. The grant then expires: granted on an agent's card, the session delegation applies to that agent again; granted as the session delegation, no delegation is left in place. Actions are still logged. No boundary alerts fire while it lasts, because no action is outside it. |
 
-> **These presets are enforced best-effort against in-page / injected automation, except downloads, which Read-Only and Limited can cancel in an agent's tab for every kind of agent.** External CDP frameworks bypass the rest; for those agents a preset is otherwise a recorded intent, not an enforced boundary, and the kill switch (close tab) is the hard stop.
+> **These presets are enforced best-effort against in-page / injected automation, except downloads, which Read-Only and Limited Access can cancel in an agent's tab for every kind of agent.** External CDP frameworks bypass the rest; for those agents a preset is otherwise a recorded intent, not an enforced boundary, and the kill switch (close tab) is the hard stop.
 
 Site glob patterns, ending a delegation, pausing the guard on a site, and opt-in browser-layer blocking: [docs/delegation.md](docs/delegation.md).
 

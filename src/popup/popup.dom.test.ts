@@ -782,6 +782,32 @@ describe('popup render: the delegation line of a session report (#133)', () => {
   );
 });
 
+describe('popup render: the delegation panel and the agent card name a preset by its title (#154)', () => {
+  // The wizard titles each preset from PRESET_TITLES; the panel and the card
+  // name the rule in force by the same title. Both used to read `Limited` for
+  // the preset the wizard titles `Limited Access`.
+  const presets = Object.entries(PRESET_TITLES) as Array<[DelegationPreset, string]>;
+
+  function panelName(): string | null {
+    return document.querySelector('#delegation-content strong')?.textContent ?? null;
+  }
+
+  function grantLabel(): string | null {
+    return document.querySelector('.agent-grant-row > span')?.textContent ?? null;
+  }
+
+  it.each(presets)('a session delegation under %s is named %s in the panel and on the card', async (preset, title) => {
+    await renderPopup(status({ rule: agentRule(preset, null) }));
+    expect(panelName()).toBe(title);
+    expect(grantLabel()).toBe(`Session: ${title}`);
+  });
+
+  it.each(presets)("a grant on the agent's card under %s is named %s on the card", async (preset, title) => {
+    await renderPopup({ ...status({ rule: agentRule(preset, 'a1') }), activeDelegation: null });
+    expect(grantLabel()).toBe(`Allowed: ${title}`);
+  });
+});
+
 describe('popup render: the trust badge of an agent with no trust score', () => {
   // The OpenA2A AIM (Agent Identity Management) identity lookup was removed;
   // the registry trust lookup is the only source of an agent's trust score. The

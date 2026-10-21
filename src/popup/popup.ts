@@ -794,15 +794,12 @@ function renderDetectionPanel(): void {
     if (agentRule) {
       // This agent already has a grant. Show it (with its scope) and offer a
       // revoke instead of re-presenting Allow buttons that imply no access.
-      const presetNames: Record<string, string> = {
-        readOnly: 'Read-Only', limited: 'Limited', fullAccess: 'Full Access',
-      };
       const isSessionWide = agentRule.agentId === null;
       const grantLabel = document.createElement('span');
       grantLabel.style.cssText = 'font-size: 12px; color: var(--text-secondary); font-weight: 500;';
       grantLabel.textContent = isSessionWide
-        ? `Session: ${presetNames[agentRule.preset] ?? agentRule.preset}`
-        : `Allowed: ${presetNames[agentRule.preset] ?? agentRule.preset}`;
+        ? `Session: ${PRESET_TITLES[agentRule.preset] ?? agentRule.preset}`
+        : `Allowed: ${PRESET_TITLES[agentRule.preset] ?? agentRule.preset}`;
       quickAllowRow.appendChild(grantLabel);
 
       // Only a grant bound to THIS agent can be revoked from its card. A
@@ -1054,11 +1051,6 @@ function renderDelegationPanel(): void {
 
   if (popupState.activeDelegation) {
     const rule = popupState.activeDelegation;
-    const presetNames: Record<string, string> = {
-      readOnly: 'Read-Only',
-      limited: 'Limited',
-      fullAccess: 'Full Access',
-    };
 
     content.replaceChildren();
     const row = document.createElement('div');
@@ -1066,7 +1058,7 @@ function renderDelegationPanel(): void {
 
     const labelSpan = document.createElement('span');
     const strong = document.createElement('strong');
-    strong.textContent = presetNames[rule.preset] ?? rule.preset;
+    strong.textContent = PRESET_TITLES[rule.preset] ?? rule.preset;
     labelSpan.appendChild(strong);
 
     if (rule.scope.timeBound) {
