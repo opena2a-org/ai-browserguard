@@ -60,11 +60,13 @@ PRIVACY
 
 By default, AI Browser Guard makes zero network requests. All detection, delegation, and session tracking runs locally on your device. There is no analytics, no telemetry, and no tracking. Session logs and settings are stored in chrome.storage.local and are deleted when you uninstall.
 
-The extension also offers three optional features that make network requests and are OFF BY DEFAULT. They only act after you explicitly enable them, and each can be turned off again with one click:
+The extension also offers three optional features that make network requests and are OFF BY DEFAULT. They only act after you explicitly enable them:
 
 - Registry trust lookup: when an agent is detected, look up a trust score for that agent type. Only the detected agent type (for example "playwright") is sent. Your URLs and page content are never sent.
 - Anonymized contribution: share anonymized detection and behavior summaries (an anonymous token, the detected framework name, and summary counts) to improve community threat intelligence. A tip in the popup offers it after 5 detections or 3 days after the first detection, whichever comes first; dismissible.
 - Site safety declarations: when an AI agent is detected on a page, request that website's /.well-known/ai-safety.txt, a public file a site may publish to state what it claims about its own content, and show those claims alongside the detection. This is the one feature that contacts the website your agent is on instead of an OpenA2A server. The request is a plain GET for that one fixed filename: no cookies, no page address, no referrer, and nothing about you. It follows no redirects, runs only over HTTPS, and runs only while an agent is detected, never on pages you browse yourself. Results are cached locally for 24 hours; turning the setting off deletes every stored declaration. Declarations are display-only: self-asserted claims the extension does not verify, and they never change what the extension detects, scores, or blocks.
+
+Anonymized contribution and site safety declarations each have a switch in the popup's Settings that turns them off again with one click. The registry trust lookup has no switch in the popup: it stays off unless the registryLookupEnabled value in the extension's stored settings is set to true, which can be done from the extension's service worker console in Chrome's developer tools, and setting it back to false turns it off.
 
 None of these features transmit your URLs, page content, form data, keystrokes, cookies, authentication tokens, or identity. Two of them contact only OpenA2A's own server (api.oa2a.org); site safety declarations contacts the website your agent is on, which receives nothing about you but can see that the request was made.
 

@@ -27,15 +27,15 @@ function flush(): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, 0));
 }
 
-function detectionEvent() {
+function detectionEvent(type = 'playwright', agentId = 'agent-1') {
   return {
-    id: 'det-1',
+    id: `det-${agentId}`,
     timestamp: new Date().toISOString(),
     methods: ['cdp-connection'],
     confidence: 'high',
     agent: {
-      id: 'agent-1',
-      type: 'playwright',
+      id: agentId,
+      type,
       detectionMethods: ['cdp-connection'],
       confidence: 'high',
       detectedAt: new Date().toISOString(),
@@ -110,5 +110,35 @@ describe('trust lookup on detection', () => {
     for (let i = 0; i < 10; i++) await flush();
 
     expect(requestedUrls).toEqual([]);
+  });
+
+  it('makes no request after the stored setting is set back to false (#148)', async () => {
+    // The popup has no switch for this lookup, so the privacy copy says it is
+    // turned off by setting registryLookupEnabled to false in the stored
+    // settings. This is that write, made straight to storage.
+    storageData.settings = { registryLookupEnabled: true };
+    const handleMessage = await importWorker();
+    const detect = (type: string, tabId: number) =>
+      handleMessage(
+        { type: 'DETECTION_RESULT', data: detectionEvent(type, `agent-${tabId}`) },
+        { ...CONTENT_SENDER, tab: { id: tabId } },
+        vi.fn(),
+      );
+
+    detect('playwright', 42);
+    for (let i = 0; i < 10; i++) await flush();
+    // A new agent type is asked about while the setting is on, so the registry
+    // client's per-type cache cannot be why the last detection asks nothing.
+    detect('puppeteer', 43);
+    for (let i = 0; i < 10; i++) await flush();
+    expect(requestedUrls).toEqual([
+      'https://api.oa2a.org/api/v1/registry/search?q=playwright',
+      'https://api.oa2a.org/api/v1/registry/search?q=puppeteer',
+    ]);
+
+    storageData.settings = { registryLookupEnabled: false };
+    detect('selenium', 44);
+    for (let i = 0; i < 10; i++) await flush();
+    expect(requestedUrls).toHaveLength(2);
   });
 });
