@@ -13,8 +13,7 @@ const slides = [
   { id: 'promo-marquee', output: 'promo-marquee-1400x560.png' },
 ];
 
-async function main() {
-  const browser = await puppeteer.launch({ headless: true });
+async function captureSlides(browser) {
   const page = await browser.newPage();
 
   const htmlPath = path.join(__dirname, 'generate.html');
@@ -35,9 +34,24 @@ async function main() {
     });
     console.log(`Saved: ${slide.output}`);
   }
+}
+
+async function main() {
+  const browser = await puppeteer.launch({ headless: true });
+  try {
+    await captureSlides(browser);
+  } catch (err) {
+    // An open browser keeps this process running, so close it before the
+    // error is reported.
+    await browser.close().catch(() => {});
+    throw err;
+  }
 
   await browser.close();
   console.log('Done. Verify with: sips -g pixelWidth -g pixelHeight -g hasAlpha store-*.png promo-*.png');
 }
 
-main().catch(console.error);
+main().catch((err) => {
+  console.error(err);
+  process.exit(1);
+});
