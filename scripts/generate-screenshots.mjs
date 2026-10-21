@@ -158,7 +158,7 @@ async function main() {
           <div class="preset-description">Navigate and read page content only. No form input, clicks, or data modification.</div>
         </div>
         <div class="preset-card" style="margin-bottom: 8px;">
-          <div class="preset-name">Limited</div>
+          <div class="preset-name">Limited Access</div>
           <div class="preset-description">Specific sites only, time-bounded. Form input and clicks allowed within scope.</div>
         </div>
         <div class="preset-card">
