@@ -1,7 +1,7 @@
 /**
  * The storage limits and triggers the privacy policy, README, privacy page
- * (docs/privacy.md) and store description state, checked against the values
- * the code applies.
+ * (docs/privacy.md), store description and v0.5.0 store text state, checked
+ * against the values the code applies.
  *
  * Every number asserted here is read from the code, not written into this file,
  * so changing a limit fails this test until the copy that states it changes
@@ -33,7 +33,7 @@ function listItem(html: string, label: string): string {
   return html.slice(start, html.indexOf('</li>', start));
 }
 
-/** The single line of a Markdown file that contains `marker`. */
+/** The single line of a Markdown or plain text file that contains `marker`. */
 function line(markdown: string, marker: string): string {
   const found = markdown.split('\n').filter((l) => l.includes(marker));
   expect(found, `expected exactly one line containing "${marker}"`).toHaveLength(1);
@@ -44,6 +44,7 @@ const policy = read('docs/privacy-policy.html');
 const readme = read('README.md');
 const privacyPage = read('docs/privacy.md');
 const storeDescription = read('docs/chrome-web-store-description.md');
+const storeTextV050 = read('docs/store-description-v0.5.0.txt');
 
 describe('privacy policy: records kept on the device', () => {
   it('states the number of sessions the storage layer keeps', () => {
@@ -84,6 +85,7 @@ describe.each([
   ['the privacy page', () => line(privacyPage, '**Anonymized contribution**')],
   ['the README', () => line(readme, '**Contribution**')],
   ['the store description', () => line(storeDescription, '- Anonymized contribution')],
+  ['the v0.5.0 store text', () => line(storeTextV050, '- Anonymized contribution')],
 ])('%s: contribution tip', (_surface, text) => {
   it('names both conditions that show the tip', () => {
     expect(text()).toContain(`after ${TIP_AFTER_DETECTIONS} detections`);
