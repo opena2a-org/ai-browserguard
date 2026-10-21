@@ -159,8 +159,30 @@ export async function queueEvent(event: ContributeEvent): Promise<void> {
 }
 
 /**
+ * Read how many events of a batch of `batchSize` the registry says it stored,
+ * from the `accepted` field of its reply. A reply without a whole, non-negative
+ * `accepted` number, or with a body that is not JSON, confirms none stored; a
+ * count above the batch size is capped at the batch size.
+ */
+async function readAcceptedCount(response: Response, batchSize: number): Promise<number> {
+  try {
+    const body: unknown = await response.json();
+    const accepted = (body as { accepted?: unknown } | null)?.accepted;
+    if (typeof accepted === 'number' && Number.isInteger(accepted) && accepted >= 0) {
+      return Math.min(accepted, batchSize);
+    }
+  } catch {
+    // Body missing or not JSON -- nothing confirmed as stored.
+  }
+  return 0;
+}
+
+/**
  * Flush the event queue to the Registry.
- * Sends batched events and clears the queue on success.
+ * Sends batched events and clears the queue on a 2xx reply. `sent`, and the
+ * amount added to `totalContributed`, is the reply's `accepted` count (see
+ * readAcceptedCount), so events the registry skipped are not counted; they
+ * are cleared with the rest of the batch, not sent again.
  * Silently fails on network error (events stay queued for retry).
  */
 export async function flushQueue(): Promise<{ sent: number; success: boolean }> {
@@ -219,13 +241,13 @@ export async function flushQueue(): Promise<{ sent: number; success: boolean }> 
     });
 
     if (response.ok) {
-      const sentCount = queue.events.length;
-      queue.totalContributed += sentCount;
+      const accepted = await readAcceptedCount(response, queue.events.length);
+      queue.totalContributed += accepted;
       queue.totalFlushes++;
       queue.lastFlushedAt = new Date().toISOString();
-      queue.events = []; // Clear sent events
+      queue.events = []; // Clear sent events; the reply covers the whole batch
       await saveQueue(queue);
-      return { sent: sentCount, success: true };
+      return { sent: accepted, success: true };
     }
 
     // Non-2xx response -- keep events queued for retry
