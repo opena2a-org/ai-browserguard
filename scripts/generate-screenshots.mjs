@@ -1,6 +1,12 @@
 /**
  * Generate popup screenshots for Chrome Web Store listing.
  * Usage: npx puppeteer browsers install chrome && node scripts/generate-screenshots.mjs
+ *
+ * The captures are taken from the built popup in dist/, so run `npm run build`
+ * first. Then run `node docs/screenshots/capture.mjs`, which captures the store
+ * slides and promo tiles from docs/screenshots/generate.html, a page that
+ * embeds these captures. Both scripts record the checksums of the images they
+ * write in docs/screenshots/checksums.json (scripts/screenshot-checksums.mjs).
  */
 
 import { createServer } from 'http';
@@ -8,6 +14,7 @@ import { readFileSync, existsSync } from 'fs';
 import { join, extname } from 'path';
 import { fileURLToPath } from 'url';
 import { dirname } from 'path';
+import { checksumsOf, recordChecksums } from './screenshot-checksums.mjs';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -56,6 +63,7 @@ async function main() {
 
   const POPUP_WIDTH = 360;
   const POPUP_HEIGHT = 500;
+  const captured = [];
 
   async function screenshot(name, setupFn) {
     const page = await browser.newPage();
@@ -65,9 +73,18 @@ async function main() {
     // Wait for font to load
     await page.evaluate(() => document.fonts.ready);
 
+    // Turn off animations and transitions, such as the pulse of the status
+    // dot while an agent is detected, so that the pixels of a capture do not
+    // depend on the moment it is taken.
+    await page.addStyleTag({ content: '*, *::before, *::after { animation: none !important; transition: none !important; }' });
+
     // Remove the JS-driven popup behavior (it tries to call chrome.* APIs)
     // and set up the desired state
     await page.evaluate(setupFn);
+
+    // The footer names the version of the build. Hide it so that a capture
+    // does not show a version number the next release makes out of date.
+    await page.evaluate(() => document.getElementById('footer').classList.add('hidden'));
 
     // Wait for render
     await new Promise(r => setTimeout(r, 200));
@@ -75,6 +92,7 @@ async function main() {
     const outputPath = join(SCREENSHOTS_DIR, `${name}.png`);
     await page.screenshot({ path: outputPath, clip: { x: 0, y: 0, width: POPUP_WIDTH, height: POPUP_HEIGHT } });
     console.log(`Saved: ${outputPath}`);
+    captured.push(`${name}.png`);
     await page.close();
   }
 
@@ -290,6 +308,7 @@ async function main() {
 
   await browser.close();
   server.close();
+  recordChecksums(SCREENSHOTS_DIR, 'popupCaptures', { files: checksumsOf(SCREENSHOTS_DIR, captured) });
   console.log('All screenshots generated.');
 }
 
