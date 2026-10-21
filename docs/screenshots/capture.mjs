@@ -1,6 +1,7 @@
 import puppeteer from 'puppeteer';
 import path from 'path';
 import { fileURLToPath } from 'url';
+import { checksumsOf, recordChecksums } from '../../scripts/screenshot-checksums.mjs';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -19,6 +20,11 @@ async function captureSlides(browser) {
   const htmlPath = path.join(__dirname, 'generate.html');
   await page.goto(`file://${htmlPath}`, { waitUntil: 'load' });
 
+  // The popup captures generate.html embeds, from scripts/generate-screenshots.mjs.
+  const embedded = await page.evaluate(() => [...new Set([...document.images].map((img) => img.getAttribute('src')))]);
+  const embeddedPopupCaptures = checksumsOf(__dirname, embedded);
+  const saved = [];
+
   for (const slide of slides) {
     const element = await page.$(`#${slide.id}`);
     if (!element) {
@@ -33,13 +39,17 @@ async function captureSlides(browser) {
       omitBackground: false,
     });
     console.log(`Saved: ${slide.output}`);
+    saved.push(slide.output);
   }
+
+  return { saved, embeddedPopupCaptures };
 }
 
 async function main() {
   const browser = await puppeteer.launch({ headless: true });
+  let captured;
   try {
-    await captureSlides(browser);
+    captured = await captureSlides(browser);
   } catch (err) {
     // An open browser keeps this process running, so close it before the
     // error is reported.
@@ -48,6 +58,10 @@ async function main() {
   }
 
   await browser.close();
+  recordChecksums(__dirname, 'storeImages', {
+    files: checksumsOf(__dirname, captured.saved),
+    embeddedPopupCaptures: captured.embeddedPopupCaptures,
+  });
   console.log('Done. Verify with: sips -g pixelWidth -g pixelHeight -g hasAlpha store-*.png promo-*.png');
 }
 

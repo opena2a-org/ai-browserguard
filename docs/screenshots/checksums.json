@@ -1,0 +1,26 @@
+{
+  "popupCaptures": {
+    "files": {
+      "1-detection.png": "f1a95892cd529e886f93af537701f1dac728292640fe3e8076f27b5c5f2ab8ce",
+      "2-delegation.png": "e82fba6270bd968736e7f6b8d06041468e9489d8d1b7bb66013474a98198abc6",
+      "3-readOnly.png": "290c2789a495da467ce817f82c84873d4afafd9ee54508d4f313bd6859a0f95b",
+      "4-killswitch.png": "bb79d395f4825d61fd78fb2529cb908f6c00461c76ad2175e7a829ac4bc1fd70"
+    }
+  },
+  "storeImages": {
+    "files": {
+      "promo-marquee-1400x560.png": "d43b18124bf3db82717abe25cdae2c0f1312fbd822bc462322f2b7aeb5d25ed9",
+      "promo-small-440x280.png": "517a8f5849bda819cad55f09d6f73bd8c339845c903fdb3d5740e62e1f20c09d",
+      "store-1-detection.png": "13b1cb1161ff17a19115ce8f8ded9744cb0a59f39f5f3d50202d5082388785a5",
+      "store-2-delegation.png": "0e7bd0744e5ba210b63d5fd199842441f9775330a9d32c18f523f672fb11b56f",
+      "store-3-readOnly.png": "af704ee4ddf6221d93f5e7a560292327395c2af9931fe3605c3a8074da46f97e",
+      "store-4-killswitch.png": "0848c6f9ed00dd74ab931a80855a68a454170345ad6e0fc455c4e1fd54dfe6d3"
+    },
+    "embeddedPopupCaptures": {
+      "1-detection.png": "f1a95892cd529e886f93af537701f1dac728292640fe3e8076f27b5c5f2ab8ce",
+      "2-delegation.png": "e82fba6270bd968736e7f6b8d06041468e9489d8d1b7bb66013474a98198abc6",
+      "3-readOnly.png": "290c2789a495da467ce817f82c84873d4afafd9ee54508d4f313bd6859a0f95b",
+      "4-killswitch.png": "bb79d395f4825d61fd78fb2529cb908f6c00461c76ad2175e7a829ac4bc1fd70"
+    }
+  }
+}
