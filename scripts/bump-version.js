@@ -18,8 +18,11 @@
  * new version first (for example `## 0.8.0 - 2026-10-18`): the release
  * metadata test requires the first version heading there to match
  * manifest.json, so a bump run before the rename fails that test and is
- * reverted. When the tests fail, the script prints the failed test names
- * vitest reports.
+ * reverted. A non-zero exit from vitest fails the bump, including a run in
+ * which a test file fails to load and the summary still reads
+ * `Tests  N passed (N)`: the script prints the failed tests and test files
+ * vitest names, puts manifest.json, package.json and STATUS.md back, exits 1
+ * and does not build.
  */
 
 import { execSync } from 'child_process';
@@ -82,7 +85,9 @@ writeFileSync(
 );
 console.log(`Version: ${current} -> ${newVersion}`);
 
-// 2. Run tests and capture the count
+// 2. Run tests and capture the count. A non-zero exit fails the bump whatever
+// the totals say: when a test file fails to load, vitest exits 1 and its
+// summary can still read `Tests  N passed (N)`.
 let testCount = null;
 try {
   const testOutput = execSync('npx vitest run 2>&1', { cwd: root, encoding: 'utf-8' });
@@ -91,30 +96,23 @@ try {
     testCount = parseInt(match[1], 10);
   }
 } catch (err) {
-  // Tests may have failed — extract count from stderr/stdout anyway
   const output = err.stdout ?? err.stderr ?? '';
-  const match = output.match(/Tests\s+(\d+)\s+passed/);
-  if (match) {
-    testCount = parseInt(match[1], 10);
+  console.error('Tests failed. Fix tests before bumping.');
+  const failed = failedTestNames(output);
+  if (failed.length > 0) {
+    console.error(`Failed tests (${failed.length}):`);
+    for (const name of failed) console.error(`  ${name}`);
+  } else {
+    console.error('The test output names no failed test; run `npx vitest run` to see the failure.');
   }
-  if (!testCount) {
-    console.error('Tests failed. Fix tests before bumping.');
-    const failed = failedTestNames(output);
-    if (failed.length > 0) {
-      console.error(`Failed tests (${failed.length}):`);
-      for (const name of failed) console.error(`  ${name}`);
-    } else {
-      console.error('The test output names no failed test; run `npx vitest run` to see the failure.');
-    }
-    // Revert version changes
-    manifest.version = current;
-    pkg.version = current;
-    writeFileSync(manifestPath, JSON.stringify(manifest, null, 2) + '\n');
-    writeFileSync(packagePath, JSON.stringify(pkg, null, 2) + '\n');
-    writeFileSync(statusPath, status);
-    console.error(`Reverted manifest.json, package.json and STATUS.md to ${current}.`);
-    process.exit(1);
-  }
+  // Revert version changes
+  manifest.version = current;
+  pkg.version = current;
+  writeFileSync(manifestPath, JSON.stringify(manifest, null, 2) + '\n');
+  writeFileSync(packagePath, JSON.stringify(pkg, null, 2) + '\n');
+  writeFileSync(statusPath, status);
+  console.error(`Reverted manifest.json, package.json and STATUS.md to ${current}.`);
+  process.exit(1);
 }
 
 // 3. Report the test count (the README states none, so no file is updated)
