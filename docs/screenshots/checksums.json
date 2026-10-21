@@ -1,26 +1,26 @@
 {
   "popupCaptures": {
     "files": {
-      "1-detection.png": "f1a95892cd529e886f93af537701f1dac728292640fe3e8076f27b5c5f2ab8ce",
-      "2-delegation.png": "e82fba6270bd968736e7f6b8d06041468e9489d8d1b7bb66013474a98198abc6",
-      "3-readOnly.png": "290c2789a495da467ce817f82c84873d4afafd9ee54508d4f313bd6859a0f95b",
-      "4-killswitch.png": "bb79d395f4825d61fd78fb2529cb908f6c00461c76ad2175e7a829ac4bc1fd70"
+      "1-detection.png": "62fc34675180686dfaab3aaa783f839a0415669ebac44c424ecd20d66ac3af6c",
+      "2-delegation.png": "e80bead5654582a72bb1cc2d4ee5a72959265ece5d89b227faf0a97881a8f9bb",
+      "3-readOnly.png": "a751f6359a4fe21b9e8dfb01a6963907fc4439283ae96dbef1624067cfabb1b8",
+      "4-killswitch.png": "ade535cacd92bf85ca7e0273da06ec5ff5914ff0d156b0fe22c01806384b6a25"
     }
   },
   "storeImages": {
     "files": {
-      "promo-marquee-1400x560.png": "d43b18124bf3db82717abe25cdae2c0f1312fbd822bc462322f2b7aeb5d25ed9",
-      "promo-small-440x280.png": "517a8f5849bda819cad55f09d6f73bd8c339845c903fdb3d5740e62e1f20c09d",
-      "store-1-detection.png": "13b1cb1161ff17a19115ce8f8ded9744cb0a59f39f5f3d50202d5082388785a5",
-      "store-2-delegation.png": "0e7bd0744e5ba210b63d5fd199842441f9775330a9d32c18f523f672fb11b56f",
-      "store-3-readOnly.png": "af704ee4ddf6221d93f5e7a560292327395c2af9931fe3605c3a8074da46f97e",
-      "store-4-killswitch.png": "0848c6f9ed00dd74ab931a80855a68a454170345ad6e0fc455c4e1fd54dfe6d3"
+      "promo-marquee-1400x560.png": "5242e63c2c86184d41e3ba207b3ab778de30fde23f89ec7a78947790cb673232",
+      "promo-small-440x280.png": "8820bf86d4901bdc420ed57103f293cf63e5fe27ed0f666f96d834f1ef7836a3",
+      "store-1-detection.png": "83d8ccb3bff4c8db7a7be8e08f80a04caff4da04f054ad1648424aeae56cc351",
+      "store-2-delegation.png": "a8d0355c0c3e9fa047c2ee12e846f39cca71c5bbb498d57d1dd0b400b7638958",
+      "store-3-readOnly.png": "1d927059fd52132a2e95bec77fa7dd0dd4835703f498bade1cd7fd9cf93f4fe6",
+      "store-4-killswitch.png": "dd2761e47d883e3f80cdfa6f89ade30620eb64d99e6e3ab50270c3a362a64753"
     },
     "embeddedPopupCaptures": {
-      "1-detection.png": "f1a95892cd529e886f93af537701f1dac728292640fe3e8076f27b5c5f2ab8ce",
-      "2-delegation.png": "e82fba6270bd968736e7f6b8d06041468e9489d8d1b7bb66013474a98198abc6",
-      "3-readOnly.png": "290c2789a495da467ce817f82c84873d4afafd9ee54508d4f313bd6859a0f95b",
-      "4-killswitch.png": "bb79d395f4825d61fd78fb2529cb908f6c00461c76ad2175e7a829ac4bc1fd70"
+      "1-detection.png": "62fc34675180686dfaab3aaa783f839a0415669ebac44c424ecd20d66ac3af6c",
+      "2-delegation.png": "e80bead5654582a72bb1cc2d4ee5a72959265ece5d89b227faf0a97881a8f9bb",
+      "3-readOnly.png": "a751f6359a4fe21b9e8dfb01a6963907fc4439283ae96dbef1624067cfabb1b8",
+      "4-killswitch.png": "ade535cacd92bf85ca7e0273da06ec5ff5914ff0d156b0fe22c01806384b6a25"
     }
   }
 }

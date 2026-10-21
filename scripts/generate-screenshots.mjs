@@ -7,6 +7,12 @@
  * slides and promo tiles from docs/screenshots/generate.html, a page that
  * embeds these captures. Both scripts record the checksums of the images they
  * write in docs/screenshots/checksums.json (scripts/screenshot-checksums.mjs).
+ *
+ * The page the captures are taken from has no chrome.* APIs, so the popup
+ * script renders nothing in it and each capture stages its state in the static
+ * HTML. The kill switch key in the header and the Pause the guard panel, which
+ * the popup fills at run time, are drawn for each capture by
+ * scripts/screenshot-popup-parts.mjs.
  */
 
 import { createServer } from 'http';
@@ -15,11 +21,16 @@ import { join, extname } from 'path';
 import { fileURLToPath } from 'url';
 import { dirname } from 'path';
 import { checksumsOf, recordChecksums } from './screenshot-checksums.mjs';
+import { drawPopupRuntimeParts } from './screenshot-popup-parts.mjs';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 const DIST_DIR = join(__dirname, '..', 'dist');
 const SCREENSHOTS_DIR = join(__dirname, '..', 'docs', 'screenshots');
+// The key the captures show beside the Kill Switch button: the one the
+// manifest suggests for the kill switch command on Windows and Linux.
+const KILL_SWITCH_KEY = JSON.parse(readFileSync(join(__dirname, '..', 'manifest.json'), 'utf-8'))
+  .commands['kill-switch'].suggested_key.default;
 
 const MIME_TYPES = {
   '.html': 'text/html',
@@ -65,7 +76,10 @@ async function main() {
   const POPUP_HEIGHT = 500;
   const captured = [];
 
-  async function screenshot(name, setupFn) {
+  // `popupState` names the state of the parts the popup fills at run time:
+  // `currentHost`, the hostname of the page in the active tab, and whether the
+  // kill switch is on.
+  async function screenshot(name, setupFn, popupState) {
     const page = await browser.newPage();
     await page.setViewport({ width: POPUP_WIDTH, height: POPUP_HEIGHT, deviceScaleFactor: 2 });
     await page.goto(baseUrl, { waitUntil: 'networkidle0' });
@@ -81,6 +95,11 @@ async function main() {
     // Remove the JS-driven popup behavior (it tries to call chrome.* APIs)
     // and set up the desired state
     await page.evaluate(setupFn);
+
+    // The popup fills the kill switch key in the header and the Pause the
+    // guard panel at run time from chrome.* APIs, which this page does not
+    // have. Draw them as the popup does for the staged state.
+    await page.evaluate(drawPopupRuntimeParts, { shortcut: KILL_SWITCH_KEY, ...popupState });
 
     // The footer names the version of the build. Hide it so that a capture
     // does not show a version number the next release makes out of date.
@@ -153,7 +172,7 @@ async function main() {
         </div>
       </div>
     `;
-  });
+  }, { currentHost: 'app.example.com' });
 
   // Screenshot 2: Delegation - Wizard showing presets
   await screenshot('2-delegation', () => {
@@ -190,7 +209,7 @@ async function main() {
         </div>
       </div>
     `;
-  });
+  }, { currentHost: 'app.example.com' });
 
   // Screenshot 3: Read-Only config active
   await screenshot('3-readOnly', () => {
@@ -244,7 +263,7 @@ async function main() {
         </div>
       </div>
     `;
-  });
+  }, { currentHost: 'app.example.com' });
 
   // Screenshot 4: Kill Switch activated
   await screenshot('4-killswitch', () => {
@@ -304,7 +323,7 @@ async function main() {
         <button class="btn btn-primary btn-sm" disabled>Configure</button>
       </div>
     `;
-  });
+  }, { currentHost: 'app.example.com', killSwitchActive: true });
 
   await browser.close();
   server.close();
