@@ -12,9 +12,11 @@
  * script renders nothing in it and each capture stages its state in the static
  * HTML. The kill switch key in the header and the Pause the guard panel, which
  * the popup fills at run time, are drawn for each capture by
- * scripts/screenshot-popup-parts.mjs. The timeline of the kill switch capture
- * is drawn by scripts/screenshot-timeline.mjs, as the popup draws the sessions
- * the kill switch leaves.
+ * scripts/screenshot-popup-parts.mjs. The timelines of the detection and kill
+ * switch captures are drawn by scripts/screenshot-timeline.mjs, as the popup
+ * draws the stored sessions. The detection panel, the kill switch button and
+ * the Network Activity panel are drawn for each capture by
+ * scripts/screenshot-panels.mjs.
  */
 
 import { createServer } from 'http';
@@ -25,6 +27,7 @@ import { dirname } from 'path';
 import { checksumsOf, recordChecksums } from './screenshot-checksums.mjs';
 import { drawPopupRuntimeParts } from './screenshot-popup-parts.mjs';
 import { drawTimeline, KILL_SWITCH_SESSIONS } from './screenshot-timeline.mjs';
+import { DETECTED_AGENTS, DETECTION_SESSIONS, drawPopupPanels } from './screenshot-panels.mjs';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -36,7 +39,12 @@ const KILL_SWITCH_KEY = JSON.parse(readFileSync(join(__dirname, '..', 'manifest.
   .commands['kill-switch'].suggested_key.default;
 // The stored sessions the timeline of a capture shows, drawn as the popup
 // draws them.
-const TIMELINE_SESSIONS = { '4-killswitch': KILL_SWITCH_SESSIONS };
+const TIMELINE_SESSIONS = { '1-detection': DETECTION_SESSIONS, '4-killswitch': KILL_SWITCH_SESSIONS };
+// The agents the popup lists as detected in a capture. A capture not named
+// here has none.
+const DETECTED = { '1-detection': DETECTED_AGENTS };
+// The captures taken while a delegation is active.
+const DELEGATION_ACTIVE = ['3-readOnly'];
 
 // Without a build the server answers 404 for the popup page, and the first
 // capture's setup function fails on that page with a TypeError.
@@ -101,6 +109,12 @@ async function main() {
     await page.emulateTimezone('UTC');
     const cdp = await page.createCDPSession();
     await cdp.send('Emulation.setLocaleOverride', { locale: 'en-US' });
+    // A detection card says what the version of Chrome the popup runs in does
+    // about remote debugging, read from navigator.userAgent, where
+    // chrome-headless-shell names itself HeadlessChrome. Report the same
+    // version under the name Chrome reports, as the popup reads it in Chrome.
+    const userAgent = await page.evaluate(() => navigator.userAgent);
+    await cdp.send('Emulation.setUserAgentOverride', { userAgent: userAgent.replace('HeadlessChrome/', 'Chrome/') });
     await page.goto(baseUrl, { waitUntil: 'networkidle0' });
 
     // Wait for font to load
@@ -125,6 +139,15 @@ async function main() {
     // have. Draw them as the popup does for the staged state.
     await page.evaluate(drawPopupRuntimeParts, { shortcut: KILL_SWITCH_KEY, ...popupState });
 
+    // The popup fills the detection panel, sets the kill switch button and
+    // adds the Network Activity panel at run time from the state the
+    // background reports. Draw them as the popup does for the staged state.
+    await page.evaluate(drawPopupPanels, {
+      detectedAgents: DETECTED[name] ?? [],
+      delegationActive: DELEGATION_ACTIVE.includes(name),
+      killSwitchActive: popupState.killSwitchActive === true,
+    });
+
     // The footer names the version of the build. Hide it so that a capture
     // does not show a version number the next release makes out of date.
     await page.evaluate(() => document.getElementById('footer').classList.add('hidden'));
@@ -146,56 +169,9 @@ async function main() {
     indicator.className = 'status-badge status-detected';
     document.getElementById('status-text').textContent = '2 Agent(s) Detected';
 
-    // Enable kill switch
-    document.getElementById('kill-switch-btn').disabled = false;
-
-    // Add detection cards
-    const content = document.getElementById('detection-content');
-    content.innerHTML = `
-      <div class="detection-card" style="margin-bottom: 6px;">
-        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 2px;">
-          <strong style="color: var(--color-warning);">Playwright</strong>
-          <span class="severity-badge severity-badge-high">95%</span>
-        </div>
-        <div style="font-size: 12px; color: var(--text-secondary); font-weight: 500;">
-          14:32:18
-          <span class="method-tag">CDP</span>
-          <span class="method-tag">page.goto</span>
-          <span class="method-tag">Behavioral</span>
-        </div>
-      </div>
-      <div class="detection-card">
-        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 2px;">
-          <strong style="color: var(--color-warning);">Selenium</strong>
-          <span class="severity-badge severity-badge-medium">78%</span>
-        </div>
-        <div style="font-size: 12px; color: var(--text-secondary); font-weight: 500;">
-          14:31:05
-          <span class="method-tag">WebDriver</span>
-          <span class="method-tag">navigator.webdriver</span>
-        </div>
-      </div>
-    `;
-
-    // Show timeline with some events
-    const timeline = document.getElementById('timeline-panel');
-    timeline.classList.remove('hidden');
-    document.getElementById('timeline-list').innerHTML = `
-      <div class="event-item">
-        <div class="event-indicator event-indicator-info" style="width:8px;height:8px;border-radius:50%;margin-top:4px;flex-shrink:0;background-color:var(--color-info);"></div>
-        <div style="flex:1;min-width:0;">
-          <div style="font-size:13px;font-weight:500;">CDP connection detected on tab</div>
-          <div style="font-size:11px;color:var(--text-secondary);font-weight:500;">14:32:18 | app.example.com</div>
-        </div>
-      </div>
-      <div class="event-item">
-        <div class="event-indicator event-indicator-info" style="width:8px;height:8px;border-radius:50%;margin-top:4px;flex-shrink:0;background-color:var(--color-info);"></div>
-        <div style="flex:1;min-width:0;">
-          <div style="font-size:13px;font-weight:500;">WebDriver flag set on navigator</div>
-          <div style="font-size:11px;color:var(--text-secondary);font-weight:500;">14:31:05 | test.example.org</div>
-        </div>
-      </div>
-    `;
+    // The detection cards and the kill switch button are drawn from
+    // DETECTED, and the timeline from TIMELINE_SESSIONS, the sessions of the
+    // two detected agents.
   }, { currentHost: 'app.example.com' });
 
   // Screenshot 2: Delegation - Wizard showing presets
@@ -296,18 +272,10 @@ async function main() {
     indicator.className = 'status-badge status-killed';
     document.getElementById('status-text').textContent = 'Killed';
 
-    // Disable kill switch, change text
-    const btn = document.getElementById('kill-switch-btn');
-    btn.disabled = true;
-    btn.textContent = 'Killed';
-
-    // Clear detection
-    document.getElementById('detection-content').innerHTML = `
-      <p class="placeholder-text-inline">No agents detected</p>
-    `;
-
-    // The timeline is drawn from TIMELINE_SESSIONS, the sessions the kill
-    // switch ended.
+    // The kill switch button, which the popup labels Resume Monitoring while
+    // the kill switch is on, and the empty detection panel are drawn by
+    // drawPopupPanels. The timeline is drawn from TIMELINE_SESSIONS, the
+    // sessions the kill switch ended.
 
     // Delegation cleared
     document.getElementById('delegation-content').innerHTML = `
