@@ -8,7 +8,7 @@
  * against that page: the script stopped with "TypeError: Cannot set
  * properties of null (setting 'className')" and a stack trace.
  *
- * Each case runs a copy of the script, of the three scripts it imports and of
+ * Each case runs a copy of the script, of the four scripts it imports and of
  * manifest.json, which it reads, in a temporary directory laid out like the
  * repository whose node_modules/puppeteer is a stand-in. The stand-in browser
  * prints a line when it is launched and keeps the process running until it is
@@ -31,6 +31,7 @@ const WAIT_MS = 10_000;
 const COPIED = [
   'scripts/generate-screenshots.mjs',
   'scripts/screenshot-checksums.mjs',
+  'scripts/screenshot-panels.mjs',
   'scripts/screenshot-popup-parts.mjs',
   'scripts/screenshot-timeline.mjs',
   'manifest.json',
