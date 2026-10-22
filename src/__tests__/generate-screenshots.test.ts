@@ -15,8 +15,12 @@
  * closed. Its page requests its address from the script's server and prints
  * the status of the answer. When the status is 200, getElementById finds an
  * element for each id; on the 404 page it finds nothing, as it does in
- * Chrome. The time zone and locale the script sets for the page are accepted
- * and not applied. Each screenshot writes a file.
+ * Chrome. The page's navigator reports the user agent of
+ * chrome-headless-shell 145 whatever the version of Node: Node 20, which CI
+ * runs, has no navigator, and later versions have one that names Node. The
+ * user agent the script sets for the page is printed. The time zone and
+ * locale the script sets for the page are accepted and not applied. Each
+ * screenshot writes a file.
  */
 import { describe, it, expect, afterEach } from 'vitest';
 import { spawnSync } from 'child_process';
@@ -38,6 +42,13 @@ const COPIED = [
 ];
 const LAUNCHED = 'stand-in browser launched';
 const LOADED = 'stand-in page loaded with status';
+const USER_AGENT_SET = 'stand-in page user agent set to';
+// The user agent chrome-headless-shell 145 reports, and the one the script
+// sets for the page: the same version under the name Chrome uses.
+const HEADLESS_USER_AGENT =
+  'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/145.0.0.0 Safari/537.36';
+const CHROME_USER_AGENT =
+  'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/145.0.0.0 Safari/537.36';
 const NOT_BUILT = 'dist/popup/index.html not found. Run `npm run build` first.\n';
 const CAPTURES = ['1-detection.png', '2-delegation.png', '3-readOnly.png', '4-killswitch.png'];
 
@@ -64,7 +75,11 @@ export async function launch() {
         async setViewport() {},
         async emulateTimezone() {},
         async createCDPSession() {
-          return { async send() {} };
+          return {
+            async send(method, params) {
+              if (method === 'Emulation.setUserAgentOverride') console.log('${USER_AGENT_SET} ' + params.userAgent);
+            },
+          };
         },
         async goto(url) {
           const response = await fetch(url);
@@ -79,6 +94,13 @@ export async function launch() {
             getElementById: () => (status === 200 ? element() : null),
             createElement: () => element(),
           };
+          // Node 20 has no navigator, and the one of later versions names Node
+          // and cannot be assigned to, so it is replaced.
+          Object.defineProperty(globalThis, 'navigator', {
+            value: { userAgent: '${HEADLESS_USER_AGENT}' },
+            configurable: true,
+            writable: true,
+          });
           return fn(arg);
         },
         async screenshot({ path }) {
@@ -160,6 +182,11 @@ describe('scripts/generate-screenshots.mjs', () => {
     expect(run.stderr).toBe('');
     expect(run.stdout).toContain(LAUNCHED);
     expect(run.stdout.split('\n').filter((line) => line === `${LOADED} 200`)).toHaveLength(CAPTURES.length);
+    // The script reads the user agent from the page's navigator, not from
+    // Node's, on every version of Node.
+    expect(run.stdout.split('\n').filter((line) => line === `${USER_AGENT_SET} ${CHROME_USER_AGENT}`)).toHaveLength(
+      CAPTURES.length,
+    );
     expect(run.stdout).toContain('All screenshots generated.');
     expect(readdirSync(run.dir).sort()).toEqual([...CAPTURES, 'checksums.json'].sort());
   }, WAIT_MS * 2);
