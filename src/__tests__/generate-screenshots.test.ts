@@ -46,9 +46,9 @@ const USER_AGENT_SET = 'stand-in page user agent set to';
 // The user agent chrome-headless-shell 145 reports, and the one the script
 // sets for the page: the same version under the name Chrome uses.
 const HEADLESS_USER_AGENT =
-  'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/145.0.0.0 Safari/537.36';
+  'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/145.0.7632.77 Safari/537.36';
 const CHROME_USER_AGENT =
-  'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/145.0.0.0 Safari/537.36';
+  'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/145.0.7632.77 Safari/537.36';
 const NOT_BUILT = 'dist/popup/index.html not found. Run `npm run build` first.\n';
 const CAPTURES = ['1-detection.png', '2-delegation.png', '3-readOnly.png', '4-killswitch.png'];
 
