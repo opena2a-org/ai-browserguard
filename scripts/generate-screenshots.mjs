@@ -20,7 +20,7 @@
  */
 
 import { createServer } from 'http';
-import { readFileSync, existsSync } from 'fs';
+import { readFileSync, existsSync, statSync } from 'fs';
 import { join, extname } from 'path';
 import { fileURLToPath } from 'url';
 import { dirname } from 'path';
@@ -28,6 +28,7 @@ import { checksumsOf, recordChecksums } from './screenshot-checksums.mjs';
 import { drawPopupRuntimeParts } from './screenshot-popup-parts.mjs';
 import { drawTimeline, KILL_SWITCH_SESSIONS } from './screenshot-timeline.mjs';
 import { DETECTED_AGENTS, DETECTION_SESSIONS, drawPopupPanels } from './screenshot-panels.mjs';
+import { resolveStaticPath } from './static-path.mjs';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -61,12 +62,13 @@ const MIME_TYPES = {
   '.png': 'image/png',
 };
 
-// Simple static file server for dist/
+// Simple static file server for dist/. A request path that resolves outside
+// dist/, such as /../package.json, or to a directory answers 404.
 function startServer() {
   return new Promise((resolve) => {
     const server = createServer((req, res) => {
-      const filePath = join(DIST_DIR, req.url === '/' ? 'popup/index.html' : req.url);
-      if (!existsSync(filePath)) {
+      const filePath = resolveStaticPath(DIST_DIR, req.url === '/' ? '/popup/index.html' : req.url);
+      if (!filePath || !existsSync(filePath) || statSync(filePath).isDirectory()) {
         res.writeHead(404);
         res.end('Not found');
         return;
