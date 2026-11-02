@@ -27,8 +27,11 @@ Users installing a security extension expect it to protect them, not to
 report their browsing behavior to a remote server. Extensions that phone
 home erode user trust and face scrutiny during Chrome Web Store review.
 
-AI Browser Guard has no server-side component. There is no account
-system, no subscription validation, and no cloud features.
+AI Browser Guard has no server-side component. Detection, delegation rule
+evaluation and session logging run in the browser, and the extension keeps
+its settings, rules and session logs in `chrome.storage.local` on the
+user's machine. It holds no user identity, validates no subscription, and
+runs no cloud features.
 
 ## Decision
 
