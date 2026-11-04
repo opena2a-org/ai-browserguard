@@ -73,6 +73,28 @@ function digestOf(files: Map<string, Buffer>): string {
   return sha256(paths.map((path) => `${sha256(files.get(path)!)}  ${path}\n`).join(''));
 }
 
+// The UTC time that MS-DOS time and date fields hold, as an ISO string.
+function dosTimeIso(time: number, date: number): string {
+  return new Date(Date.UTC(
+    1980 + (date >> 9), ((date >> 5) & 0x0f) - 1, date & 0x1f,
+    time >> 11, (time >> 5) & 0x3f, (time & 0x1f) * 2,
+  )).toISOString();
+}
+
+// The distinct times the entries of an archive carry, in their central and
+// local headers alike.
+function carriedTimes(zip: Buffer): string[] {
+  return [...new Set(readZip(zip).entries.flatMap(({ time, date, local }) => [
+    dosTimeIso(time, date), dosTimeIso(local.time, local.date),
+  ]))];
+}
+
+// The time on the build's `entry time` line, and what follows it in parentheses.
+function printedEntryTime(stdout: string): [string, string] | null {
+  const match = /^ {2}entry time +(\S+) \((.*)\)$/m.exec(stdout);
+  return match ? [match[1], match[2]] : null;
+}
+
 function filesUnder(dir: string, prefix = '', found = new Map<string, Buffer>()): Map<string, Buffer> {
   for (const name of readdirSync(dir)) {
     const file = join(dir, name);
@@ -152,6 +174,28 @@ describe.skipIf(!POSIX)('npm run build packs dist.zip', () => {
       .toEqual([]);
   });
 
+  it('prints the entry time the entries of dist.zip carry, and the source date when the two differ', () => {
+    const cases = [
+      // An odd second: a zip entry holds its time at two-second precision.
+      { epoch: '1792911311', carried: '2026-10-25T06:55:10.000Z', note: 'SOURCE_DATE_EPOCH, 2026-10-25T06:55:11.000Z, rounded down to the two-second precision of a zip entry' },
+      { epoch: '1792911310', carried: '2026-10-25T06:55:10.000Z', note: 'SOURCE_DATE_EPOCH' },
+      // Before 1980 and after 2107: outside the range a zip entry can hold.
+      { epoch: '0', carried: '1980-01-01T00:00:00.000Z', note: 'SOURCE_DATE_EPOCH, 1970-01-01T00:00:00.000Z, clamped to the earliest time a zip entry can carry' },
+      { epoch: '7258118400', carried: '2107-12-31T23:59:58.000Z', note: 'SOURCE_DATE_EPOCH, 2200-01-01T00:00:00.000Z, clamped to the latest time a zip entry can carry' },
+      // The copy is not a git checkout, so with no SOURCE_DATE_EPOCH there is no commit time.
+      { epoch: '', carried: '1980-01-01T00:00:00.000Z', note: 'no commit found: the earliest time a zip entry can carry' },
+    ];
+    for (const { epoch, carried, note } of cases) {
+      const { root, PATH } = packingCopy();
+      const build = runBuild(root, { PATH, STANDIN_TOUCH: '200101010000', SOURCE_DATE_EPOCH: epoch });
+      expect(build.status, build.output).toBe(0);
+      expect(carriedTimes(readFileSync(join(root, 'dist.zip'))), `SOURCE_DATE_EPOCH=${epoch}: the times the entries carry`)
+        .toEqual([carried]);
+      expect(printedEntryTime(build.stdout), `SOURCE_DATE_EPOCH=${epoch}: the entry time line of\n${build.stdout}`)
+        .toEqual([carried, note]);
+    }
+  });
+
   it.skipIf(!HAS_GIT)('takes the entry time from the commit time of HEAD when SOURCE_DATE_EPOCH is not set', () => {
     const { root, PATH } = packingCopy();
     const env = {
@@ -172,6 +216,11 @@ describe.skipIf(!POSIX)('npm run build packs dist.zip', () => {
     const times = readZip(readFileSync(join(root, 'dist.zip'))).entries.map(({ time, date }) => [time, date]);
     expect(times.length).toBeGreaterThan(0);
     expect(times.filter(([time, date]) => time !== DOS_TIME || date !== DOS_DATE), 'entries not carrying the commit time').toEqual([]);
+    // The commit time is an odd second; the entries carry the second before it.
+    expect(printedEntryTime(build.stdout), build.stdout).toEqual([
+      dosTimeIso(DOS_TIME, DOS_DATE),
+      'the commit time of HEAD, 2026-10-25T06:55:11.000Z, rounded down to the two-second precision of a zip entry',
+    ]);
   });
 
   it.skipIf(RUNS_AS_ROOT)('exits non-zero, with no dist.zip, when a file of dist/ cannot be read', () => {

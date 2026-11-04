@@ -15,7 +15,7 @@ import { rmSync, existsSync, mkdirSync, copyFileSync, readFileSync, writeFileSyn
 import { resolve, dirname } from 'path';
 import { fileURLToPath } from 'url';
 import { contentDigest } from './content-digest.mjs';
-import { packDirectory, sourceDate } from './deterministic-zip.mjs';
+import { EARLIEST_ZIP_DATE, LATEST_ZIP_DATE, packDirectory, sourceDate } from './deterministic-zip.mjs';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -114,7 +114,8 @@ if (existsSync(popupHtmlPath)) {
 // Package the fresh build into dist.zip for Web Store upload. The previous
 // dist.zip (if any) was already moved into dist-archive/ above. The entries
 // are dist/'s regular files in bytewise path order, stored, each carrying the
-// commit time, so the same dist/ at the same commit gives the same bytes.
+// commit time (or SOURCE_DATE_EPOCH) as a zip entry holds it, so the same
+// dist/ at the same commit gives the same bytes.
 // A package that cannot be written stops the build with exit 1: the build
 // never ends successfully without a dist.zip to upload.
 const SOURCE_DATE_NAMES = {
@@ -122,11 +123,23 @@ const SOURCE_DATE_NAMES = {
   commit: 'the commit time of HEAD',
   none: 'no commit found: the earliest time a zip entry can carry',
 };
+
+// The entry time line names the time the entries carry. When the source
+// date is not that time, the line also names the source date and why the
+// two differ.
+function sourceDateNote(date, entryDate) {
+  if (date.getTime() === entryDate.getTime()) return '';
+  let why = 'rounded down to the two-second precision of a zip entry';
+  if (date.getTime() < EARLIEST_ZIP_DATE.getTime()) why = 'clamped to the earliest time a zip entry can carry';
+  else if (date.getTime() > LATEST_ZIP_DATE.getTime()) why = 'clamped to the latest time a zip entry can carry';
+  return `, ${date.toISOString()}, ${why}`;
+}
+
 try {
   const { date, source } = sourceDate(root);
   const packed = packDirectory(resolve(root, 'dist'), resolve(root, 'dist.zip'), date);
   console.log(`Packaged dist/ -> dist.zip: ${packed.files} files, ${packed.bytes} bytes`);
-  console.log(`  entry time               ${date.toISOString()} (${SOURCE_DATE_NAMES[source]})`);
+  console.log(`  entry time               ${packed.entryDate.toISOString()} (${SOURCE_DATE_NAMES[source]}${sourceDateNote(date, packed.entryDate)})`);
   console.log(`  dist.zip sha256          ${packed.sha256}`);
   console.log(`  content digest of dist/  ${contentDigest(resolve(root, 'dist'))}`);
 } catch (err) {
