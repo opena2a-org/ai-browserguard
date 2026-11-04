@@ -5,12 +5,17 @@
  * Content scripts need IIFE format (no ES module imports).
  * Background and popup can use ES modules.
  * Copies manifest.json (with corrected paths) and icons into dist/.
+ * Packs dist/ into dist.zip with scripts/deterministic-zip.mjs, so the same
+ * dist/ at the same commit gives the same dist.zip, and exits 1 when it
+ * cannot.
  */
 
 import { execSync, spawnSync } from 'child_process';
 import { rmSync, existsSync, mkdirSync, copyFileSync, readFileSync, writeFileSync, renameSync } from 'fs';
 import { resolve, dirname } from 'path';
 import { fileURLToPath } from 'url';
+import { contentDigest } from './content-digest.mjs';
+import { packDirectory, sourceDate } from './deterministic-zip.mjs';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -41,7 +46,8 @@ mkdirSync(archiveDir, { recursive: true });
 // Run `zip` via spawnSync with array args (never a shell string), so paths and
 // version strings can never be interpreted as shell tokens. Returns true on
 // success. The inputs here are repo-controlled, but array args keep this
-// injection-proof regardless of how the paths are derived.
+// injection-proof regardless of how the paths are derived. Used only for the
+// local archive below; dist.zip itself is written by the deterministic packer.
 function zipDir(cwd, outFile) {
   const result = spawnSync('zip', ['-qr', outFile, '.'], { cwd });
   if (result.error) throw result.error;
@@ -106,12 +112,27 @@ if (existsSync(popupHtmlPath)) {
 }
 
 // Package the fresh build into dist.zip for Web Store upload. The previous
-// dist.zip (if any) was already moved into dist-archive/ above.
+// dist.zip (if any) was already moved into dist-archive/ above. The entries
+// are dist/'s regular files in bytewise path order, stored, each carrying the
+// commit time, so the same dist/ at the same commit gives the same bytes.
+// A package that cannot be written stops the build with exit 1: the build
+// never ends successfully without a dist.zip to upload.
+const SOURCE_DATE_NAMES = {
+  SOURCE_DATE_EPOCH: 'SOURCE_DATE_EPOCH',
+  commit: 'the commit time of HEAD',
+  none: 'no commit found: the earliest time a zip entry can carry',
+};
 try {
-  zipDir(resolve(root, 'dist'), resolve(root, 'dist.zip'));
-  console.log('Packaged dist/ -> dist.zip');
+  const { date, source } = sourceDate(root);
+  const packed = packDirectory(resolve(root, 'dist'), resolve(root, 'dist.zip'), date);
+  console.log(`Packaged dist/ -> dist.zip: ${packed.files} files, ${packed.bytes} bytes`);
+  console.log(`  entry time               ${date.toISOString()} (${SOURCE_DATE_NAMES[source]})`);
+  console.log(`  dist.zip sha256          ${packed.sha256}`);
+  console.log(`  content digest of dist/  ${contentDigest(resolve(root, 'dist'))}`);
 } catch (err) {
-  console.warn(`Could not package dist.zip: ${err.message}`);
+  console.error(`\nCould not package dist.zip: ${err.message}`);
+  console.error('dist/ is built, but there is no dist.zip to upload. Fix the cause above and run npm run build again.');
+  process.exit(1);
 }
 
 console.log('\nBuild complete. Load dist/ in chrome://extensions');

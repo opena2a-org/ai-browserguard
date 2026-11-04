@@ -6,6 +6,7 @@
   "scripts": {
     "dev": "vite build --watch --mode development",
     "build": "tsc --noEmit && node scripts/build.js",
+    "digest": "node scripts/content-digest.mjs dist",
     "test": "vitest run",
     "test:watch": "vitest",
     "lint": "tsc --noEmit --strict && node scripts/check-docs-prose.mjs",
