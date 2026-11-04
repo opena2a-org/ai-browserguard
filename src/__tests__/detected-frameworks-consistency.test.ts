@@ -105,6 +105,28 @@ describe('Detected Frameworks page', () => {
   });
 });
 
+/**
+ * The README, the enforcement scope page and the v0.5.0 store text said
+ * detection works against every framework they list, and STATUS.md called the
+ * detection surface, OpenAI Operator included, mature. No harness drives
+ * Operator, and Computer Use has not been run in Chrome with the extension
+ * loaded. These texts point to the Detected Frameworks page instead.
+ */
+describe('texts that summarise detection coverage', () => {
+  for (const path of ['README.md', 'docs/enforcement-scope.md', 'docs/store-description-v0.5.0.txt']) {
+    it(`${path} says not every method has been run against the real framework`, () => {
+      const text = read(path);
+      expect(text).not.toMatch(/\bworks?\s+(against|for)\s+every\s+framework/i);
+      expect(text).toMatch(/not every method has been run against the real framework/i);
+      expect(text).toContain('detected-frameworks.md');
+    });
+  }
+
+  it('STATUS.md does not call the OpenAI Operator check mature', () => {
+    expect(read('STATUS.md')).not.toMatch(/OpenAI Operator\)\s+is\s+mature/i);
+  });
+});
+
 describe('detectOpenAIOperator() comments', () => {
   it('do not describe Playwright detection as part of the Operator check', () => {
     const { docblock, inline } = operatorComments();
