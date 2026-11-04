@@ -7,7 +7,8 @@
  *   the directory is refused, never followed.
  * - Every entry carries one time, the source date (sourceDate below:
  *   SOURCE_DATE_EPOCH when it is set, else the commit time of HEAD), written
- *   as UTC at the two-second precision of the zip format.
+ *   as UTC at the two-second precision of the zip format and clamped to the
+ *   range it can hold, 1980 to 2107 (zipEntryDate below).
  * - Entries are stored without compression. Deflate output depends on the
  *   zlib build: the same file deflates to different bytes under the zlib
  *   bundled with Node and under a system zlib. Stored entries keep the
@@ -38,6 +39,9 @@ const DOS_LATEST = Date.UTC(2107, 11, 31, 23, 59, 58);
 /** The earliest time a zip entry can carry: 1980-01-01T00:00:00Z. */
 export const EARLIEST_ZIP_DATE = new Date(DOS_EARLIEST);
 
+/** The latest time a zip entry can carry: 2107-12-31T23:59:58Z. */
+export const LATEST_ZIP_DATE = new Date(DOS_LATEST);
+
 const CRC_TABLE = (() => {
   const table = new Uint32Array(256);
   for (let n = 0; n < 256; n++) {
@@ -56,13 +60,23 @@ export function crc32(data) {
 }
 
 /**
- * The MS-DOS time and date fields for date, read in UTC so the machine's
- * time zone never changes them. Dates outside 1980 to 2107 are clamped.
+ * The time a zip entry written for date carries: date clamped to
+ * EARLIEST_ZIP_DATE and LATEST_ZIP_DATE, then rounded down to an even
+ * second, the precision of the MS-DOS time field.
  */
-export function dosDateTime(date) {
+export function zipEntryDate(date) {
   const ms = date instanceof Date ? date.getTime() : Number.NaN;
   if (!Number.isFinite(ms)) throw new Error('the zip entry time is not a valid date');
-  const d = new Date(Math.min(Math.max(ms, DOS_EARLIEST), DOS_LATEST));
+  const clamped = Math.min(Math.max(ms, DOS_EARLIEST), DOS_LATEST);
+  return new Date(clamped - (clamped % 2000));
+}
+
+/**
+ * The MS-DOS time and date fields for date, which hold zipEntryDate(date),
+ * read in UTC so the machine's time zone never changes them.
+ */
+export function dosDateTime(date) {
+  const d = zipEntryDate(date);
   return {
     time: (d.getUTCHours() << 11) | (d.getUTCMinutes() << 5) | Math.floor(d.getUTCSeconds() / 2),
     date: ((d.getUTCFullYear() - 1980) << 9) | ((d.getUTCMonth() + 1) << 5) | d.getUTCDate(),
@@ -198,9 +212,10 @@ export function sourceDate(root, env = process.env) {
 
 /**
  * Packs the regular files under dir into outFile, every entry carrying the
- * time date. The archive is written next to outFile and renamed into place,
- * so a failure never leaves a partial outFile behind. Returns the number of
- * files, the archive size in bytes and its sha256.
+ * time date as a zip entry holds it. The archive is written next to outFile
+ * and renamed into place, so a failure never leaves a partial outFile
+ * behind. Returns the number of files, the archive size in bytes, its
+ * sha256, and entryDate, the time its entries carry (zipEntryDate(date)).
  */
 export function packDirectory(dir, outFile, date) {
   const files = listFiles(dir);
@@ -213,5 +228,10 @@ export function packDirectory(dir, outFile, date) {
   } finally {
     rmSync(partial, { force: true });
   }
-  return { files: files.length, bytes: zip.length, sha256: createHash('sha256').update(zip).digest('hex') };
+  return {
+    files: files.length,
+    bytes: zip.length,
+    sha256: createHash('sha256').update(zip).digest('hex'),
+    entryDate: zipEntryDate(date),
+  };
 }

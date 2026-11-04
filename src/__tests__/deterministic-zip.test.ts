@@ -21,7 +21,7 @@ import { tmpdir } from 'os';
 import { dirname, join } from 'path';
 import { fileURLToPath, pathToFileURL } from 'url';
 import {
-  EARLIEST_ZIP_DATE, crc32, dosDateTime, packDirectory, sourceDate, zipFiles,
+  EARLIEST_ZIP_DATE, LATEST_ZIP_DATE, crc32, dosDateTime, packDirectory, sourceDate, zipEntryDate, zipFiles,
 } from '../../scripts/deterministic-zip.mjs';
 import { readZip } from './zip-reader';
 
@@ -55,6 +55,26 @@ function bitwiseCrc32(data: Uint8Array): number {
   }
   return (crc ^ 0xffffffff) >>> 0;
 }
+
+// The UTC time that MS-DOS time and date fields hold, as an ISO string.
+function dosTimeIso(time: number, date: number): string {
+  return new Date(Date.UTC(
+    1980 + (date >> 9), ((date >> 5) & 0x0f) - 1, date & 0x1f,
+    time >> 11, (time >> 5) & 0x3f, (time & 0x1f) * 2,
+  )).toISOString();
+}
+
+// Source dates, and the time a zip entry written for each one carries.
+const ENTRY_DATES: [Date, string][] = [
+  [SOURCE_DATE, '2026-10-25T06:55:10.000Z'], // an odd second
+  [new Date(Date.UTC(2026, 9, 25, 6, 55, 10)), '2026-10-25T06:55:10.000Z'],
+  [new Date(Date.UTC(2026, 9, 25, 6, 55, 10, 999)), '2026-10-25T06:55:10.000Z'],
+  [new Date(0), '1980-01-01T00:00:00.000Z'],
+  [new Date(Date.UTC(1979, 11, 31, 23, 59, 59)), '1980-01-01T00:00:00.000Z'],
+  [new Date(Date.UTC(1980, 0, 1, 0, 0, 1)), '1980-01-01T00:00:00.000Z'],
+  [new Date(Date.UTC(2107, 11, 31, 23, 59, 59)), '2107-12-31T23:59:58.000Z'],
+  [new Date(Date.UTC(2200, 0, 1)), '2107-12-31T23:59:58.000Z'],
+];
 
 const dirs: string[] = [];
 
@@ -182,6 +202,29 @@ describe('deterministic dist.zip', () => {
       date: ((2107 - 1980) << 9) | (12 << 5) | 31,
     });
     expect(() => dosDateTime(new Date(Number.NaN))).toThrow(/not a valid date/);
+  });
+
+  it('gives the time a zip entry carries: the date clamped to 1980 to 2107 and rounded down to an even second', () => {
+    expect(EARLIEST_ZIP_DATE.toISOString()).toBe('1980-01-01T00:00:00.000Z');
+    expect(LATEST_ZIP_DATE.toISOString()).toBe('2107-12-31T23:59:58.000Z');
+    for (const [date, carried] of ENTRY_DATES) {
+      expect(zipEntryDate(date).toISOString(), date.toISOString()).toBe(carried);
+      const { time, date: day } = dosDateTime(date);
+      expect(dosTimeIso(time, day), `the MS-DOS fields for ${date.toISOString()}`).toBe(carried);
+    }
+    expect(() => zipEntryDate(new Date(Number.NaN))).toThrow(/not a valid date/);
+  });
+
+  it('reports the time the entries it packed carry', () => {
+    const dir = writeTree(FILES);
+    for (const [date, carried] of ENTRY_DATES) {
+      const out = join(tempDir(), 'dist.zip');
+      expect(packDirectory(dir, out, date).entryDate.toISOString(), date.toISOString()).toBe(carried);
+      const times = new Set(readZip(readFileSync(out)).entries.flatMap(({ time, date: day, local }) => [
+        dosTimeIso(time, day), dosTimeIso(local.time, local.date),
+      ]));
+      expect([...times], `the entries packed for ${date.toISOString()}`).toEqual([carried]);
+    }
   });
 
   it('refuses a path a zip entry should not hold, and a path listed twice', () => {
