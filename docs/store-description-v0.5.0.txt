@@ -1,3 +1,5 @@
+Note (2026-11-09): This is the store description of AI Browser Guard 0.5.0, kept as a record of that release. It describes 0.5.0, not the current extension; the text for the current release is docs/chrome-web-store-description.md.
+
 AI Browser Guard detects when AI automation frameworks take control of your browser, shows you what they are doing, and gives you controls to respond.
 
 WHAT IT DOES
@@ -33,7 +35,7 @@ The extension also offers three optional community-intelligence features that ar
 - AIM identity lookup and registry trust lookup - when an agent is detected, look up a trust score for that agent type. Only the detected agent type (for example "playwright") is sent. Your URLs and page content are never sent.
 - Anonymized contribution - share anonymized detection and behavior summaries (an anonymous token, the detected framework name, and summary counts) to improve community threat intelligence. A tip in the popup offers it after 5 detections or 3 days after the first detection, whichever comes first; dismissible.
 
-Anonymized contribution has a switch in the popup that turns it off again with one click. The AIM identity lookup and the registry trust lookup have no switch in the popup: they stay off unless the aimLookupEnabled and registryLookupEnabled values in the extension's stored settings are set to true, which can be done from the extension's service worker console in Chrome's developer tools, and setting them back to false turns them off.
+In 0.5.0, anonymized contribution had a switch in the popup that turned it off again. The AIM identity lookup and the registry trust lookup have no switch in the popup: they stay off unless the aimLookupEnabled and registryLookupEnabled values in the extension's stored settings are set to true, which can be done from the extension's service worker console in Chrome's developer tools, and setting them back to false turns them off.
 
 None of these features transmit your URLs, page content, form data, keystrokes, cookies, authentication tokens, or identity.
 

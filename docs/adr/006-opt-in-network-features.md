@@ -13,6 +13,13 @@
 > the registry trust lookup, anonymized contribution and, since ADR-009, site
 > safety declarations. The rest of this ADR is unchanged.
 
+> **Note (2026-11-09):** Anonymized contribution, item 3 below, was removed
+> (#123). The extension sends no contribution event and keeps no contribution
+> queue, contributor token or consent; when it updates from an earlier version
+> it clears those once. The optional network features are now the registry
+> trust lookup and site safety declarations. The rest of this ADR is
+> unchanged.
+
 ## Context
 
 ADR-003 (2026-02-27) committed the extension to "zero network requests" and
