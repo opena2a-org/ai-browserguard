@@ -1,248 +1,82 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
-import {
-  getConsent,
-  enableContributions,
-  disableContributions,
-  recordDetection,
-  shouldShowTip,
-  dismissTip,
-  queueEvent,
-  getQueue,
-  getContributeStats,
-  getContributorToken,
-  flushQueue,
-} from './client';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { chromeMock, storageData } from '../__tests__/setup';
 import { anonymizeDetection, anonymizeSession } from './anonymize';
-import { DEFAULT_CONSENT, DEFAULT_QUEUE } from './types';
-import type { ContributeConsent, ContributeEvent } from './types';
 import type { DetectionEvent } from '../types/events';
 import type { AgentSession } from '../session/types';
 
-// Mock global fetch
-const mockFetch = vi.fn();
-(globalThis as Record<string, unknown>).fetch = mockFetch;
+// -- Stored contribution state from an earlier version --
 
-// Mock chrome.runtime.getManifest (not in base setup)
-(chrome.runtime as Record<string, unknown>).getManifest = vi.fn(() => ({ version: '0.2.1' }));
-
-beforeEach(() => {
-  mockFetch.mockReset();
-});
-
-// -- Consent management --
-
-describe('getConsent', () => {
-  it('returns defaults when nothing stored', async () => {
-    const consent = await getConsent();
-    expect(consent).toEqual(DEFAULT_CONSENT);
-    expect(consent.enabled).toBe(false);
-    expect(consent.grantedAt).toBeNull();
-    expect(consent.detectionsSinceInstall).toBe(0);
-  });
-});
-
-describe('enableContributions', () => {
-  it('sets enabled=true and grantedAt', async () => {
-    await enableContributions();
-    const consent = await getConsent();
-    expect(consent.enabled).toBe(true);
-    expect(consent.grantedAt).toBeTruthy();
-    // grantedAt should be a valid ISO timestamp
-    expect(new Date(consent.grantedAt!).toISOString()).toBe(consent.grantedAt);
-  });
-});
-
-describe('disableContributions', () => {
-  it('sets enabled=false and clears queue', async () => {
-    // First enable and queue an event
-    await enableContributions();
-    const event: ContributeEvent = {
-      type: 'detection_summary',
-      timestamp: new Date().toISOString(),
-      data: {
-        framework: 'playwright',
-        detectionMethods: ['cdp-connection'],
-        confidence: 'high',
-        hadDelegation: false,
+/**
+ * What an earlier version kept in storage with contribution turned on: the
+ * consent record, a queue holding a batch not yet sent, and the per-install
+ * contributor token.
+ */
+function seedEarlierContributionState(): void {
+  storageData.contributeConsent = {
+    enabled: true,
+    grantedAt: '2026-01-01T00:00:00.000Z',
+    tipShown: true,
+    tipDismissed: false,
+    detectionsSinceInstall: 7,
+    firstDetectionAt: '2026-01-01T00:00:00.000Z',
+  };
+  storageData.contributeQueue = {
+    events: [
+      {
+        type: 'detection_summary',
+        timestamp: '2026-01-02T00:00:00.000Z',
+        data: { framework: 'playwright', detectionMethods: ['cdp-connection'], confidence: 'high', hadDelegation: false },
       },
-    };
-    await queueEvent(event);
+    ],
+    lastFlushedAt: '2026-01-01T12:00:00.000Z',
+    totalFlushes: 1,
+    totalContributed: 10,
+  };
+  storageData.contributorId = 'bg-00000000-0000-4000-8000-000000000000';
+}
 
-    // Now disable
-    await disableContributions();
-    const consent = await getConsent();
-    expect(consent.enabled).toBe(false);
+function settle(): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, 0));
+}
 
-    // Queue should be cleared
-    const queue = await getQueue();
-    expect(queue.events).toHaveLength(0);
-  });
-});
+async function settleAll(): Promise<void> {
+  for (let i = 0; i < 10; i++) await settle();
+}
 
-// -- Detection recording and tip logic --
+async function startWorker(): Promise<void> {
+  vi.resetModules();
+  await import('../background/index');
+  await settleAll();
+}
 
-describe('recordDetection', () => {
-  it('increments counter and returns false before 5th detection', async () => {
-    let result: boolean;
-    for (let i = 0; i < 4; i++) {
-      result = await recordDetection();
-    }
-    // After 4 detections, should still be false
-    expect(result!).toBe(false);
+const fetchDouble = vi.fn((): Promise<unknown> => Promise.reject(new Error('no request expected')));
+const originalFetch = (globalThis as Record<string, unknown>).fetch;
 
-    const consent = await getConsent();
-    expect(consent.detectionsSinceInstall).toBe(4);
-    expect(consent.firstDetectionAt).toBeTruthy();
-  });
-
-  it('returns true on 5th detection', async () => {
-    let result: boolean = false;
-    for (let i = 0; i < 5; i++) {
-      result = await recordDetection();
-    }
-    expect(result).toBe(true);
-  });
-});
-
-describe('shouldShowTip', () => {
-  it('returns false when already enabled', () => {
-    const consent: ContributeConsent = {
-      ...DEFAULT_CONSENT,
-      enabled: true,
-      detectionsSinceInstall: 10,
-    };
-    expect(shouldShowTip(consent)).toBe(false);
+describe('stored contribution state from an earlier version', () => {
+  beforeEach(() => {
+    fetchDouble.mockClear();
+    (globalThis as Record<string, unknown>).fetch = fetchDouble;
   });
 
-  it('returns false when already dismissed', () => {
-    const consent: ContributeConsent = {
-      ...DEFAULT_CONSENT,
-      tipDismissed: true,
-      detectionsSinceInstall: 10,
-    };
-    expect(shouldShowTip(consent)).toBe(false);
+  afterEach(() => {
+    (globalThis as Record<string, unknown>).fetch = originalFetch;
   });
 
-  it('returns true after 5 detections', () => {
-    const consent: ContributeConsent = {
-      ...DEFAULT_CONSENT,
-      detectionsSinceInstall: 5,
-    };
-    expect(shouldShowTip(consent)).toBe(true);
-  });
+  it('holds no queue, contributor token or consent record once the extension is updated', async () => {
+    seedEarlierContributionState();
+    storageData.settings = { registryLookupEnabled: true };
 
-  it('returns true after 3 days', () => {
-    const fourDaysAgo = new Date(Date.now() - 4 * 24 * 60 * 60 * 1000).toISOString();
-    const consent: ContributeConsent = {
-      ...DEFAULT_CONSENT,
-      detectionsSinceInstall: 2, // Below threshold
-      firstDetectionAt: fourDaysAgo,
-    };
-    expect(shouldShowTip(consent)).toBe(true);
-  });
+    await startWorker();
+    chromeMock.runtime.onInstalled._fire({ reason: 'update', previousVersion: '0.7.0' });
+    await settleAll();
 
-  it('returns false when under thresholds', () => {
-    const oneHourAgo = new Date(Date.now() - 60 * 60 * 1000).toISOString();
-    const consent: ContributeConsent = {
-      ...DEFAULT_CONSENT,
-      detectionsSinceInstall: 3,
-      firstDetectionAt: oneHourAgo,
-    };
-    expect(shouldShowTip(consent)).toBe(false);
-  });
-});
-
-describe('dismissTip', () => {
-  it('sets tipDismissed=true', async () => {
-    await dismissTip();
-    const consent = await getConsent();
-    expect(consent.tipDismissed).toBe(true);
-    expect(consent.tipShown).toBe(true);
-  });
-});
-
-// -- Queue management --
-
-describe('queueEvent', () => {
-  it('does nothing when not opted in', async () => {
-    const event: ContributeEvent = {
-      type: 'detection_summary',
-      timestamp: new Date().toISOString(),
-      data: {
-        framework: 'playwright',
-        detectionMethods: ['cdp-connection'],
-        confidence: 'high',
-        hadDelegation: false,
-      },
-    };
-    await queueEvent(event);
-
-    const queue = await getQueue();
-    expect(queue.events).toHaveLength(0);
-  });
-
-  it('adds event to queue when opted in', async () => {
-    await enableContributions();
-
-    const event: ContributeEvent = {
-      type: 'detection_summary',
-      timestamp: new Date().toISOString(),
-      data: {
-        framework: 'selenium',
-        detectionMethods: ['webdriver-flag'],
-        confidence: 'confirmed',
-        hadDelegation: true,
-      },
-    };
-    await queueEvent(event);
-
-    const queue = await getQueue();
-    expect(queue.events).toHaveLength(1);
-    expect(queue.events[0].type).toBe('detection_summary');
-  });
-});
-
-// -- Contributor token --
-
-describe('getContributorToken', () => {
-  it('generates a random per-install token, not derived from the extension ID', async () => {
-    const token = await getContributorToken();
-    expect(token).toMatch(/^bg-/);
-    // Must not be the old extension-ID-derived value.
-    expect(token).not.toBe('bg-test-id');
-  });
-
-  it('persists and reuses the same token across calls', async () => {
-    const first = await getContributorToken();
-    const second = await getContributorToken();
-    expect(second).toBe(first);
-  });
-
-  it('mints a fresh token after opt-out, preventing cross-epoch linkage', async () => {
-    await enableContributions();
-    const before = await getContributorToken();
-    await disableContributions();
-    const after = await getContributorToken();
-    expect(after).not.toBe(before);
-    expect(after).toMatch(/^bg-/);
-  });
-
-  it('sends the persisted token (not chrome.runtime.id) in the flush payload', async () => {
-    const token = await getContributorToken();
-    mockFetch.mockResolvedValueOnce({ ok: true, status: 200, json: () => Promise.resolve({ accepted: 1 }) });
-
-    await enableContributions();
-    await queueEvent({
-      type: 'detection_summary',
-      timestamp: new Date().toISOString(),
-      data: { framework: 'playwright', detectionMethods: [], confidence: 'high', hadDelegation: false },
-    });
-    await flushQueue();
-
-    expect(mockFetch).toHaveBeenCalledTimes(1);
-    const body = JSON.parse((mockFetch.mock.calls[0][1] as { body: string }).body);
-    expect(body.contributorToken).toBe(token);
-    expect(body.contributorToken).not.toBe('bg-test-id');
+    expect(storageData.contributeQueue).toBeUndefined();
+    expect(storageData.contributorId).toBeUndefined();
+    expect(storageData.contributeConsent).toBeUndefined();
+    // Only those keys go: the user's settings stay as they were.
+    expect((storageData.settings as { registryLookupEnabled?: boolean }).registryLookupEnabled).toBe(true);
+    // Clearing sends nothing first.
+    expect(fetchDouble).not.toHaveBeenCalled();
   });
 });
 
@@ -441,117 +275,5 @@ describe('anonymizeSession', () => {
     expect((result.data as { durationSeconds: number }).durationSeconds).toBe(0);
     expect((result.data as { hadDelegation: boolean }).hadDelegation).toBe(false);
     expect((result.data as { endReason: string }).endReason).toBe('unknown');
-  });
-});
-
-// -- Stats --
-
-describe('getContributeStats', () => {
-  it('returns correct values', async () => {
-    // Start with defaults
-    let stats = await getContributeStats();
-    expect(stats.enabled).toBe(false);
-    expect(stats.totalContributed).toBe(0);
-    expect(stats.queuedCount).toBe(0);
-    expect(stats.lastFlushedAt).toBeNull();
-
-    // Enable and queue events
-    await enableContributions();
-    const event: ContributeEvent = {
-      type: 'detection_summary',
-      timestamp: new Date().toISOString(),
-      data: {
-        framework: 'playwright',
-        detectionMethods: ['cdp-connection'],
-        confidence: 'high',
-        hadDelegation: false,
-      },
-    };
-    await queueEvent(event);
-    await queueEvent({ ...event, timestamp: new Date().toISOString() });
-
-    stats = await getContributeStats();
-    expect(stats.enabled).toBe(true);
-    expect(stats.queuedCount).toBe(2);
-    expect(stats.totalContributed).toBe(0); // Not flushed yet
-  });
-});
-
-// -- Flush: count only the events the registry stored (#130) --
-
-describe('flushQueue counts only the events the registry accepted (#130)', () => {
-  const event: ContributeEvent = {
-    type: 'detection_summary',
-    timestamp: '2026-03-20T10:00:00.000Z',
-    data: { framework: 'playwright', detectionMethods: ['cdp-connection'], confidence: 'high', hadDelegation: false },
-  };
-
-  /** Opt in and queue two detection_summary events. */
-  async function queueTwo(): Promise<void> {
-    await enableContributions();
-    await queueEvent(event);
-    await queueEvent({ ...event });
-  }
-
-  /** The registry answers the next flush with 201 and this JSON body. */
-  function replyWith(body: unknown): void {
-    mockFetch.mockResolvedValueOnce({ ok: true, status: 201, json: async () => body });
-  }
-
-  it('counts nothing when the registry replies accepted 0, skipped 2', async () => {
-    await queueTwo();
-    replyWith({ accepted: 0, skipped: 2, total: 2 });
-
-    const result = await flushQueue();
-    const { totalContributed, queuedCount } = await getContributeStats();
-
-    expect(mockFetch).toHaveBeenCalledTimes(1);
-    // The registry answered for the whole batch, so it is not queued to be posted again.
-    expect({ result, totalContributed, queuedCount }).toEqual({
-      result: { sent: 0, success: true },
-      totalContributed: 0,
-      queuedCount: 0,
-    });
-  });
-
-  it('counts the accepted part of a partly skipped batch on top of earlier flushes', async () => {
-    await queueTwo();
-    replyWith({ accepted: 2, skipped: 0, total: 2 });
-    expect(await flushQueue()).toEqual({ sent: 2, success: true });
-
-    await queueTwo();
-    replyWith({ accepted: 1, skipped: 1, total: 2 });
-    expect(await flushQueue()).toEqual({ sent: 1, success: true });
-
-    expect((await getContributeStats()).totalContributed).toBe(3);
-  });
-
-  it('counts no more events than the batch held', async () => {
-    await queueTwo();
-    replyWith({ accepted: 5, skipped: 0, total: 5 });
-
-    expect(await flushQueue()).toEqual({ sent: 2, success: true });
-    expect((await getContributeStats()).totalContributed).toBe(2);
-  });
-
-  it('counts nothing when the reply has no whole, non-negative accepted count', async () => {
-    for (const body of [{}, { skipped: 2, total: 2 }, { accepted: '2' }, { accepted: -1 }, { accepted: 1.5 }, null]) {
-      await queueTwo();
-      replyWith(body);
-      expect(await flushQueue(), `reply ${JSON.stringify(body)}`).toEqual({ sent: 0, success: true });
-    }
-    expect((await getContributeStats()).totalContributed).toBe(0);
-  });
-
-  it('counts nothing when the reply body is not JSON', async () => {
-    await queueTwo();
-    mockFetch.mockResolvedValueOnce({
-      ok: true,
-      status: 201,
-      json: async () => { throw new SyntaxError('Unexpected end of JSON input'); },
-    });
-
-    expect(await flushQueue()).toEqual({ sent: 0, success: true });
-    expect((await getContributeStats()).totalContributed).toBe(0);
   });
 });
