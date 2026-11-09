@@ -64,8 +64,7 @@ import {
 import { shouldClearDeclarations, performOptOutClear, reconcileFromSettings } from '../aisafety/optout';
 import { optOutRetryResponse } from '../aisafety/opt-out-response';
 import { generateSessionReport, storeReport, getReports } from '../session/report';
-import { recordDetection, queueEvent, flushQueue, getConsent, getContributeStats } from '../contribute/client';
-import { anonymizeDetection, anonymizeSession } from '../contribute/anonymize';
+import { clearStoredContribution } from '../contribute/client';
 import type { SessionReport } from '../session/report';
 import type { NetworkEvent } from '../content/network-interceptor';
 import { buildReportDownloadArgs } from './report-download';
@@ -262,12 +261,22 @@ function initialize(): void {
     updateController.onUpdateAvailable(details).catch(() => { /* deferred */ });
   });
 
+  // The extension keeps no contribution consent, queue or token. On the first
+  // run of an updated version, remove what an earlier version stored under
+  // those keys. Nothing writes them again, so a later update finds none.
+  chrome.runtime.onInstalled.addListener((details) => {
+    if (details.reason === 'update') {
+      clearStoredContribution().catch(() => { /* non-critical */ });
+    }
+  });
+
   // Delegation expiration alarm
   chrome.alarms.create('delegation-check', { periodInMinutes: 1 });
   // Service worker keepalive — MV3 workers are torn down after ~30s idle.
   // The alarm fires often enough to wake the worker before long idle gaps.
   chrome.alarms.create('keepalive-ping', { periodInMinutes: 0.4 });
-  // Periodic flush of queued contribution events
+  // Periodic housekeeping tick. The name is kept from its earlier use so the
+  // alarm an installed version already holds is replaced, not duplicated.
   chrome.alarms.create('contribute-flush', { periodInMinutes: 5 });
   // CDP attachment self-wake. The in-session setInterval poll below dies with
   // the service worker and cannot restart itself, so an alarm tick re-runs the
@@ -303,12 +312,6 @@ function initialize(): void {
     }
     // keepalive-ping requires no action — the alarm firing is sufficient to keep the SW alive
     if (alarm.name === 'contribute-flush') {
-      (async () => {
-        const consent = await getConsent().catch(() => null);
-        if (consent?.enabled) {
-          await flushQueue().catch(() => { /* non-critical */ });
-        }
-      })().catch(() => { /* non-critical */ });
       // Piggy-backed on the existing housekeeping tick rather than a new alarm.
       // Bounds the opt-out self-heal to ~5 minutes: relying on worker start alone
       // is weaker than it sounds, because the keepalive-ping alarm exists
@@ -925,58 +928,6 @@ function handleMessage(
       return true; // async response
     }
 
-    case 'CONTRIBUTE_STATS': {
-      getContributeStats().then((stats) => {
-        sendResponse(stats);
-      }).catch(() => {
-        sendResponse({ totalContributed: 0, queuedCount: 0, lastFlushedAt: null, enabled: false });
-      });
-      return true;
-    }
-
-    case 'CONTRIBUTE_ENABLE': {
-      (async () => {
-        const { enableContributions } = await import('../contribute/client');
-        await enableContributions();
-        sendResponse({ success: true });
-      })().catch(() => {
-        sendResponse({ success: false });
-      });
-      return true;
-    }
-
-    case 'CONTRIBUTE_DISABLE': {
-      (async () => {
-        const { disableContributions } = await import('../contribute/client');
-        await disableContributions();
-        sendResponse({ success: true });
-      })().catch(() => {
-        sendResponse({ success: false });
-      });
-      return true;
-    }
-
-    case 'CONTRIBUTE_FLUSH': {
-      (async () => {
-        const result = await flushQueue();
-        sendResponse(result);
-      })().catch(() => {
-        sendResponse({ sent: 0, success: false });
-      });
-      return true;
-    }
-
-    case 'CONTRIBUTE_TIP_DISMISS': {
-      (async () => {
-        const { dismissTip } = await import('../contribute/client');
-        await dismissTip();
-        sendResponse({ success: true });
-      })().catch(() => {
-        sendResponse({ success: false });
-      });
-      return true;
-    }
-
     case 'DOMAIN_WHITELIST': {
       // Popup-only (sender-validation), so there is never a sender tab: the
       // popup names the rule to write to. The reply says whether anything was
@@ -1208,15 +1159,6 @@ async function handleDetection(tabId: number, reported: DetectionEvent, fromDebu
     agentTypesDetected: updatedTypes,
   };
   updateLifetimeStats(() => state.lifetimeStats).catch(() => { /* non-critical */ });
-
-  // Record detection for consent tip tracking + contribute if enabled
-  recordDetection().catch(() => { /* non-critical */ });
-  const consent = await getConsent().catch(() => null);
-  if (consent?.enabled) {
-    const hadDelegation = state.delegationRules.some((r) => r.isActive);
-    const contribution = anonymizeDetection(event, hadDelegation);
-    queueEvent(contribution).catch(() => { /* non-critical */ });
-  }
 
   updateBadge();
 
@@ -2169,13 +2111,6 @@ async function generateAndStoreReport(sessionId: string): Promise<void> {
     if (session && session.endedAt) {
       const report = generateSessionReport(session);
       await storeReport(report);
-
-      // Contribute anonymized session summary if enabled
-      const consent = await getConsent().catch(() => null);
-      if (consent?.enabled && session) {
-        const sessionContribution = anonymizeSession(session);
-        queueEvent(sessionContribution).catch(() => { /* non-critical */ });
-      }
     }
   } catch {
     // Report generation is non-critical

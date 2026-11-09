@@ -95,16 +95,13 @@ interface PopupState {
   networkFilter: 'all' | 'agent' | 'user';
   settings: UserSettings;
   settingsPanelOpen: boolean;
-  contributeStats: { totalContributed: number; queuedCount: number; lastFlushedAt: string | null; enabled: boolean } | null;
-  showContributeTip: boolean;
   /**
    * Per-setting warning text, keyed by setting name.
    *
    * In popupState, not a local DOM node, because `renderSettingsPanel` rebuilds
    * the panel with `replaceChildren()` and a re-render is not rare: any
    * DETECTION_RESULT from any tab reaches the open popup and triggers
-   * `renderAll()`, as does toggling the Community Trust Data switch directly
-   * below. A bare node would be silently destroyed, so a user whose opt-out
+   * `renderAll()`. A bare node would be silently destroyed, so a user whose opt-out
    * delete failed would see the warning vanish and conclude their declarations
    * were deleted while they are still on disk.
    */
@@ -142,8 +139,6 @@ let popupState: PopupState = {
   networkFilter: 'all',
   settings: { ...DEFAULT_SETTINGS },
   settingsPanelOpen: false,
-  contributeStats: null,
-  showContributeTip: false,
   settingWarnings: {},
   guardPauses: [],
   guardPauseLog: [],
@@ -237,25 +232,6 @@ async function queryBackgroundStatus(): Promise<void> {
       const data = reportsResponse as { reports?: SessionReport[] };
       popupState.reports = data.reports ?? [];
     }
-  } catch {
-    // Ignore
-  }
-
-  // Load contribute stats
-  try {
-    const contributeResponse = await sendToBackground('CONTRIBUTE_STATS', {});
-    if (contributeResponse && typeof contributeResponse === 'object') {
-      popupState.contributeStats = contributeResponse as PopupState['contributeStats'];
-    }
-  } catch {
-    // Ignore
-  }
-
-  // Check if consent tip should be shown
-  try {
-    const { getConsent, shouldShowTip } = await import('../contribute/client');
-    const consent = await getConsent();
-    popupState.showContributeTip = shouldShowTip(consent);
   } catch {
     // Ignore
   }
@@ -393,7 +369,6 @@ function renderWizardUI(): void {
 
 function renderAll(): void {
   renderUpdateCallout();
-  renderContributeTip();
   renderRecentBlockCallout();
   renderDetectionPanel();
   renderKillSwitchPanel();
@@ -595,62 +570,6 @@ function renderRecentBlockCallout(): void {
 
   if (recent.some(isCapabilityBlock)) {
     list.appendChild(renderCapabilityRecovery(recent));
-  }
-}
-
-function renderContributeTip(): void {
-  // Remove existing tip if present
-  const existingTip = document.getElementById('contribute-tip');
-  if (existingTip) {
-    existingTip.remove();
-  }
-
-  if (!popupState.showContributeTip) return;
-
-  const detectionCount = popupState.lifetimeStats?.totalSessions ?? 0;
-
-  const tip = document.createElement('div');
-  tip.id = 'contribute-tip';
-  tip.className = 'contribute-tip';
-
-  const text = document.createElement('div');
-  text.className = 'contribute-tip-text';
-  text.textContent = `You've detected ${detectionCount} AI agent${detectionCount === 1 ? '' : 's'}. Share anonymized detection patterns to help other users identify AI activity.`;
-
-  const actions = document.createElement('div');
-  actions.className = 'contribute-tip-actions';
-
-  const dismissBtn = document.createElement('button');
-  dismissBtn.className = 'btn btn-secondary btn-sm';
-  dismissBtn.textContent = 'Dismiss';
-  dismissBtn.addEventListener('click', () => {
-    sendToBackground('CONTRIBUTE_TIP_DISMISS', {}).catch(() => { /* ignore */ });
-    popupState.showContributeTip = false;
-    tip.remove();
-  });
-
-  const enableBtn = document.createElement('button');
-  enableBtn.className = 'btn btn-primary btn-sm';
-  enableBtn.textContent = 'Enable';
-  enableBtn.addEventListener('click', () => {
-    sendToBackground('CONTRIBUTE_ENABLE', {}).then(() => {
-      popupState.showContributeTip = false;
-      if (popupState.contributeStats) {
-        popupState.contributeStats.enabled = true;
-      }
-      renderAll();
-    }).catch(() => { /* ignore */ });
-  });
-
-  actions.appendChild(dismissBtn);
-  actions.appendChild(enableBtn);
-  tip.appendChild(text);
-  tip.appendChild(actions);
-
-  // Insert above the metrics panel (or at the end of #app before footer)
-  const metricsPanel = document.getElementById('metrics-panel');
-  if (metricsPanel?.parentElement) {
-    metricsPanel.parentElement.insertBefore(tip, metricsPanel);
   }
 }
 
@@ -1859,11 +1778,6 @@ function renderMetricsPanel(): void {
     addMetricCell(grid, String(uniqueCount), 'framework types');
   }
 
-  // Contributions metric (if enabled and has contributed)
-  if (popupState.contributeStats?.enabled && popupState.contributeStats.totalContributed > 0) {
-    addMetricCell(grid, String(popupState.contributeStats.totalContributed), 'contributed');
-  }
-
   // "Active since" line
   since.textContent = '';
   if (stats.firstActiveAt) {
@@ -2061,85 +1975,6 @@ function renderSettingsPanel(): void {
       container.appendChild(warning);
     }
   }
-
-  // Community Trust Data section
-  const contributeSection = document.createElement('div');
-  contributeSection.style.cssText = 'padding-top: 6px; margin-top: 2px;';
-
-  const contributeSectionTitle = document.createElement('div');
-  contributeSectionTitle.className = 'settings-label';
-  contributeSectionTitle.style.cssText = 'margin-bottom: 4px; font-size: 11px; font-weight: 600; color: var(--text-secondary); text-transform: uppercase; letter-spacing: 0.06em;';
-  contributeSectionTitle.textContent = 'Community Trust Data';
-  contributeSection.appendChild(contributeSectionTitle);
-
-  const contributeRow = document.createElement('div');
-  contributeRow.className = 'settings-row';
-
-  const contributeLabelWrap = document.createElement('div');
-
-  const contributeLabel = document.createElement('div');
-  contributeLabel.className = 'settings-label';
-  contributeLabel.textContent = 'Share anonymized data';
-
-  const contributeDesc = document.createElement('div');
-  contributeDesc.className = 'settings-description';
-  contributeDesc.textContent = 'Help build community trust scores for AI agents. Only anonymized framework types and action counts are shared. No URLs, page content, or personal data.';
-
-  contributeLabelWrap.appendChild(contributeLabel);
-  contributeLabelWrap.appendChild(contributeDesc);
-
-  const contributeSwitchLabel = document.createElement('label');
-  contributeSwitchLabel.className = 'toggle-switch';
-
-  const contributeInput = document.createElement('input');
-  contributeInput.type = 'checkbox';
-  contributeInput.checked = popupState.contributeStats?.enabled ?? false;
-  contributeInput.addEventListener('change', () => {
-    const msgType = contributeInput.checked ? 'CONTRIBUTE_ENABLE' : 'CONTRIBUTE_DISABLE';
-    sendToBackground(msgType, {}).then(() => {
-      if (popupState.contributeStats) {
-        popupState.contributeStats.enabled = contributeInput.checked;
-      }
-      renderSettingsPanel();
-    }).catch(() => { /* ignore */ });
-  });
-
-  const contributeSlider = document.createElement('span');
-  contributeSlider.className = 'toggle-slider';
-
-  contributeSwitchLabel.appendChild(contributeInput);
-  contributeSwitchLabel.appendChild(contributeSlider);
-
-  contributeRow.appendChild(contributeLabelWrap);
-  contributeRow.appendChild(contributeSwitchLabel);
-  contributeSection.appendChild(contributeRow);
-
-  // Show stats if contribute is enabled
-  if (popupState.contributeStats?.enabled) {
-    const statsDiv = document.createElement('div');
-    statsDiv.className = 'contribute-stat';
-
-    const parts: string[] = [];
-    if (popupState.contributeStats.totalContributed > 0) {
-      parts.push(`${popupState.contributeStats.totalContributed} events contributed`);
-    }
-    if (popupState.contributeStats.lastFlushedAt) {
-      const lastFlush = new Date(popupState.contributeStats.lastFlushedAt);
-      parts.push(`last sent ${lastFlush.toLocaleDateString(undefined, { month: 'short', day: 'numeric' })}`);
-    }
-    if (popupState.contributeStats.queuedCount > 0) {
-      parts.push(`${popupState.contributeStats.queuedCount} queued`);
-    }
-
-    if (parts.length > 0) {
-      statsDiv.textContent = parts.join(' / ');
-    } else {
-      statsDiv.textContent = 'Enabled -- data will be contributed after detections';
-    }
-    contributeSection.appendChild(statsDiv);
-  }
-
-  container.appendChild(contributeSection);
 }
 
 function renderStatusBadge(): void {
