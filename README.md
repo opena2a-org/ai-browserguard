@@ -55,13 +55,14 @@ By default the extension makes zero network requests. All detection, delegation,
 
 ### Network requests and telemetry
 
-Three optional network features are **off by default** and only act after you explicitly enable them:
+Two optional network features are **off by default** and only act after you explicitly enable them:
 
 - **Registry trust lookup** (`api.oa2a.org`): when an agent is detected, look up a trust score for that agent type. Only the detected agent type (for example `playwright`) is sent; never your URLs or page content.
-- **Contribution**: the extension sends no contribution to the registry.
 - **Site safety declarations** (the site the agent is on): when an agent is detected on a page, read that site's [`/.well-known/ai-safety.txt`](https://datatracker.ietf.org/doc/draft-fane-ai-safety-txt/) and show what the site claims about its own content. This is the only feature that contacts a server we do not operate. It sends no cookies, no page address, and nothing about you.
 
-Turn contribution off with the switch under Community Trust Data in the popup's Settings, and site safety declarations with Read site safety declarations. The registry lookup has no switch in the popup: set `registryLookupEnabled` in the extension's stored settings to `true` or `false` from its service worker console in Chrome's developer tools. Each feature in full: [docs/privacy.md](docs/privacy.md); the policy: [opena2a.org/aibrowserguard/privacy](https://opena2a.org/aibrowserguard/privacy).
+Turn site safety declarations off with the Read site safety declarations switch in the popup's Settings. The registry lookup has no switch in the popup: set `registryLookupEnabled` in the extension's stored settings to `true` or `false` from its service worker console in Chrome's developer tools. Each feature in full: [docs/privacy.md](docs/privacy.md); the policy: [opena2a.org/aibrowserguard/privacy](https://opena2a.org/aibrowserguard/privacy).
+
+Earlier versions also offered an opt-in contribution of detection and behavior summaries to `api.oa2a.org`; it is removed, and the extension sends no contribution.
 
 ## Documentation
 

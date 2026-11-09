@@ -15,6 +15,10 @@
 > in the note above was removed; see the note at the top of ADR-006 for the
 > optional network features that remain.
 
+> **Note (2026-11-09):** Anonymized contribution, also named in the first note
+> above, was removed; see the note of this date at the top of ADR-006 for the
+> optional network features that remain.
+
 ## Context
 
 AI Browser Guard is a security tool that monitors all browser activity to
