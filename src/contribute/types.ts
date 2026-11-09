@@ -1,7 +1,6 @@
 /**
- * Types for the Registry contribution pipeline.
- * Browser Guard contributes anonymized detection data to the OpenA2A
- * trust registry, helping build community trust scores for AI agents.
+ * Types of the anonymized summaries src/contribute/anonymize.ts builds from a
+ * detection or a session. The extension sends none of them.
  */
 
 /** A single contribution event ready for submission to the Registry. */
@@ -78,55 +77,3 @@ export interface BehavioralContribution {
   /** Overall block rate (0.0 - 1.0). */
   blockRate: number;
 }
-
-/** Consent state for the contribution feature. */
-export interface ContributeConsent {
-  /** Whether the user has opted in to contributing. */
-  enabled: boolean;
-
-  /** ISO 8601 timestamp when consent was granted (or null). */
-  grantedAt: string | null;
-
-  /** Whether the delayed consent tip has been shown. */
-  tipShown: boolean;
-
-  /** Whether the delayed consent tip has been dismissed. */
-  tipDismissed: boolean;
-
-  /** Total detection events since install (used to trigger tip). */
-  detectionsSinceInstall: number;
-
-  /** ISO 8601 timestamp of first detection (used for 3-day trigger). */
-  firstDetectionAt: string | null;
-}
-
-/** Queued batch of events waiting to be sent. */
-export interface ContributeQueue {
-  /** Events waiting to be sent. */
-  events: ContributeEvent[];
-
-  /** ISO 8601 timestamp of last successful flush. */
-  lastFlushedAt: string | null;
-
-  /** Number of successful flushes. */
-  totalFlushes: number;
-
-  /** Total events contributed across all time. */
-  totalContributed: number;
-}
-
-export const DEFAULT_CONSENT: ContributeConsent = {
-  enabled: false,
-  grantedAt: null,
-  tipShown: false,
-  tipDismissed: false,
-  detectionsSinceInstall: 0,
-  firstDetectionAt: null,
-};
-
-export const DEFAULT_QUEUE: ContributeQueue = {
-  events: [],
-  lastFlushedAt: null,
-  totalFlushes: 0,
-  totalContributed: 0,
-};

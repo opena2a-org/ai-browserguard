@@ -1196,37 +1196,6 @@ kbd {
 }
 
 /* ============================================================
-   Contribute Tip Banner
-   ============================================================ */
-
-.contribute-tip {
-  background-color: var(--color-info-bg);
-  border: 1px solid rgba(59, 130, 246, 0.2);
-  border-radius: var(--border-radius);
-  padding: var(--spacing-sm) var(--spacing-md);
-  margin-bottom: 6px;
-}
-
-.contribute-tip-text {
-  font-size: var(--font-size-sm);
-  color: var(--text-primary);
-  line-height: 1.4;
-  margin-bottom: var(--spacing-sm);
-}
-
-.contribute-tip-actions {
-  display: flex;
-  gap: var(--spacing-sm);
-  justify-content: flex-end;
-}
-
-.contribute-stat {
-  font-size: var(--font-size-xs);
-  color: var(--text-secondary);
-  margin-top: var(--spacing-xs);
-}
-
-/* ============================================================
    Recently-blocked call-out (P0-UX-1 Layer 3)
    ============================================================ */
 

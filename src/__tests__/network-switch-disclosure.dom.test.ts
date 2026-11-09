@@ -64,11 +64,6 @@ const FEATURES: Feature[] = [
     setting: 'registryLookupEnabled',
   },
   {
-    name: 'anonymized contribution',
-    named: /\bcontribution\b/i,
-    turnsOff: (m) => m.type === 'CONTRIBUTE_DISABLE',
-  },
-  {
     name: 'site safety declarations',
     named: /\bsite safety declarations\b/i,
     turnsOff: (m) => setsSetting(m, 'aiSafetyTxtEnabled', false),
@@ -125,7 +120,6 @@ beforeAll(async () => {
     },
     SESSION_QUERY: { sessions: [] },
     REPORTS_QUERY: { reports: [] },
-    CONTRIBUTE_STATS: { enabled: true, totalContributed: 0, queuedCount: 0, lastFlushedAt: null },
   };
   (globalThis as Record<string, unknown>).chrome = {
     runtime: {
@@ -155,8 +149,8 @@ beforeAll(async () => {
 
   await import('../popup/popup');
   document.dispatchEvent(new Event('DOMContentLoaded'));
-  // The popup reads the stored settings after the contribution state, then
-  // renders every panel.
+  // The popup reads the stored settings after its queries to the background,
+  // then renders every panel.
   await vi.waitFor(
     () => {
       if (!storageReads.includes('settings')) throw new Error('stored settings not read yet');
