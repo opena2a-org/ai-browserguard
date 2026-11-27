@@ -131,12 +131,14 @@ function startRow(
   select: HTMLSelectElement,
   buttonText: string,
   onClick: (button: HTMLButtonElement) => void,
+  title?: string,
 ): HTMLElement {
   const row = document.createElement('div');
   row.className = 'pause-row pause-start-row';
   const label = document.createElement('span');
   label.className = 'pause-label';
   label.textContent = text;
+  if (title) label.title = title;
   const button = document.createElement('button');
   button.className = 'btn btn-secondary btn-sm';
   button.textContent = buttonText;
@@ -195,7 +197,7 @@ export function renderPausePanel(
       container.appendChild(startRow(`On ${host}`, select, 'Pause on this site', (button) => {
         button.disabled = true;
         actions.onPause({ scope: 'site', host, minutes: selectedMinutes(select) });
-      }));
+      }, host));
     }
     if (!input.pauses.some((p) => p.scope === 'all')) {
       const select = durationSelect(ALL_PAUSE_MINUTES, 15, 'How long to pause everywhere');
