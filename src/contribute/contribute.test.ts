@@ -78,6 +78,41 @@ describe('stored contribution state from an earlier version', () => {
     // Clearing sends nothing first.
     expect(fetchDouble).not.toHaveBeenCalled();
   });
+
+  it('retries a rejected removal on the next worker start', async () => {
+    seedEarlierContributionState();
+    chromeMock.storage.local.remove.mockImplementationOnce(() => Promise.reject(new Error('storage busy')));
+
+    await startWorker();
+    chromeMock.runtime.onInstalled._fire({ reason: 'update', previousVersion: '0.7.0' });
+    await settleAll();
+
+    await startWorker();
+
+    expect(storageData.contributeQueue).toBeUndefined();
+    expect(storageData.contributorId).toBeUndefined();
+    expect(storageData.contributeConsent).toBeUndefined();
+  });
+
+  it('retries a rejected removal on the housekeeping alarm', async () => {
+    await startWorker();
+    seedEarlierContributionState();
+    // Earlier tests' workers keep their listeners, so reject every removal
+    // for the duration of the update event.
+    const realRemove = chromeMock.storage.local.remove.getMockImplementation()!;
+    chromeMock.storage.local.remove.mockImplementation(() => Promise.reject(new Error('storage busy')));
+    chromeMock.runtime.onInstalled._fire({ reason: 'update', previousVersion: '0.7.0' });
+    await settleAll();
+    chromeMock.storage.local.remove.mockImplementation(realRemove);
+    expect(storageData.contributorId).toBeDefined();
+
+    chromeMock.alarms.onAlarm._fire({ name: 'contribute-flush' });
+    await settleAll();
+
+    expect(storageData.contributeQueue).toBeUndefined();
+    expect(storageData.contributorId).toBeUndefined();
+    expect(storageData.contributeConsent).toBeUndefined();
+  });
 });
 
 // -- Anonymization --

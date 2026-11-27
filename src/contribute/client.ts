@@ -4,8 +4,8 @@
  * The extension sends no contribution event and keeps no contribution queue,
  * contributor token or opt-in. Earlier versions kept a consent record, a queue
  * of events and a per-install contributor token in chrome.storage.local under
- * the keys below; the background worker removes them once, when the extension
- * is updated.
+ * the keys below; the background worker removes them on update, and again on
+ * each worker start and housekeeping tick, so a failed removal is retried.
  */
 
 /** The consent record, the event queue and the contributor token, in that order. */
