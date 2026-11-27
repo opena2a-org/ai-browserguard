@@ -135,6 +135,74 @@ function mapEventToCapability(eventType: string): AgentCapability | null {
   }
 }
 
+/**
+ * Submit held after a denied text input (#70).
+ *
+ * An agent that types or pastes into a form or editor and then presses Enter,
+ * Cmd/Ctrl+Return or clicks the submit button sends whatever the field holds
+ * when its input was denied: an empty or half-written message, a search for
+ * the wrong term. After the monitor blocks an untrusted text input, it holds
+ * the untrusted submits that follow in the same sequence and says why, so the
+ * agent's next step does not act on text that never reached the page.
+ *
+ * The sequence ends when a text input is let through, on a trusted user event,
+ * when the delegation rule changes, or DENIED_INPUT_SEQUENCE_MS after the last
+ * denied input.
+ */
+export const DENIED_INPUT_SEQUENCE_MS = 10_000;
+
+export const HELD_SUBMIT_REASON =
+  'Held: the text input just before it was blocked, so it did not reach the page.';
+
+/** When the last untrusted text input was denied; 0 when no sequence is open. */
+let deniedInputAt = 0;
+
+function deniedInputPending(): boolean {
+  if (deniedInputAt === 0) return false;
+  if (Date.now() - deniedInputAt > DENIED_INPUT_SEQUENCE_MS) {
+    deniedInputAt = 0;
+    return false;
+  }
+  return true;
+}
+
+/** An untrusted `input` event, or a keydown that types or deletes text. */
+function isTextInput(e: Event): boolean {
+  if (e.type === 'input') return true;
+  if (e.type !== 'keydown') return false;
+  const key = (e as KeyboardEvent).key;
+  return typeof key === 'string' && (key.length === 1 || key === 'Backspace' || key === 'Delete');
+}
+
+/** A submit control: a form's submit button, or a button outside any form. */
+function isSubmitControl(target: EventTarget | null): boolean {
+  if (!target || typeof (target as Element).closest !== 'function') return false;
+  const control = (target as Element).closest('button, input, [role="button"]');
+  if (!control) return false;
+  if (control instanceof HTMLInputElement) {
+    return (control.type === 'submit' || control.type === 'image') && control.form !== null;
+  }
+  if (control instanceof HTMLButtonElement) {
+    return control.form === null || control.type === 'submit';
+  }
+  return control.closest('form') === null;
+}
+
+/**
+ * Whether an untrusted event submits what was typed: a `submit` event, Enter or
+ * Cmd/Ctrl+Return (Shift+Enter and Alt+Enter add a line instead), or a click on
+ * a submit control.
+ */
+function isSubmitAction(e: Event): boolean {
+  if (e.type === 'submit') return true;
+  if (e.type === 'keydown') {
+    const k = e as KeyboardEvent;
+    return k.key === 'Enter' && !k.shiftKey && !k.altKey;
+  }
+  if (e.type === 'click') return isSubmitControl(e.target);
+  return false;
+}
+
 function getSelector(el: Element): string {
   if (!el || !el.tagName) return 'unknown';
   if (el.id) return `#${el.id}`;
@@ -174,6 +242,7 @@ export function startBoundaryMonitor(
     allowedCount: 0,
     blockedCount: 0,
   };
+  deniedInputAt = 0;
 
   const cleanups: Array<() => void> = [];
 
@@ -184,6 +253,8 @@ export function startBoundaryMonitor(
   const trustedEventTracker = (e: Event) => {
     if (e.isTrusted) {
       lastTrustedEventAt = Date.now();
+      // The user is acting: what follows is not the agent's sequence.
+      deniedInputAt = 0;
     }
   };
 
@@ -228,12 +299,20 @@ export function startBoundaryMonitor(
         ruleId: monitorState.activeRule?.id,
       });
       onAction(event);
+      if (isTextInput(e)) deniedInputAt = 0;
       return;
     }
 
-    const result = checkBoundary(capability, url, monitorState.activeRule);
+    // A submit that follows a denied text input in the same sequence is held
+    // whatever the rule says about submitting, and the reason says the input
+    // did not land (#70).
+    const held = deniedInputPending() && isSubmitAction(e);
+    const result: BoundaryCheckResult = held
+      ? { allowed: false, matchedRule: monitorState.activeRule, reason: HELD_SUBMIT_REASON }
+      : checkBoundary(capability, url, monitorState.activeRule);
 
     if (result.allowed) {
+      if (isTextInput(e)) deniedInputAt = 0;
       monitorState.allowedCount++;
       const event = createTimelineEvent('action-allowed', url, `${capability} allowed`, {
         targetSelector: selector,
@@ -251,6 +330,7 @@ export function startBoundaryMonitor(
       // would reach the page's submit/click handlers anyway. stopImmediatePropagation
       // also halts the remaining same-node listeners, so the action is truly blocked.
       e.stopImmediatePropagation();
+      if (!held && isTextInput(e)) deniedInputAt = Date.now();
 
       const violation: BoundaryViolation = {
         id: crypto.randomUUID(),
@@ -297,6 +377,7 @@ export function startBoundaryMonitor(
  */
 export function updateActiveRule(rule: DelegationRule | null): void {
   monitorState.activeRule = rule;
+  deniedInputAt = 0;
 }
 
 /**
