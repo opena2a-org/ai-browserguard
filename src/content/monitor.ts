@@ -8,7 +8,7 @@
 import type { AgentCapability } from '../types/agent';
 import type { AgentEvent, BoundaryViolation } from '../types/events';
 import type { DelegationRule } from '../types/delegation';
-import { evaluateRule, isTimeBoundExpired } from '../delegation/rules';
+import { evaluateRule, isTimeBoundExpired, PRESET_TITLES } from '../delegation/rules';
 import { createTimelineEvent } from '../session/timeline';
 import { matchUrlPattern } from '../url/match-pattern';
 
@@ -203,6 +203,42 @@ function isSubmitAction(e: Event): boolean {
   return false;
 }
 
+/**
+ * Notice that Full Access was revoked (#70).
+ *
+ * An agent that was granted Full Access keeps acting as if it still holds it
+ * after the user revokes the grant: its next click or keystroke is blocked, or
+ * let through under another rule, with nothing that says the grant is gone.
+ * When the tab's rule changes from a live Full Access rule to any other rule,
+ * or to none, the monitor keeps a one-line notice and hands it out on the next
+ * untrusted action it sees in the page, blocked or not. It is handed out once.
+ * A new live Full Access rule withdraws a notice not yet handed out.
+ */
+let fullAccessRevokedNotice: string | null = null;
+
+function isLiveFullAccess(rule: DelegationRule | null): boolean {
+  return rule !== null && rule.isActive && rule.preset === 'fullAccess' && !isDelegationExpired(rule);
+}
+
+/** The notice for a revocation that leaves `next` in force in the tab. */
+export function fullAccessRevokedNoticeFor(next: DelegationRule | null): string {
+  if (next === null || !next.isActive || isDelegationExpired(next)) {
+    return 'Full Access was revoked; no delegation applies now.';
+  }
+  const title = PRESET_TITLES[next.preset] ?? next.preset;
+  return `Full Access was revoked; the ${title} delegation applies now.`;
+}
+
+/**
+ * Take the pending Full Access revocation notice, if any. It is cleared, so
+ * the next caller gets null.
+ */
+export function takeFullAccessRevokedNotice(): string | null {
+  const notice = fullAccessRevokedNotice;
+  fullAccessRevokedNotice = null;
+  return notice;
+}
+
 function getSelector(el: Element): string {
   if (!el || !el.tagName) return 'unknown';
   if (el.id) return `#${el.id}`;
@@ -234,7 +270,9 @@ const USER_GESTURE_GRACE_MS = 150;
 export function startBoundaryMonitor(
   rule: DelegationRule | null,
   onViolation: (violation: BoundaryViolation) => void,
-  onAction: (event: AgentEvent) => void
+  onAction: (event: AgentEvent) => void,
+  /** Shows a notice for an action that was let through, such as Full Access revoked. */
+  onNotice?: (notice: string) => void
 ): () => void {
   monitorState = {
     activeRule: rule,
@@ -286,6 +324,10 @@ export function startBoundaryMonitor(
     const selector = target ? getSelector(target) : undefined;
     const url = window.location.href;
 
+    // The first action after Full Access was revoked is told so (#70): in the
+    // block reason when it is blocked, in a notice of its own when it is not.
+    const revokedNotice = takeFullAccessRevokedNotice();
+
     // "Allow once" (F-B): a pending one-shot override lets exactly one
     // otherwise-blocked event through, consumed on use. Checked before the
     // boundary evaluation so the override applies to precisely the (capability,
@@ -300,6 +342,7 @@ export function startBoundaryMonitor(
       });
       onAction(event);
       if (isTextInput(e)) deniedInputAt = 0;
+      if (revokedNotice) onNotice?.(revokedNotice);
       return;
     }
 
@@ -321,6 +364,7 @@ export function startBoundaryMonitor(
         ruleId: monitorState.activeRule?.id,
       });
       onAction(event);
+      if (revokedNotice) onNotice?.(revokedNotice);
     } else {
       monitorState.blockedCount++;
       e.preventDefault();
@@ -331,6 +375,7 @@ export function startBoundaryMonitor(
       // also halts the remaining same-node listeners, so the action is truly blocked.
       e.stopImmediatePropagation();
       if (!held && isTextInput(e)) deniedInputAt = Date.now();
+      const reason = revokedNotice ? `${revokedNotice} ${result.reason}` : result.reason;
 
       const violation: BoundaryViolation = {
         id: crypto.randomUUID(),
@@ -340,12 +385,12 @@ export function startBoundaryMonitor(
         url,
         targetSelector: selector,
         blockingRuleId: monitorState.activeRule?.id ?? 'none',
-        reason: result.reason,
+        reason,
         userOverride: false,
       };
       onViolation(violation);
 
-      const event = createTimelineEvent('action-blocked', url, `${capability} blocked: ${result.reason}`, {
+      const event = createTimelineEvent('action-blocked', url, `${capability} blocked: ${reason}`, {
         targetSelector: selector,
         attemptedAction: capability,
         outcome: 'blocked',
@@ -376,6 +421,11 @@ export function startBoundaryMonitor(
  * Update the active delegation rule.
  */
 export function updateActiveRule(rule: DelegationRule | null): void {
+  if (isLiveFullAccess(rule)) {
+    fullAccessRevokedNotice = null;
+  } else if (isLiveFullAccess(monitorState.activeRule)) {
+    fullAccessRevokedNotice = fullAccessRevokedNoticeFor(rule);
+  }
   monitorState.activeRule = rule;
   deniedInputAt = 0;
 }
