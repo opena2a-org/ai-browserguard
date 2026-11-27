@@ -32,6 +32,12 @@ When the guard blocks an in-page agent's text input (an untrusted `input` event,
 
 This covers only input the guard blocked itself. When an agent driving the browser over CDP has a paste or keystroke denied, that is a decision of the agent's host (see above): the guard never saw the input, so it cannot hold the submit that follows, and the agent's host is what has to report that the input did not land.
 
+### When Full Access is revoked
+
+When the rule in a tab changes from a live Full Access delegation to another rule or to none (you press Revoke on the agent's card, or end or change the session delegation), the guard tells the in-page agent on its next untrusted click, keystroke, input or submit in that page. The notice is one line: "Full Access was revoked; the Read-Only delegation applies now." names the preset now in force, and "Full Access was revoked; no delegation applies now." is shown when none is. If that action is blocked, the line comes first in the reason on the block notice and in the blocked list in the popup. If it is let through, the line is shown on its own in a notice on the page. The same holds for the next action the in-page interceptor blocks (a scripted `form.submit()`, `window.open`, a DOM write or a `fetch`) when that comes first; the error a rejected `fetch` carries does not include the line. The notice is given once, is dropped when Full Access is granted again before the agent acts, is not given when Full Access had already run out, and does not carry over to a page the tab navigates to.
+
+An agent driving the browser over CDP gets no such notice, for the reason given above: the guard does not see its native input. A denial such an agent receives after you revoke Full Access is a decision of its host.
+
 ## Tabs with no detected agent
 
 A session delegation is the rule in a tab where no agent was detected too, and in-page blocking does not wait for a detection. While a rule is in effect in a tab, it blocks an untrusted `click`, `keydown`, `input` or `submit` event that the rule does not permit, whether an agent or the page's own script dispatched it: both arrive as events the browser marks untrusted. So under Read-Only, a page that dispatches such an event itself, from a timer for example, has it blocked in a tab where nothing was detected: you get the block notification, the toolbar badge shows `!` and the block is listed in the popup, while nothing is added to the detection log or to a session log. To let a site's own scripted events through, pause the guard on that site.

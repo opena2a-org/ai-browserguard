@@ -9,10 +9,17 @@
 import type { MessagePayload, MessageType, BoundaryViolation } from '../types/events';
 import { startDetectionMonitor } from './detector';
 import type { DetectionVerdictResult } from './detector';
-import { startBoundaryMonitor, updateActiveRule, getMonitorState, grantMonitorAllowOnce, clearMonitorAllowOnce } from './monitor';
+import {
+  startBoundaryMonitor,
+  updateActiveRule,
+  getMonitorState,
+  grantMonitorAllowOnce,
+  clearMonitorAllowOnce,
+  takeFullAccessRevokedNotice,
+} from './monitor';
 import { executeContentKillSwitch, registerCleanup } from '../killswitch/index';
 import type { DelegationRule } from '../types/delegation';
-import { showBlockedToast } from './toast';
+import { showBlockedToast, showNoticeToast } from './toast';
 import {
   MSG_BRIDGE_BOOTSTRAP,
   MSG_RULE_UPDATE,
@@ -85,6 +92,16 @@ function showBlockedActionToast(capability: string, url: string, reason: string)
     onOpenSettings: () => {
       sendToBackground('OPEN_POPUP', {}).catch(() => { /* ignore */ });
     },
+  });
+}
+
+/**
+ * Show a notice for an action that was let through, such as the first action
+ * after Full Access was revoked (#70).
+ */
+function showActionNotice(notice: string): void {
+  showNoticeToast(notice, () => {
+    sendToBackground('OPEN_POPUP', {}).catch(() => { /* ignore */ });
   });
 }
 
@@ -183,6 +200,10 @@ function handleMainWorldMessage(e: MessageEvent): void {
   if (!capability || !url || blocked === null) return;
 
   if (blocked) {
+    // A block by the MAIN-world interceptor is the agent's next action too:
+    // when Full Access was revoked before it, its notice says so (#70).
+    const notice = takeFullAccessRevokedNotice();
+    const shown = notice ? `${notice} ${reason}` : reason;
     const violation: BoundaryViolation = {
       id: crypto.randomUUID(),
       timestamp,
@@ -191,11 +212,11 @@ function handleMainWorldMessage(e: MessageEvent): void {
       url,
       targetSelector: undefined,
       blockingRuleId: getMonitorState().activeRule?.id ?? 'none',
-      reason,
+      reason: shown,
       userOverride: false,
     };
     sendToBackground('BOUNDARY_CHECK_REQUEST', violation).catch(() => { /* ignore */ });
-    showBlockedActionToast(capability, url, reason);
+    showBlockedActionToast(capability, url, shown);
   }
 }
 
@@ -256,7 +277,8 @@ function initialize(): void {
       },
       (event) => {
         sendToBackground('AGENT_ACTION', event).catch(() => { /* context gone */ });
-      }
+      },
+      showActionNotice
     );
     registerCleanup(() => {
       if (monitorCleanup) monitorCleanup();
@@ -386,7 +408,8 @@ function handleMessage(
           sendToBackground('BOUNDARY_CHECK_REQUEST', violation).catch(() => { /* context gone */ });
           showBlockedActionToast(violation.attemptedAction, violation.url, violation.reason);
         },
-        (event) => sendToBackground('AGENT_ACTION', event).catch(() => { /* context gone */ })
+        (event) => sendToBackground('AGENT_ACTION', event).catch(() => { /* context gone */ }),
+        showActionNotice
       );
       sendResponse({ success: true });
       return false;

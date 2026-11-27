@@ -346,6 +346,85 @@ export function showBlockedToast(options: ToastOptions): () => void {
   return removeToast;
 }
 
+/**
+ * Show a one-line notice that is not a block, such as "Full Access was
+ * revoked" on the first action let through after the revocation (#70). It
+ * carries the AI Browser Guard name, offers Settings when given, and is
+ * dismissed after the same time as a non-critical block notice.
+ * Returns a cleanup function to remove the notice.
+ */
+export function showNoticeToast(text: string, onOpenSettings?: () => void): () => void {
+  const container = ensureContainer();
+  const inner = getInner(container);
+
+  while (inner.children.length >= MAX_VISIBLE_TOASTS) {
+    inner.removeChild(inner.firstChild!);
+  }
+
+  const toast = document.createElement('div');
+  toast.className = 'abg-toast abg-toast-notice';
+  toast.setAttribute('role', 'status');
+
+  const header = document.createElement('div');
+  header.className = 'abg-toast-header';
+  const icon = document.createElement('span');
+  icon.className = 'abg-toast-icon';
+  icon.setAttribute('aria-hidden', 'true');
+  icon.appendChild(buildShieldIcon());
+  const brand = document.createElement('span');
+  brand.className = 'abg-toast-brand';
+  brand.textContent = 'AI Browser Guard';
+  const closeBtn = document.createElement('button');
+  closeBtn.className = 'abg-toast-close';
+  closeBtn.textContent = '×';
+  closeBtn.setAttribute('aria-label', 'Dismiss');
+  header.append(icon, brand, closeBtn);
+
+  const body = document.createElement('div');
+  body.className = 'abg-toast-body';
+  const what = document.createElement('div');
+  what.className = 'abg-toast-what';
+  what.textContent = text;
+  body.appendChild(what);
+
+  toast.append(header, body);
+
+  let dismissed = false;
+  let timeoutId: ReturnType<typeof setTimeout> | undefined;
+  const removeToast = () => {
+    if (dismissed) return;
+    dismissed = true;
+    if (timeoutId) clearTimeout(timeoutId);
+    toast.classList.remove('abg-toast-visible');
+    toast.classList.add('abg-toast-exit');
+    setTimeout(() => {
+      try { inner.removeChild(toast); } catch { /* already removed */ }
+    }, 300);
+  };
+  closeBtn.addEventListener('click', removeToast);
+
+  if (onOpenSettings) {
+    const actions = document.createElement('div');
+    actions.className = 'abg-toast-actions';
+    const settingsBtn = document.createElement('button');
+    settingsBtn.className = 'abg-toast-btn abg-toast-btn-settings';
+    settingsBtn.textContent = 'Settings';
+    settingsBtn.addEventListener('click', () => {
+      onOpenSettings();
+      removeToast();
+    });
+    actions.appendChild(settingsBtn);
+    toast.appendChild(actions);
+  }
+
+  inner.appendChild(toast);
+  requestAnimationFrame(() => {
+    toast.classList.add('abg-toast-visible');
+  });
+  timeoutId = setTimeout(removeToast, AUTO_DISMISS_MS);
+  return removeToast;
+}
+
 /** CSS for toast notifications, scoped inside shadow DOM. */
 function getToastStyles(): string {
   return `
