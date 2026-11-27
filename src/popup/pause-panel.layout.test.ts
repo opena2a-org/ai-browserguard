@@ -56,6 +56,10 @@ describe('Pause the guard row labels at the popup width (#166)', () => {
     expect(style.overflowWrap).toBe('anywhere');
   });
 
+  it('the site label carries the full hostname as its title', () => {
+    expect(labelFor(renderPanel(), `On ${HOST}`).title).toBe(HOST);
+  });
+
   it.each([`On ${HOST}`, 'Every site'])(
     'the row of "%s" wraps, with the select and the button grouped after the label',
     (text) => {

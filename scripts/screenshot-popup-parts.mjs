@@ -50,12 +50,13 @@ export function drawPopupRuntimeParts(state) {
     return p;
   };
 
-  const startRow = (text, options, selected, selectLabel, buttonText) => {
+  const startRow = (text, options, selected, selectLabel, buttonText, title) => {
     const row = document.createElement('div');
     row.className = 'pause-row pause-start-row';
     const label = document.createElement('span');
     label.className = 'pause-label';
     label.textContent = text;
+    if (title) label.title = title;
     const select = document.createElement('select');
     select.className = 'form-input pause-duration';
     select.setAttribute('aria-label', selectLabel);
@@ -86,7 +87,7 @@ export function drawPopupRuntimeParts(state) {
     content.appendChild(note('Open a website in this tab to pause the guard on it.'));
   } else {
     const host = state.currentHost;
-    content.appendChild(startRow(`On ${host}`, [15, 60, null], 60, `How long to pause on ${host}`, 'Pause on this site'));
+    content.appendChild(startRow(`On ${host}`, [15, 60, null], 60, `How long to pause on ${host}`, 'Pause on this site', host));
   }
   content.appendChild(startRow('Every site', [15, 60], 15, 'How long to pause everywhere', 'Pause everywhere'));
 }
