@@ -1,7 +1,7 @@
 # AI Browser Guard
 
 [![Status: beta](https://img.shields.io/badge/status-beta-yellow)](STATUS.md)
-[![Chrome Web Store](https://img.shields.io/chrome-web-store/v/ojphpdmabflmcjhglfogmkdgchkncikf)](https://chromewebstore.google.com/detail/ojphpdmabflmcjhglfogmkdgchkncikf)
+[![Chrome Web Store](https://img.shields.io/badge/Chrome%20Web%20Store-install-4285F4?logo=googlechrome&logoColor=white)](https://chromewebstore.google.com/detail/ojphpdmabflmcjhglfogmkdgchkncikf)
 [![CI](https://github.com/opena2a-org/ai-browserguard/actions/workflows/ci.yml/badge.svg)](https://github.com/opena2a-org/ai-browserguard/actions/workflows/ci.yml)
 [![Security](https://github.com/opena2a-org/ai-browserguard/actions/workflows/security.yml/badge.svg)](https://github.com/opena2a-org/ai-browserguard/actions/workflows/security.yml)
 [![License: Apache-2.0](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](LICENSE)
