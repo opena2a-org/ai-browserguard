@@ -22,6 +22,10 @@ The per-action blocking below applies only to in-page / injected automation, is 
 
 What each delegation preset permits, and how to end a delegation or pause the guard: [delegation.md](delegation.md).
 
+### Which denials come from AI Browser Guard
+
+A denial that an agent driving the browser over CDP receives for a click, a keystroke or a typed value (an agent such as Claude in Chrome, for example) is not one this extension made: it cannot intercept that native input. Treat such a denial as a decision of the agent's host, not of the guard. A denial the guard does make says so. The toast in the page carries the AI Browser Guard name and the reason, and a `fetch` that the guard rejects fails with `Network request blocked by AI Browser Guard (rule: <matched rule>)`, where the rule is, for example, `Kill switch active`, `Site blocked by pattern: <pattern>` or `'network-request' blocked by delegation rule`.
+
 ## Tabs with no detected agent
 
 A session delegation is the rule in a tab where no agent was detected too, and in-page blocking does not wait for a detection. While a rule is in effect in a tab, it blocks an untrusted `click`, `keydown`, `input` or `submit` event that the rule does not permit, whether an agent or the page's own script dispatched it: both arrive as events the browser marks untrusted. So under Read-Only, a page that dispatches such an event itself, from a timer for example, has it blocked in a tab where nothing was detected: you get the block notification, the toolbar badge shows `!` and the block is listed in the popup, while nothing is added to the detection log or to a session log. To let a site's own scripted events through, pause the guard on that site.
