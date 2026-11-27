@@ -263,7 +263,10 @@ function initialize(): void {
 
   // The extension keeps no contribution consent, queue or token. On the first
   // run of an updated version, remove what an earlier version stored under
-  // those keys. Nothing writes them again, so a later update finds none.
+  // those keys. A removal that fails is retried on every worker start and on
+  // each contribute-flush tick below until the keys are gone. Nothing writes
+  // them again, so removing absent keys is a harmless no-op.
+  clearStoredContribution().catch(() => { /* retried on the next tick */ });
   chrome.runtime.onInstalled.addListener((details) => {
     if (details.reason === 'update') {
       clearStoredContribution().catch(() => { /* non-critical */ });
@@ -319,6 +322,7 @@ function initialize(): void {
       // the next browser restart. Two storage reads, and a no-op unless a delete
       // actually failed.
       reconcileAiSafetyStorage().catch(() => { /* retried on the next tick */ });
+      clearStoredContribution().catch(() => { /* retried on the next tick */ });
     }
   });
 
